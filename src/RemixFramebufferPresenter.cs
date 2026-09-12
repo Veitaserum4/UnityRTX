@@ -123,12 +123,11 @@ namespace UnityRemix
                 if (sceneRefreshCounter > 0) sceneRefreshCounter--;
 
                 int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
-                bool countsChanged = cameraCountChanged || (currentCanvasCount != lastCanvasCount);
+                bool countsChanged = cameraCountChanged;
 
                 if (shouldSuppress != inEngineRenderingSuppressed || countsChanged)
                 {
                     lastCameraCount = currentCameraCount;
-                    lastCanvasCount = currentCanvasCount;
 
                     if (shouldSuppress)
                         ApplyInEngineRenderingSuppression();
@@ -136,8 +135,9 @@ namespace UnityRemix
                         RestoreInEngineRendering();
                 }
 
-                if (periodicCheck && uiDetector.UICameras.Count > 0)
+                if ((periodicCheck || currentCanvasCount != lastCanvasCount) && uiDetector.UICameras.Count > 0)
                 {
+                    lastCanvasCount = currentCanvasCount;
                     uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
                     uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
                 }

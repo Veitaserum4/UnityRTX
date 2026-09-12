@@ -2445,14 +2445,14 @@ namespace UnityRemix
                 return;
             }
 
-            bool canRefresh = (frameCount % 10 == 0) || (_cachedBloodVerts == null);
-            bool isDirty = canRefresh && ((bloodCount != _lastCapturedBloodCount) ||
+            bool isDirty = (bloodCount != _lastCapturedBloodCount) ||
                            (stainMesh.vertexCount != _lastCapturedMeshVerts) ||
-                           _cachedBloodVerts == null);
+                           _cachedBloodVerts == null;
 
             if (isDirty)
             {
-                _currentBloodMeshHash = 0x7B100D0000000001UL;
+                _bloodMeshVersion++;
+                _currentBloodMeshHash = 0x7B100D0000000000UL | (ulong)_bloodMeshVersion;
 
                 // Extract mesh data from totalStainMesh
                 Vector3[] rawVerts = stainMesh.vertices;

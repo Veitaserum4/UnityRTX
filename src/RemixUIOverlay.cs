@@ -20,11 +20,16 @@ namespace UnityRemix
 
         // UI rendering state
         private RenderTexture uiRenderTexture;
-        private byte[] rawPixels;
         private bool isReadbackPending = false;
         private int currentWidth = 0;
         private int currentHeight = 0;
         private float lastReadbackRequestTime = 0f;
+        private volatile bool isProcessingOverlay = false;
+        private byte[] processPixels = null;
+        private int lastOverlayX = -9999;
+        private int lastOverlayY = -9999;
+        private int lastOverlayW = -9999;
+        private int lastOverlayH = -9999;
 
         // Win32 DIB state for UpdateLayeredWindow
         private IntPtr overlayHdc = IntPtr.Zero;
@@ -337,7 +342,7 @@ namespace UnityRemix
 
             SyncWindowBounds();
 
-            if (!isReadbackPending)
+            if (!isReadbackPending && !isProcessingOverlay)
             {
                 float now = Time.unscaledTime;
                 if (now - lastReadbackRequestTime < 0.016f) return;
@@ -352,7 +357,7 @@ namespace UnityRemix
         {
             isReadbackPending = false;
 
-            if (request.hasError || overlayWindow == IntPtr.Zero || uiRenderTexture == null)
+            if (request.hasError || overlayWindow == IntPtr.Zero || uiRenderTexture == null || isProcessingOverlay)
                 return;
 
             int width = request.width;
@@ -363,11 +368,36 @@ namespace UnityRemix
             var rawData = request.GetData<byte>();
             if (!rawData.IsCreated || rawData.Length < width * height * 4) return;
 
-            if (rawPixels == null || rawPixels.Length != rawData.Length)
+            if (processPixels == null || processPixels.Length != rawData.Length)
             {
-                rawPixels = new byte[rawData.Length];
+                processPixels = new byte[rawData.Length];
             }
-            rawData.CopyTo(rawPixels);
+            rawData.CopyTo(processPixels);
+
+            // Offload scanline processing and UpdateLayeredWindow to background thread pool!
+            // Unity's main thread returns immediately (~0.2ms), completely eliminating slow-motion stutters!
+            isProcessingOverlay = true;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    ProcessAndPresentOverlay(width, height);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError($"[RemixUIOverlay] Background overlay update failed: {ex.Message}");
+                }
+                finally
+                {
+                    isProcessingOverlay = false;
+                }
+            });
+        }
+
+        private void ProcessAndPresentOverlay(int width, int height)
+        {
+            if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
+                return;
 
             bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
             int totalPixels = width * height;
@@ -376,7 +406,7 @@ namespace UnityRemix
 
             unsafe
             {
-                fixed (byte* pSrc = rawPixels)
+                fixed (byte* pSrc = processPixels)
                 {
                     IntPtr srcPtr = (IntPtr)pSrc;
                     IntPtr dstPtr = overlayBits;
@@ -445,7 +475,7 @@ namespace UnityRemix
             if (diagLog)
             {
                 int centerIdx = (height / 2 * width + width / 2) * 4;
-                logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={rawPixels[centerIdx]},G={rawPixels[centerIdx+1]},B={rawPixels[centerIdx+2]},A={rawPixels[centerIdx+3]}), visible={isOverlayVisible}");
+                logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
             }
 
             if (opaqueRatio > 0.98f)
@@ -527,12 +557,20 @@ namespace UnityRemix
                 var pt = new POINT { x = 0, y = 0 };
                 ClientToScreen(gameWindow, ref pt);
 
-                SetWindowPos(
-                    overlayWindow,
-                    HWND_TOP,
-                    pt.x, pt.y, clientRect.Width, clientRect.Height,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW
-                );
+                if (pt.x != lastOverlayX || pt.y != lastOverlayY || clientRect.Width != lastOverlayW || clientRect.Height != lastOverlayH)
+                {
+                    lastOverlayX = pt.x;
+                    lastOverlayY = pt.y;
+                    lastOverlayW = clientRect.Width;
+                    lastOverlayH = clientRect.Height;
+
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOP,
+                        pt.x, pt.y, clientRect.Width, clientRect.Height,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
+                }
             }
         }
 
