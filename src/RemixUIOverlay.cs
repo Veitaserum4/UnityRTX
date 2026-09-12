@@ -24,6 +24,7 @@ namespace UnityRemix
         private bool isReadbackPending = false;
         private int currentWidth = 0;
         private int currentHeight = 0;
+        private float lastReadbackRequestTime = 0f;
 
         // Win32 DIB state for UpdateLayeredWindow
         private IntPtr overlayHdc = IntPtr.Zero;
@@ -338,6 +339,10 @@ namespace UnityRemix
 
             if (!isReadbackPending)
             {
+                float now = Time.unscaledTime;
+                if (now - lastReadbackRequestTime < 0.016f) return;
+                lastReadbackRequestTime = now;
+
                 isReadbackPending = true;
                 AsyncGPUReadback.Request(uiRenderTexture, 0, TextureFormat.RGBA32, OnAsyncReadbackCompleted);
             }

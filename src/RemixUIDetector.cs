@@ -300,6 +300,16 @@ namespace UnityRemix
                     continue;
                 }
 
+                // Ensure ALL canvases (including WorldSpace HUD Canvases like GunCanvas and StyleCanvas)
+                // have their elements on layer 5 (UI) instead of layer 13 (AlwaysOnTop).
+                // This allows HUD Camera (which culls layer 5) to render the HUD without culling 3D weapons on layer 13!
+                SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+
+                if (canvas.renderMode == RenderMode.WorldSpace && canvas.worldCamera == null)
+                {
+                    canvas.worldCamera = uiCamera;
+                }
+
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
                     (canvas.worldCamera == null || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
@@ -327,9 +337,6 @@ namespace UnityRemix
                     {
                         raycaster.blockingObjects = UnityEngine.UI.GraphicRaycaster.BlockingObjects.None;
                     }
-
-                    // Recursively ensure canvas elements are on UI layers and camera culls them (never layer 0)
-                    SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
 
                     logger?.LogInfo($"[RemixUIDetector] Routed Overlay Canvas '{canvas.name}' to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
                 }

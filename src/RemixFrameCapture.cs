@@ -180,6 +180,8 @@ namespace UnityRemix
         private HashSet<ulong> failedMeshKeys = new HashSet<ulong>();
         private readonly object meshQueueLock = new object(); // Synchronize main thread enqueue + render thread dequeue
         private readonly Dictionary<int, MeshFilter> cachedMeshFilters = new Dictionary<int, MeshFilter>();
+        private readonly Dictionary<int, int> cachedMaterialSignatures = new Dictionary<int, int>();
+        private readonly Dictionary<int, Material[]> cachedRendererMaterials = new Dictionary<int, Material[]>();
         private LineRenderer[] cachedLineRenderers = null;
         private int lastLineRendererRefreshFrame = -1;
         private SpriteRenderer[] cachedSpriteRenderers = null;
@@ -624,6 +626,8 @@ namespace UnityRemix
             cachedTopology.Clear();
             cachedSkinning.Clear();
             cachedMeshFilters.Clear();
+            cachedMaterialSignatures.Clear();
+            cachedRendererMaterials.Clear();
             cachedLineRenderers = null;
             lastLineRendererRefreshFrame = -1;
             cachedSpriteRenderers = null;
@@ -650,6 +654,8 @@ namespace UnityRemix
             cachedSkinnedRenderers.Clear();
             cachedRendererIds.Clear();
             cachedSkinnedRendererIds.Clear();
+            cachedMaterialSignatures.Clear();
+            cachedRendererMaterials.Clear();
             skinnedRoundRobinIndex = 0;
             // Don't clear configuredBufferTargets — the property persists on the component
             
@@ -971,7 +977,18 @@ namespace UnityRemix
                     continue;
                 }
 
-                var materials = renderer.sharedMaterials;
+                Material[] materials = null;
+                if (!cachedMaterialSignatures.TryGetValue(rendererInstanceId, out int baseMatSig))
+                {
+                    materials = renderer.sharedMaterials;
+                    baseMatSig = StaticGeometryDedupe.ComputeMaterialSignature(materials);
+                    cachedMaterialSignatures[rendererInstanceId] = baseMatSig;
+                    if (materials != null) cachedRendererMaterials[rendererInstanceId] = materials;
+                }
+                else
+                {
+                    cachedRendererMaterials.TryGetValue(rendererInstanceId, out materials);
+                }
 
                 Texture mpbMainTex = null;
                 Color? mpbColor = null;
@@ -1016,7 +1033,7 @@ namespace UnityRemix
                     }
                 }
 
-                int matSig = StaticGeometryDedupe.ComputeMaterialSignature(materials);
+                int matSig = baseMatSig;
                 if (mpbHash != 0)
                 {
                     matSig = HashCombine(matSig, mpbHash);
@@ -2294,6 +2311,7 @@ namespace UnityRemix
         }
 
         private static Type _bsmType;
+        private static UnityEngine.Object _cachedBsmInstance;
         private static FieldInfo _bsmCurrentBloodCountField;
         private static FieldInfo _bsmTotalStainMeshField;
         private static FieldInfo _bsmStainMatField;
@@ -2364,7 +2382,11 @@ namespace UnityRemix
 
             if (_bsmType == null) return;
 
-            var bsm = UnityEngine.Object.FindObjectOfType(_bsmType);
+            if (_cachedBsmInstance == null)
+            {
+                _cachedBsmInstance = UnityEngine.Object.FindObjectOfType(_bsmType);
+            }
+            var bsm = _cachedBsmInstance;
             if (bsm == null) return;
 
             // Ensure compute shaders are disabled so ULTRAKILL builds totalStainMesh via GenerateBloodMeshJob
@@ -2384,8 +2406,8 @@ namespace UnityRemix
             Mesh stainMesh = _bsmTotalStainMeshField != null ? _bsmTotalStainMeshField.GetValue(bsm) as Mesh : null;
             Material stainMat = _bsmStainMatField != null ? _bsmStainMatField.GetValue(bsm) as Material : null;
 
-            // Log diagnostics whenever blood count changes or every 300 frames
-            bool shouldLog = (bloodCount != _lastLoggedBloodCount) || (frameCount % 300 == 0);
+            // Log diagnostics every 300 frames if enabled
+            bool shouldLog = (frameCount % 300 == 0) && (configDebugLogInterval.Value > 0);
             if (shouldLog)
             {
                 _lastLoggedBloodCount = bloodCount;
@@ -2423,14 +2445,14 @@ namespace UnityRemix
                 return;
             }
 
-            bool isDirty = (bloodCount != _lastCapturedBloodCount) ||
+            bool canRefresh = (frameCount % 10 == 0) || (_cachedBloodVerts == null);
+            bool isDirty = canRefresh && ((bloodCount != _lastCapturedBloodCount) ||
                            (stainMesh.vertexCount != _lastCapturedMeshVerts) ||
-                           _cachedBloodVerts == null;
+                           _cachedBloodVerts == null);
 
             if (isDirty)
             {
-                _bloodMeshVersion++;
-                _currentBloodMeshHash = 0x7B100D0000000000UL | (ulong)_bloodMeshVersion;
+                _currentBloodMeshHash = 0x7B100D0000000001UL;
 
                 // Extract mesh data from totalStainMesh
                 Vector3[] rawVerts = stainMesh.vertices;

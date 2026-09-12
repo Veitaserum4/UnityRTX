@@ -42,9 +42,12 @@ namespace UnityRemix
         private IntPtr testMeshHandle = IntPtr.Zero;
         private IntPtr testLightHandle = IntPtr.Zero;
         
-        // Frame state
+        // Frame state & event synchronization
         private volatile RemixFrameCapture.FrameState currentFrameState = new RemixFrameCapture.FrameState();
         private readonly object captureLock = new object();
+        private readonly AutoResetEvent frameReadyEvent = new AutoResetEvent(false);
+        private readonly HashSet<int> claimedRendererIds = new HashSet<int>(4096);
+        private readonly HashSet<StaticGeometryKey> claimedStaticKeys = new HashSet<StaticGeometryKey>(4096);
         
         // Scene mesh scanner (optional)
         private SceneMeshScanner sceneMeshScanner;
@@ -98,6 +101,7 @@ namespace UnityRemix
             {
                 currentFrameState = newState;
             }
+            frameReadyEvent.Set();
         }
         
         /// <summary>
@@ -124,6 +128,7 @@ namespace UnityRemix
         public void Stop()
         {
             renderThreadRunning = false;
+            frameReadyEvent.Set();
             if (renderThread != null && renderThread.IsAlive)
             {
                 renderThread.Join(1000);
@@ -159,6 +164,9 @@ namespace UnityRemix
             {
                 try
                 {
+                    // Wait for main thread to capture a new frame (up to 16ms fallback)
+                    frameReadyEvent.WaitOne(16);
+
                     // Process messages
                     windowManager.PumpWindowsMessages();
                     
@@ -167,20 +175,20 @@ namespace UnityRemix
                     frameNum++;
                     
                     // Frame rate limiting
-                    uint waitMs = 0;
                     if (configTargetFPS.Value > 0)
                     {
-                        waitMs = (uint)(1000 / configTargetFPS.Value);
+                        uint waitMs = (uint)(1000 / configTargetFPS.Value);
+                        if (waitMs > 0 && windowManager.WaitForMessages(waitMs))
+                        {
+                            windowManager.PumpWindowsMessages();
+                        }
                     }
                     else
                     {
-                        waitMs = 0; // Uncapped: non-blocking message check without timer sleep
-                    }
-                    
-                    // Wait for messages or timeout
-                    if (windowManager.WaitForMessages(waitMs))
-                    {
-                        windowManager.PumpWindowsMessages();
+                        if (windowManager.WaitForMessages(0))
+                        {
+                            windowManager.PumpWindowsMessages();
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -297,8 +305,8 @@ namespace UnityRemix
             
             // Draw static mesh instances
             uint objectPickingValue = 1;
-            var claimedRendererIds = new HashSet<int>();
-            var claimedStaticKeys = new HashSet<StaticGeometryKey>();
+            claimedRendererIds.Clear();
+            claimedStaticKeys.Clear();
             
             foreach (var instance in state.instances)
             {

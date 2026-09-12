@@ -93,15 +93,25 @@ namespace UnityRemix
             }
         }
         
+        private int lastLightScanFrame = -1000;
+        private Light[] cachedAllLights = null;
+
         /// <summary>
         /// Refresh cached light list from scene (called on Unity main thread)
         /// </summary>
-        public void RefreshLightCache()
+        public void RefreshLightCache(int frameCount = 0)
         {
             if (!configEnableLights.Value)
                 return;
                 
-            Light[] allLights = UnityEngine.Object.FindObjectsOfType<Light>();
+            if (cachedAllLights == null || frameCount - lastLightScanFrame > 60)
+            {
+                cachedAllLights = UnityEngine.Object.FindObjectsOfType<Light>();
+                lastLightScanFrame = frameCount;
+            }
+
+            var allLights = cachedAllLights;
+            if (allLights == null) return;
             var lightList = new List<UnityLightData>(allLights.Length);
 
             for (int i = 0; i < allLights.Length; i++)

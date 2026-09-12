@@ -138,6 +138,7 @@ namespace UnityRemix
 
                 if (periodicCheck && uiDetector.UICameras.Count > 0)
                 {
+                    uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
                     uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
                 }
             }
