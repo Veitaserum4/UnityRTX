@@ -174,7 +174,7 @@ namespace UnityRemix
                     }
                     else
                     {
-                        waitMs = 1; // Uncapped but still responsive
+                        waitMs = 0; // Uncapped: non-blocking message check without timer sleep
                     }
                     
                     // Wait for messages or timeout

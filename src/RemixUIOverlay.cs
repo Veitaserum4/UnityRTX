@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using BepInEx.Logging;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace UnityRemix
 {
     /// <summary>
     /// Manages a transparent Win32 layered overlay window for SingleWindow Embedded mode.
     /// Captures the autodetected UI cameras to a RenderTexture and presents them with per-pixel alpha
-    /// directly on top of the embedded Remix viewport.
+    /// directly on top of the embedded Remix viewport using asynchronous GPU readbacks.
     /// </summary>
     public class RemixUIOverlay
     {
@@ -19,8 +20,8 @@ namespace UnityRemix
 
         // UI rendering state
         private RenderTexture uiRenderTexture;
-        private Texture2D readbackTexture;
         private byte[] rawPixels;
+        private bool isReadbackPending = false;
         private int currentWidth = 0;
         private int currentHeight = 0;
 
@@ -206,6 +207,11 @@ namespace UnityRemix
         public void RebindAllUICameras()
         {
             if (uiRenderTexture == null) return;
+            int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
+            int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : (1 << 13);
+            int uiLayer = LayerMask.NameToLayer("UI");
+            int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
+
             foreach (var cam in managedCameras)
             {
                 if (cam == null) continue;
@@ -213,7 +219,9 @@ namespace UnityRemix
                 cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
                 cam.clearFlags = CameraClearFlags.SolidColor;
                 cam.backgroundColor = new Color(0, 0, 0, 0);
-                cam.cullingMask &= ~1;
+                cam.cullingMask &= ~1; // Strip Default (0)
+                cam.cullingMask &= ~alwaysOnTopMask; // Strip AlwaysOnTop (13) so 3D weapons are never drawn as UI
+                cam.cullingMask |= uiLayerBit;
             }
         }
 
@@ -320,7 +328,7 @@ namespace UnityRemix
 
         /// <summary>
         /// Updates the transparent Win32 layered overlay with the contents of the UI RenderTexture.
-        /// Should be called after cameras have rendered (e.g. in LateUpdate or OnPostRender).
+        /// Uses non-blocking AsyncGPUReadback to eliminate GPU stalls and Parallel.For for scanline conversion.
         /// </summary>
         public void UpdateOverlay()
         {
@@ -328,92 +336,102 @@ namespace UnityRemix
 
             SyncWindowBounds();
 
-            int width = uiRenderTexture.width;
-            int height = uiRenderTexture.height;
+            if (!isReadbackPending)
+            {
+                isReadbackPending = true;
+                AsyncGPUReadback.Request(uiRenderTexture, 0, TextureFormat.RGBA32, OnAsyncReadbackCompleted);
+            }
+        }
 
+        private void OnAsyncReadbackCompleted(AsyncGPUReadbackRequest request)
+        {
+            isReadbackPending = false;
+
+            if (request.hasError || overlayWindow == IntPtr.Zero || uiRenderTexture == null)
+                return;
+
+            int width = request.width;
+            int height = request.height;
             EnsureDIB(width, height);
             if (overlayHdc == IntPtr.Zero || overlayBits == IntPtr.Zero) return;
 
-            bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
+            var rawData = request.GetData<byte>();
+            if (!rawData.IsCreated || rawData.Length < width * height * 4) return;
 
-            // Readback from RenderTexture
-            if (readbackTexture == null || readbackTexture.width != width || readbackTexture.height != height)
+            if (rawPixels == null || rawPixels.Length != rawData.Length)
             {
-                if (readbackTexture != null) UnityEngine.Object.Destroy(readbackTexture);
-                readbackTexture = new Texture2D(width, height, TextureFormat.RGBA32, false);
-                rawPixels = new byte[width * height * 4];
+                rawPixels = new byte[rawData.Length];
             }
+            rawData.CopyTo(rawPixels);
 
-            var prevActive = RenderTexture.active;
-            RenderTexture.active = uiRenderTexture;
-            readbackTexture.ReadPixels(new UnityEngine.Rect(0, 0, width, height), 0, 0, false);
-            readbackTexture.Apply(false, false);
-            RenderTexture.active = prevActive;
-
-            // Extract RGBA bytes
-            var pixelData = readbackTexture.GetRawTextureData<byte>();
-            pixelData.CopyTo(rawPixels);
-
-            int opaquePixelCount = 0;
-            int nonZeroPixelCount = 0;
+            bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
             int totalPixels = width * height;
-            byte maxA = 0;
+            int nonZeroPixelCount = 0;
+            int opaquePixelCount = 0;
 
-            // Convert RGBA to BGRA with premultiplied alpha for UpdateLayeredWindow
             unsafe
             {
                 fixed (byte* pSrc = rawPixels)
                 {
-                    byte* pDst = (byte*)overlayBits;
-                    byte* s = pSrc;
-                    byte* d = pDst;
+                    IntPtr srcPtr = (IntPtr)pSrc;
+                    IntPtr dstPtr = overlayBits;
 
-                    for (int i = 0; i < totalPixels; i++)
+                    System.Threading.Tasks.Parallel.For(0, height, y =>
                     {
-                        byte r = s[0];
-                        byte g = s[1];
-                        byte b = s[2];
-                        byte a = s[3];
+                        int rowOffset = y * width * 4;
+                        byte* s = (byte*)srcPtr + rowOffset;
+                        byte* d = (byte*)dstPtr + rowOffset;
+                        int localNonZero = 0;
+                        int localOpaque = 0;
 
-                        // Fallback for additive / unlit UI shaders that output color with a == 0
-                        byte effA = a;
-                        if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                        for (int x = 0; x < width; x++)
                         {
-                            effA = (byte)Math.Max(r, Math.Max(g, b));
-                        }
-                        // Pitch black with a == 255 in an overlay context is an opaque blackout quad or background fill.
-                        // Treat as transparent so the 3D raytraced world shows through cleanly behind the UI.
-                        else if (effA == 255 && r == 0 && g == 0 && b == 0)
-                        {
-                            effA = 0;
+                            byte r = s[0];
+                            byte g = s[1];
+                            byte b = s[2];
+                            byte a = s[3];
+
+                            // Fallback for additive / unlit UI shaders that output color with a == 0
+                            byte effA = a;
+                            if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                            {
+                                effA = (byte)Math.Max(r, Math.Max(g, b));
+                            }
+                            // Pitch black with a == 255 in an overlay context is an opaque blackout quad or background fill.
+                            else if (effA == 255 && r == 0 && g == 0 && b == 0)
+                            {
+                                effA = 0;
+                            }
+
+                            if (effA > 0 || r > 0 || g > 0 || b > 0) localNonZero++;
+                            if (effA > 200) localOpaque++;
+
+                            if (effA == 255)
+                            {
+                                d[0] = b;
+                                d[1] = g;
+                                d[2] = r;
+                                d[3] = 255;
+                            }
+                            else if (effA == 0)
+                            {
+                                *(uint*)d = 0;
+                            }
+                            else
+                            {
+                                d[0] = (byte)((b * effA) / 255);
+                                d[1] = (byte)((g * effA) / 255);
+                                d[2] = (byte)((r * effA) / 255);
+                                d[3] = effA;
+                            }
+
+                            s += 4;
+                            d += 4;
                         }
 
-                        if (effA > 0 || r > 0 || g > 0 || b > 0) nonZeroPixelCount++;
-                        if (effA > maxA) maxA = effA;
-                        if (effA > 200) opaquePixelCount++;
-
-                        if (effA == 255)
-                        {
-                            d[0] = b;
-                            d[1] = g;
-                            d[2] = r;
-                            d[3] = 255;
-                        }
-                        else if (effA == 0)
-                        {
-                            *(uint*)d = 0;
-                        }
-                        else
-                        {
-                            d[0] = (byte)((b * effA) / 255);
-                            d[1] = (byte)((g * effA) / 255);
-                            d[2] = (byte)((r * effA) / 255);
-                            d[3] = effA;
-                        }
-
-                        s += 4;
-                        d += 4;
-                    }
+                        if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
+                        if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                    });
                 }
             }
 
@@ -422,7 +440,7 @@ namespace UnityRemix
             if (diagLog)
             {
                 int centerIdx = (height / 2 * width + width / 2) * 4;
-                logger?.LogInfo($"[RemixUIOverlay] Frame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), maxAlpha={maxA}, center=(R={rawPixels[centerIdx]},G={rawPixels[centerIdx+1]},B={rawPixels[centerIdx+2]},A={rawPixels[centerIdx+3]}), visible={isOverlayVisible}");
+                logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={rawPixels[centerIdx]},G={rawPixels[centerIdx+1]},B={rawPixels[centerIdx+2]},A={rawPixels[centerIdx+3]}), visible={isOverlayVisible}");
             }
 
             if (opaqueRatio > 0.98f)
@@ -447,10 +465,6 @@ namespace UnityRemix
             // If completely empty (no UI pixels rendered at all), hide overlay
             if (nonZeroPixelCount == 0)
             {
-                if (diagLog)
-                {
-                    logger?.LogInfo($"[RemixUIOverlay] Frame #{updateLogCounter}: Overlay hidden because nonZeroPixelCount == 0 (no UI drawn into RenderTexture).");
-                }
                 if (isOverlayVisible)
                 {
                     ShowWindow(overlayWindow, SW_HIDE);
@@ -489,10 +503,6 @@ namespace UnityRemix
             {
                 int err = Marshal.GetLastWin32Error();
                 logger?.LogError($"[RemixUIOverlay] UpdateLayeredWindow failed! Win32 Error: {err}");
-            }
-            else if (diagLog)
-            {
-                logger?.LogInfo($"[RemixUIOverlay] UpdateLayeredWindow succeeded at ({ptDst.x},{ptDst.y},{sizeDst.cx},{sizeDst.cy})");
             }
 
             if (!isOverlayVisible)
@@ -627,12 +637,6 @@ namespace UnityRemix
                 uiRenderTexture = null;
             }
 
-            if (readbackTexture != null)
-            {
-                UnityEngine.Object.Destroy(readbackTexture);
-                readbackTexture = null;
-            }
-
             if (overlayWindow != IntPtr.Zero)
             {
                 DestroyWindow(overlayWindow);
@@ -684,7 +688,15 @@ namespace UnityRemix
                 cam.SetTargetBuffers(targetTexture.colorBuffer, targetTexture.depthBuffer);
                 cam.clearFlags = clearFlags;
                 cam.backgroundColor = backgroundColor;
+
+                int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
+                int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : (1 << 13);
+                int uiLayer = LayerMask.NameToLayer("UI");
+                int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
+
                 cam.cullingMask &= ~1; // Ensure layer 0 (Default / 3D game scene) is never rendered by UI camera
+                cam.cullingMask &= ~alwaysOnTopMask; // Ensure layer 13 (AlwaysOnTop / 3D viewmodels) is never rendered by UI camera
+                cam.cullingMask |= uiLayerBit;
             }
         }
 

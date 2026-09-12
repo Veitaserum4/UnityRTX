@@ -179,6 +179,11 @@ namespace UnityRemix
         private HashSet<ulong> meshesInQueue = new HashSet<ulong>(); // Track which mesh keys are already queued
         private HashSet<ulong> failedMeshKeys = new HashSet<ulong>();
         private readonly object meshQueueLock = new object(); // Synchronize main thread enqueue + render thread dequeue
+        private readonly Dictionary<int, MeshFilter> cachedMeshFilters = new Dictionary<int, MeshFilter>();
+        private LineRenderer[] cachedLineRenderers = null;
+        private int lastLineRendererRefreshFrame = -1;
+        private SpriteRenderer[] cachedSpriteRenderers = null;
+        private int lastSpriteRendererRefreshFrame = -1;
         private MaterialPropertyBlock sharedStaticMpb = null;
 
         // --- Diagnostic getters for debug HUD ---
@@ -618,6 +623,11 @@ namespace UnityRemix
             loggedHashDebugMeshes.Clear();
             cachedTopology.Clear();
             cachedSkinning.Clear();
+            cachedMeshFilters.Clear();
+            cachedLineRenderers = null;
+            lastLineRendererRefreshFrame = -1;
+            cachedSpriteRenderers = null;
+            lastSpriteRendererRefreshFrame = -1;
             persistentStaticInstances.Clear();
             _cachedBloodVerts = null;
             _cachedBloodNorms = null;
@@ -942,13 +952,17 @@ namespace UnityRemix
                         continue;
                 }
                 
-                var meshFilter = renderer.GetComponent<MeshFilter>();
+                int rendererInstanceId = renderer.GetInstanceID();
+                if (!cachedMeshFilters.TryGetValue(rendererInstanceId, out var meshFilter) || meshFilter == null)
+                {
+                    meshFilter = renderer.GetComponent<MeshFilter>();
+                    if (meshFilter != null) cachedMeshFilters[rendererInstanceId] = meshFilter;
+                }
                 if (meshFilter == null || meshFilter.sharedMesh == null)
                     continue;
                 
                 var mesh = meshFilter.sharedMesh;
                 int meshId = mesh.GetInstanceID();
-                int rendererInstanceId = renderer.GetInstanceID();
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
 
                 if (ShouldPreferSceneScan(renderer, mesh))
@@ -1937,7 +1951,12 @@ namespace UnityRemix
             float maxDist = configUseDistanceCulling.Value ? configMaxRenderDistance.Value : float.MaxValue;
             float sqrMaxDist = maxDist * maxDist;
 
-            var lines = UnityEngine.Object.FindObjectsOfType<LineRenderer>();
+            if (cachedLineRenderers == null || frameCount - lastLineRendererRefreshFrame > 30)
+            {
+                cachedLineRenderers = UnityEngine.Object.FindObjectsOfType<LineRenderer>();
+                lastLineRendererRefreshFrame = frameCount;
+            }
+            var lines = cachedLineRenderers;
             if (lines == null || lines.Length == 0) return;
 
             if (sharedTempLineMesh == null)
@@ -2088,7 +2107,12 @@ namespace UnityRemix
             float maxDist = configUseDistanceCulling.Value ? configMaxRenderDistance.Value : float.MaxValue;
             float sqrMaxDist = maxDist * maxDist;
 
-            var sprites = UnityEngine.Object.FindObjectsOfType<SpriteRenderer>();
+            if (cachedSpriteRenderers == null || frameCount - lastSpriteRendererRefreshFrame > 30)
+            {
+                cachedSpriteRenderers = UnityEngine.Object.FindObjectsOfType<SpriteRenderer>();
+                lastSpriteRendererRefreshFrame = frameCount;
+            }
+            var sprites = cachedSpriteRenderers;
             if (sprites == null || sprites.Length == 0) return;
 
             int slot = 0;
