@@ -89,6 +89,9 @@ namespace UnityRemix
             // Initialize configuration
             InitializeConfig();
             
+            // Ensure game loop, audio, and video players never pause or throttle when focus shifts
+            Application.runInBackground = true;
+
             // Persist across scenes
             DontDestroyOnLoad(this.gameObject);
             hideFlags = HideFlags.HideAndDontSave;

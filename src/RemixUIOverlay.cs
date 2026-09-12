@@ -45,10 +45,14 @@ namespace UnityRemix
 
         private const uint WS_POPUP = 0x80000000;
         private const uint WS_VISIBLE = 0x10000000;
+        private const uint WS_DISABLED = 0x08000000;
         private const uint WS_EX_LAYERED = 0x00080000;
         private const uint WS_EX_TRANSPARENT = 0x00000020;
         private const uint WS_EX_TOOLWINDOW = 0x00000080;
+        private const uint WS_EX_NOACTIVATE = 0x08000000;
 
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
         private const uint SWP_NOZORDER = 0x0004;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SWP_SHOWWINDOW = 0x0040;
@@ -237,10 +241,10 @@ namespace UnityRemix
 
             // Create transparent, click-through layered popup owned by gameWindow
             overlayWindow = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW,
+                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 "STATIC",
                 "UnityRemix_UIOverlay",
-                WS_POPUP | WS_VISIBLE,
+                WS_POPUP | WS_VISIBLE | WS_DISABLED,
                 pt.x, pt.y, width, height,
                 gameWindow,
                 IntPtr.Zero,
@@ -494,7 +498,7 @@ namespace UnityRemix
             if (!isOverlayVisible)
             {
                 ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
-                BringWindowToTop(overlayWindow);
+                SetWindowPos(overlayWindow, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 isOverlayVisible = true;
             }
         }

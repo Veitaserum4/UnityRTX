@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using UnityEngine;
@@ -75,8 +76,15 @@ namespace UnityRemix
             );
 
             UpdateSingleWindowUIActive();
+            Application.runInBackground = true;
             logger?.LogInfo($"[RemixFramebufferPresenter] Initialized (SingleWindow: {singleWindow.Value}, Method: {singleWindowMethod.Value}, SuppressInEngine: {disableInEngineRendering.Value}, AutoDetectUI: {autoDetectUI.Value})");
         }
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetFocus(IntPtr hWnd);
 
         private void UpdateSingleWindowUIActive()
         {
@@ -151,6 +159,27 @@ namespace UnityRemix
             {
                 windowManager?.HandleAltX();
                 logger?.LogInfo($"[RemixFramebufferPresenter] Alt+X pressed, RemixUIOpen: {RemixWindowManager.IsRemixUIOpen}");
+            }
+
+            // Ensure game window retains activation and focus during startup
+            if ((frameCount == 15 || frameCount == 60) && isSingle)
+            {
+                IntPtr gameWnd = windowManager != null && windowManager.GameWindow != IntPtr.Zero
+                    ? windowManager.GameWindow
+                    : RemixWindowManager.FindGameWindow();
+                if (gameWnd != IntPtr.Zero)
+                {
+                    SetForegroundWindow(gameWnd);
+                    SetFocus(gameWnd);
+                    logger?.LogInfo($"[RemixFramebufferPresenter] Enforced foreground focus on gameWindow 0x{gameWnd:X} at frame #{frameCount}");
+                }
+            }
+
+            // Input diagnostic: verify mouse clicks reach Unity
+            if (Input.GetMouseButtonDown(0))
+            {
+                var hovered = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
+                logger?.LogInfo($"[InputDiag] Mouse click at {Input.mousePosition}, isFocused={Application.isFocused}, selected='{hovered?.name ?? "none"}'");
             }
         }
 

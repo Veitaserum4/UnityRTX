@@ -317,6 +317,13 @@ namespace UnityRemix
                         canvas.planeDistance = 100.0f;
                     }
 
+                    // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders
+                    var raycaster = canvas.GetComponent<UnityEngine.UI.GraphicRaycaster>();
+                    if (raycaster != null)
+                    {
+                        raycaster.blockingObjects = UnityEngine.UI.GraphicRaycaster.BlockingObjects.None;
+                    }
+
                     // Recursively ensure canvas elements are on UI layers and camera culls them (never layer 0)
                     SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
 

@@ -44,6 +44,13 @@ namespace UnityRemix
             ToggleRemixUI();
             if (remixWindow != IntPtr.Zero)
             {
+                if (isEmbedded)
+                {
+                    // When Remix UI is open, enable child window so mouse clicks reach Remix ImGui.
+                    // When closed, disable child window so all mouse clicks pass directly to Unity gameWindow!
+                    EnableWindow(remixWindow, isRemixUIOpen);
+                }
+
                 PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
                 PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
 
@@ -59,6 +66,15 @@ namespace UnityRemix
         }
         
         #region Win32 API Declarations
+
+        [DllImport("user32.dll")]
+        private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
         
         [DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -277,11 +293,13 @@ namespace UnityRemix
         private const uint WS_VISIBLE = 0x10000000;
         private const uint WS_CLIPSIBLINGS = 0x04000000;
         private const uint WS_CLIPCHILDREN = 0x02000000;
+        private const uint WS_DISABLED = 0x08000000;
         private const uint WS_EX_LAYERED = 0x00080000;
         private const uint WS_EX_TRANSPARENT = 0x00000020;
         private const uint WS_EX_TOPMOST = 0x00000008;
         private const uint WS_EX_TOOLWINDOW = 0x00000080;
         private const uint WS_EX_APPWINDOW = 0x00040000;
+        private const uint WS_EX_NOACTIVATE = 0x08000000;
         private const int GWL_STYLE = -16;
         private const int GWL_EXSTYLE = -20;
         private const int SW_HIDE = 0;
@@ -507,8 +525,8 @@ namespace UnityRemix
                 }
                 posX = 0;
                 posY = 0;
-                dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
-                dwExStyle = WS_EX_TOOLWINDOW;
+                dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
+                dwExStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
                 parentHwnd = gameWindow;
                 isEmbedded = true;
                 isEmbeddedStatic = true;
@@ -571,6 +589,31 @@ namespace UnityRemix
             else
             {
                 ShowWindow(remixWindow, SW_SHOW);
+            }
+
+            if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
+            {
+                // Ensure child window is initially disabled so it never intercepts mouse messages
+                EnableWindow(remixWindow, false);
+
+                // Attach input queues between render thread and game thread so Win32 input synchronization is seamless
+                try
+                {
+                    uint renderThreadId = GetCurrentThreadId();
+                    uint gameThreadId = GetWindowThreadProcessId(gameWindow, out _);
+                    if (renderThreadId != gameThreadId && gameThreadId != 0)
+                    {
+                        bool attached = AttachThreadInput(renderThreadId, gameThreadId, true);
+                        logger.LogInfo($"[RemixWindowManager] AttachThreadInput (render thread {renderThreadId} -> game thread {gameThreadId}): {attached}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning($"[RemixWindowManager] Failed to attach thread input: {ex.Message}");
+                }
+
+                // Explicitly keep focus on gameWindow
+                SetFocus(gameWindow);
             }
             
             // Call Remix Startup
