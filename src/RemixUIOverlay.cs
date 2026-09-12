@@ -19,6 +19,7 @@ namespace UnityRemix
         private IntPtr overlayWindow = IntPtr.Zero;
 
         // UI rendering state
+        private readonly BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS;
         private RenderTexture uiRenderTexture;
         private bool isReadbackPending = false;
         private int currentWidth = 0;
@@ -30,6 +31,8 @@ namespace UnityRemix
         private int lastOverlayY = -9999;
         private int lastOverlayW = -9999;
         private int lastOverlayH = -9999;
+        private ulong lastPresentedHash = 0;
+        private bool boundsChanged = true;
 
         // Win32 DIB state for UpdateLayeredWindow
         private IntPtr overlayHdc = IntPtr.Zero;
@@ -178,6 +181,27 @@ namespace UnityRemix
             ref BLENDFUNCTION pblend,
             uint dwFlags);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UpdateLayeredWindow(
+            IntPtr hwnd,
+            IntPtr hdcDst,
+            IntPtr pptDst,
+            IntPtr psize,
+            IntPtr hdcSrc,
+            ref POINT pptSrc,
+            uint crKey,
+            ref BLENDFUNCTION pblend,
+            uint dwFlags);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
         [DllImport("gdi32.dll")]
         private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
 
@@ -231,10 +255,11 @@ namespace UnityRemix
             }
         }
 
-        public RemixUIOverlay(ManualLogSource logger, IntPtr gameWindow)
+        public RemixUIOverlay(ManualLogSource logger, IntPtr gameWindow, BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS = null)
         {
             this.logger = logger;
             this.gameWindow = gameWindow;
+            this.configUIOverlayFPS = configUIOverlayFPS;
             Instance = this;
         }
 
@@ -253,14 +278,15 @@ namespace UnityRemix
             var pt = new POINT { x = 0, y = 0 };
             ClientToScreen(gameWindow, ref pt);
 
-            // Create transparent, click-through layered popup owned by gameWindow
+            // Create transparent, click-through unowned layered popup.
+            // Unowned (IntPtr.Zero parent) prevents Windows User32 from acquiring cross-thread synchronization locks on gameWindow!
             overlayWindow = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 "STATIC",
                 "UnityRemix_UIOverlay",
                 WS_POPUP | WS_VISIBLE | WS_DISABLED,
                 pt.x, pt.y, width, height,
-                gameWindow,
+                IntPtr.Zero,
                 IntPtr.Zero,
                 IntPtr.Zero,
                 IntPtr.Zero
@@ -345,7 +371,9 @@ namespace UnityRemix
             if (!isReadbackPending && !isProcessingOverlay)
             {
                 float now = Time.unscaledTime;
-                if (now - lastReadbackRequestTime < 0.016f) return;
+                int targetFps = configUIOverlayFPS != null ? Mathf.Clamp(configUIOverlayFPS.Value, 10, 60) : 30;
+                float minInterval = 1.0f / targetFps;
+                if (now - lastReadbackRequestTime < minInterval) return;
                 lastReadbackRequestTime = now;
 
                 isReadbackPending = true;
@@ -403,6 +431,7 @@ namespace UnityRemix
             int totalPixels = width * height;
             int nonZeroPixelCount = 0;
             int opaquePixelCount = 0;
+            ulong[] rowHashes = new ulong[height];
 
             unsafe
             {
@@ -418,9 +447,20 @@ namespace UnityRemix
                         byte* d = (byte*)dstPtr + rowOffset;
                         int localNonZero = 0;
                         int localOpaque = 0;
+                        ulong rowHash = 14695981039346656037UL;
 
                         for (int x = 0; x < width; x++)
                         {
+                            uint px = *(uint*)s;
+                            // Fast path for transparent empty pixels (96% of the screen in ULTRAKILL HUD)
+                            if (px == 0)
+                            {
+                                *(uint*)d = 0;
+                                s += 4;
+                                d += 4;
+                                continue;
+                            }
+
                             byte r = s[0];
                             byte g = s[1];
                             byte b = s[2];
@@ -438,7 +478,12 @@ namespace UnityRemix
                                 effA = 0;
                             }
 
-                            if (effA > 0 || r > 0 || g > 0 || b > 0) localNonZero++;
+                            if (effA > 0 || r > 0 || g > 0 || b > 0)
+                            {
+                                localNonZero++;
+                                rowHash ^= ((ulong)x << 32) | px;
+                                rowHash *= 1099511628211UL;
+                            }
                             if (effA > 200) localOpaque++;
 
                             if (effA == 255)
@@ -464,6 +509,7 @@ namespace UnityRemix
                             d += 4;
                         }
 
+                        rowHashes[y] = rowHash;
                         if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
                         if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
                     });
@@ -490,6 +536,7 @@ namespace UnityRemix
                     ShowWindow(overlayWindow, SW_HIDE);
                     isOverlayVisible = false;
                 }
+                lastPresentedHash = 0;
                 return;
             }
             else
@@ -505,15 +552,35 @@ namespace UnityRemix
                     ShowWindow(overlayWindow, SW_HIDE);
                     isOverlayVisible = false;
                 }
+                lastPresentedHash = 0;
                 return;
             }
 
-            // Update Win32 Layered Window
-            var ptDst = new POINT { x = 0, y = 0 };
-            ClientToScreen(gameWindow, ref ptDst);
-            var sizeDst = new SIZE { cx = width, cy = height };
-            var ptSrc = new POINT { x = 0, y = 0 };
+            // Combine row hashes to detect if the UI content actually changed
+            ulong currentHash = 14695981039346656037UL;
+            for (int y = 0; y < height; y++)
+            {
+                if (rowHashes[y] != 14695981039346656037UL)
+                {
+                    currentHash ^= rowHashes[y] + 0x9e3779b9 + (currentHash << 6) + (currentHash >> 2);
+                }
+            }
 
+            bool contentChanged = (currentHash != lastPresentedHash);
+            bool shouldPresent = contentChanged || boundsChanged || !isOverlayVisible;
+
+            if (!shouldPresent)
+            {
+                // UI content and bounds identical to last presented frame — skip UpdateLayeredWindow to prevent DWM saturation!
+                return;
+            }
+
+            lastPresentedHash = currentHash;
+            bool hadBoundsChange = boundsChanged;
+            boundsChanged = false;
+
+            // Update Win32 Layered Window
+            var ptSrc = new POINT { x = 0, y = 0 };
             var blend = new BLENDFUNCTION
             {
                 BlendOp = AC_SRC_OVER,
@@ -522,17 +589,41 @@ namespace UnityRemix
                 AlphaFormat = AC_SRC_ALPHA
             };
 
-            bool ok = UpdateLayeredWindow(
-                overlayWindow,
-                IntPtr.Zero,
-                ref ptDst,
-                ref sizeDst,
-                overlayHdc,
-                ref ptSrc,
-                0,
-                ref blend,
-                ULW_ALPHA
-            );
+            bool ok;
+            if (hadBoundsChange || !isOverlayVisible)
+            {
+                var ptDst = new POINT { x = 0, y = 0 };
+                ClientToScreen(gameWindow, ref ptDst);
+                var sizeDst = new SIZE { cx = width, cy = height };
+
+                ok = UpdateLayeredWindow(
+                    overlayWindow,
+                    IntPtr.Zero,
+                    ref ptDst,
+                    ref sizeDst,
+                    overlayHdc,
+                    ref ptSrc,
+                    0,
+                    ref blend,
+                    ULW_ALPHA
+                );
+            }
+            else
+            {
+                // When bounds haven't changed, pass NULL for pptDst and psize.
+                // This tells Windows DWM to only update the surface pixels without recomputing window hierarchy!
+                ok = UpdateLayeredWindow(
+                    overlayWindow,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    overlayHdc,
+                    ref ptSrc,
+                    0,
+                    ref blend,
+                    ULW_ALPHA
+                );
+            }
 
             if (!ok)
             {
@@ -552,6 +643,16 @@ namespace UnityRemix
         {
             if (overlayWindow == IntPtr.Zero || gameWindow == IntPtr.Zero) return;
 
+            if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
+            {
+                if (isOverlayVisible)
+                {
+                    ShowWindow(overlayWindow, SW_HIDE);
+                    isOverlayVisible = false;
+                }
+                return;
+            }
+
             if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
             {
                 var pt = new POINT { x = 0, y = 0 };
@@ -563,6 +664,7 @@ namespace UnityRemix
                     lastOverlayY = pt.y;
                     lastOverlayW = clientRect.Width;
                     lastOverlayH = clientRect.Height;
+                    boundsChanged = true;
 
                     SetWindowPos(
                         overlayWindow,

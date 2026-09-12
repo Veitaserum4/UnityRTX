@@ -54,6 +54,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configAutoDetectUI;
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
+        private ConfigEntry<int> configUIOverlayFPS;
         
         public static ManualLogSource LogSource { get; private set; }
         private RemixAPI.remixapi_Interface remixInterface;
@@ -223,6 +224,10 @@ namespace UnityRemix
             configSingleWindowUIOverlay = Config.Bind("Window", "SingleWindowUIOverlay", true,
                 "For Embedded mode, renders autodetected UI onto a transparent layered overlay window sitting on top of the Remix viewport.");
 
+            configUIOverlayFPS = Config.Bind("Window", "UIOverlayFPS", 30,
+                new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Default 30 FPS prevents DWM compositor queue starvation.",
+                    new AcceptableValueRange<int>(10, 60)));
+
             LogSource.LogInfo("Configuration loaded:");
             LogSource.LogInfo($"  Camera Name: '{configCameraName.Value}' (empty = auto-detect)");
             LogSource.LogInfo($"  Camera Tag: '{configCameraTag.Value}'");
@@ -340,7 +345,8 @@ namespace UnityRemix
                 configDisableInEngineRendering,
                 configAutoDetectUI,
                 configUICameraNames,
-                configSingleWindowUIOverlay
+                configSingleWindowUIOverlay,
+                configUIOverlayFPS
             );
             
             lightConverter = new RemixLightConverter(
