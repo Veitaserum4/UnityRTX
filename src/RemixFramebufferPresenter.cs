@@ -127,6 +127,11 @@ namespace UnityRemix
                     else
                         RestoreInEngineRendering();
                 }
+
+                if (periodicCheck && uiDetector.UICameras.Count > 0)
+                {
+                    uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                }
             }
 
             if (frameCount % 300 == 0 && isSingle)
@@ -224,6 +229,7 @@ namespace UnityRemix
             {
                 uiOverlay.ConfigureUICameras(uiDetector.UICameras);
                 uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
+                uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
             }
         }
 

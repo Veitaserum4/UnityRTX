@@ -45,7 +45,7 @@ namespace UnityRemix
             if (remixWindow != IntPtr.Zero)
             {
                 PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
-                PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
+                PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
 
                 if (isRemixUIOpen)
                 {

@@ -325,6 +325,52 @@ namespace UnityRemix
             }
         }
 
+        /// <summary>
+        /// Routes VideoPlayer components (e.g. intro cutscenes) targeting suppressed world cameras
+        /// to render through the UI camera so they display on the transparent UI overlay.
+        /// </summary>
+        public void RouteVideoPlayersToCamera(Camera uiCamera)
+        {
+            if (uiCamera == null) return;
+
+            try
+            {
+                var vpType = Type.GetType("UnityEngine.Video.VideoPlayer, UnityEngine.VideoModule");
+                if (vpType == null) return;
+
+                var videoPlayers = UnityEngine.Object.FindObjectsOfType(vpType);
+                if (videoPlayers == null || videoPlayers.Length == 0) return;
+
+                var targetCamProp = vpType.GetProperty("targetCamera");
+                var renderModeProp = vpType.GetProperty("renderMode");
+
+                foreach (var vp in videoPlayers)
+                {
+                    if (vp == null) continue;
+                    var modeObj = renderModeProp?.GetValue(vp);
+                    if (modeObj != null)
+                    {
+                        int mode = (int)modeObj;
+                        // 0 = CameraFarPlane, 1 = CameraNearPlane
+                        if (mode == 0 || mode == 1)
+                        {
+                            var curCam = targetCamProp?.GetValue(vp) as Camera;
+                            if (curCam != uiCamera)
+                            {
+                                targetCamProp?.SetValue(vp, uiCamera);
+                                renderModeProp?.SetValue(vp, Enum.ToObject(renderModeProp.PropertyType, 1));
+                                logger?.LogInfo($"[RemixUIDetector] Routed VideoPlayer '{(vp as Component)?.name}' to UI camera '{uiCamera.name}'");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[RemixUIDetector] Failed to route VideoPlayers: {ex.Message}");
+            }
+        }
+
         private static void SanitizeAndIncludeCanvasLayers(Camera cam, GameObject root)
         {
             if (cam == null || root == null) return;

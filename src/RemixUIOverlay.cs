@@ -63,9 +63,13 @@ namespace UnityRemix
         private bool isOverlayVisible = true;
         private bool hasLoggedOpaqueWarning = false;
         private int updateLogCounter = 0;
+        private static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr hWnd);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
@@ -318,17 +322,6 @@ namespace UnityRemix
         {
             if (overlayWindow == IntPtr.Zero || uiRenderTexture == null) return;
 
-            // When Remix Alt+X menu is open, hide overlay window so user has 100% unobstructed control
-            if (RemixWindowManager.IsRemixUIOpen)
-            {
-                if (isOverlayVisible)
-                {
-                    ShowWindow(overlayWindow, SW_HIDE);
-                    isOverlayVisible = false;
-                }
-                return;
-            }
-
             SyncWindowBounds();
 
             int width = uiRenderTexture.width;
@@ -501,6 +494,7 @@ namespace UnityRemix
             if (!isOverlayVisible)
             {
                 ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
+                BringWindowToTop(overlayWindow);
                 isOverlayVisible = true;
             }
         }
@@ -516,9 +510,9 @@ namespace UnityRemix
 
                 SetWindowPos(
                     overlayWindow,
-                    IntPtr.Zero,
+                    HWND_TOP,
                     pt.x, pt.y, clientRect.Width, clientRect.Height,
-                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW
                 );
             }
         }
