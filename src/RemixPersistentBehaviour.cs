@@ -27,7 +27,10 @@ namespace UnityRemix
                 yield return wait;
                 if ((object)plugin != null)
                 {
-                    plugin.OnEndOfFrame();
+                    using (RemixTracy.Zone("Unity_OnEndOfFrame"))
+                    {
+                        plugin.OnEndOfFrame();
+                    }
                 }
             }
         }

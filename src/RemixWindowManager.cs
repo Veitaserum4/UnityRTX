@@ -29,6 +29,10 @@ namespace UnityRemix
         private bool isEmbedded = false;
         private static bool isEmbeddedStatic = false;
         private static volatile bool isRemixUIOpen = false;
+        private int lastRemixX = -9999;
+        private int lastRemixY = -9999;
+        private int lastRemixW = -9999;
+        private int lastRemixH = -9999;
 
         public IntPtr RemixWindow => remixWindow;
         public IntPtr GameWindow => gameWindow;
@@ -44,13 +48,6 @@ namespace UnityRemix
             ToggleRemixUI();
             if (remixWindow != IntPtr.Zero)
             {
-                if (isEmbedded)
-                {
-                    // When Remix UI is open, enable child window so mouse clicks reach Remix ImGui.
-                    // When closed, disable child window so all mouse clicks pass directly to Unity gameWindow!
-                    EnableWindow(remixWindow, isRemixUIOpen);
-                }
-
                 PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
                 PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
 
@@ -173,6 +170,12 @@ namespace UnityRemix
         
         [DllImport("user32.dll")]
         private static extern IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
         
         [DllImport("user32.dll", SetLastError = true)]
         private static extern ushort RegisterClassW(ref WNDCLASS lpWndClass);
@@ -248,6 +251,13 @@ namespace UnityRemix
         }
         
         [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
             public int left;
@@ -306,6 +316,7 @@ namespace UnityRemix
         private const int GWL_STYLE = -16;
         private const int GWL_EXSTYLE = -20;
         private const int SW_HIDE = 0;
+        private const int SW_SHOWNOACTIVATE = 4;
         private const int SW_SHOW = 5;
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;
@@ -405,20 +416,48 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// Synchronizes the embedded child window size and position with the parent game window.
+        /// Synchronizes the embedded owned window size and position with the parent game window.
         /// </summary>
         public void SyncWindowBounds()
         {
             if (!isEmbedded || remixWindow == IntPtr.Zero || gameWindow == IntPtr.Zero)
                 return;
 
-            if (GetClientRect(gameWindow, out RECT rect))
+            if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
             {
-                if (rect.Width > 0 && rect.Height > 0 && (rect.Width != windowWidth || rect.Height != windowHeight))
+                if (IsWindowVisible(remixWindow))
                 {
+                    ShowWindow(remixWindow, SW_HIDE);
+                }
+                return;
+            }
+
+            if (!IsWindowVisible(remixWindow))
+            {
+                ShowWindow(remixWindow, SW_SHOWNOACTIVATE);
+            }
+
+            if (GetClientRect(gameWindow, out RECT rect) && rect.Width > 0 && rect.Height > 0)
+            {
+                var pt = new POINT { x = 0, y = 0 };
+                ClientToScreen(gameWindow, ref pt);
+
+                if (pt.x != lastRemixX || pt.y != lastRemixY || rect.Width != lastRemixW || rect.Height != lastRemixH)
+                {
+                    lastRemixX = pt.x;
+                    lastRemixY = pt.y;
+                    lastRemixW = rect.Width;
+                    lastRemixH = rect.Height;
+
                     windowWidth = rect.Width;
                     windowHeight = rect.Height;
-                    SetWindowPos(remixWindow, IntPtr.Zero, 0, 0, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE);
+
+                    SetWindowPos(
+                        remixWindow,
+                        gameWindow,
+                        pt.x, pt.y, rect.Width, rect.Height,
+                        SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
                 }
             }
         }
@@ -526,9 +565,22 @@ namespace UnityRemix
                     windowWidth = width;
                     windowHeight = height;
                 }
-                posX = 0;
-                posY = 0;
-                dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
+                var pt = new POINT { x = 0, y = 0 };
+                ClientToScreen(gameWindow, ref pt);
+                posX = pt.x;
+                posY = pt.y;
+                lastRemixX = pt.x;
+                lastRemixY = pt.y;
+                lastRemixW = width;
+                lastRemixH = height;
+
+                // Native Win32 Owned Popup Window:
+                // WS_POPUP with hWndParent = gameWindow creates an Owned Popup (NOT a WS_CHILD).
+                // - Decoupled from gameWindow's thread queue (zero cross-thread WS_CHILD LPC locks).
+                // - Allows Vulkan WSI to use full Hardware Direct Flip / Independent Flip.
+                // - Stays strictly above gameWindow in Z-order at all times automatically.
+                // - Mouse clicks pass straight through to gameWindow via WM_NCHITTEST: HTTRANSPARENT.
+                dwStyle = WS_POPUP | WS_VISIBLE;
                 dwExStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
                 parentHwnd = gameWindow;
                 isEmbedded = true;
@@ -558,23 +610,15 @@ namespace UnityRemix
             // Fallback for Embedded mode if CreateWindowExW with parent fails
             if (remixWindow == IntPtr.Zero && isSingleWindow && method == SingleWindowMethod.Embedded)
             {
-                logger.LogWarning("[RemixWindowManager] CreateWindowExW with parent failed; attempting SetParent fallback...");
+                logger.LogWarning("[RemixWindowManager] CreateWindowExW with owner failed; attempting standalone popup fallback...");
                 remixWindow = CreateWindowExW(
-                    WS_EX_TOOLWINDOW,
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                     WINDOW_CLASS_NAME,
                     windowTitle,
                     WS_POPUP | WS_VISIBLE,
-                    0, 0, width, height,
+                    posX, posY, width, height,
                     IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero
                 );
-                if (remixWindow != IntPtr.Zero)
-                {
-                    SetParent(remixWindow, gameWindow);
-                    int style = GetWindowLongW(remixWindow, GWL_STYLE);
-                    style = (style & ~unchecked((int)WS_POPUP)) | (int)(WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS);
-                    SetWindowLongW(remixWindow, GWL_STYLE, style);
-                    SetWindowPos(remixWindow, IntPtr.Zero, 0, 0, width, height, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-                }
             }
             
             if (remixWindow == IntPtr.Zero)
@@ -596,11 +640,9 @@ namespace UnityRemix
 
             if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
             {
-                // Ensure child window is initially disabled so it never intercepts mouse messages
-                EnableWindow(remixWindow, false);
-
                 // Explicitly keep focus and foreground on gameWindow.
-                // Do NOT call AttachThreadInput, as attaching render thread to game thread stalls Unity's message pump into slow motion!
+                // remixWindow remains enabled so Windows does not treat it as hung or disabled;
+                // mouse click transparency is handled completely by WM_NCHITTEST returning HTTRANSPARENT.
                 SetForegroundWindow(gameWindow);
                 SetFocus(gameWindow);
             }

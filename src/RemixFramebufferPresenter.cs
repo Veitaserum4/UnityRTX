@@ -111,50 +111,53 @@ namespace UnityRemix
         {
             if (configSingleWindow == null) return;
 
-            UpdateSingleWindowUIActive();
-
             bool isSingle = configSingleWindow.Value;
-            bool shouldSuppress = isSingle && configDisableInEngineRendering.Value;
 
-            int currentCameraCount = Camera.allCamerasCount;
-            bool cameraCountChanged = (currentCameraCount != lastCameraCount);
-            bool periodicCheck = (frameCount % 60 == 0);
-            bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || periodicCheck || (sceneRefreshCounter > 0);
-
-            if (shouldCheck)
+            using (RemixTracy.Zone("Presenter_Update"))
             {
-                if (sceneRefreshCounter > 0) sceneRefreshCounter--;
+                UpdateSingleWindowUIActive();
 
-                int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
-                bool countsChanged = cameraCountChanged;
+                bool shouldSuppress = isSingle && configDisableInEngineRendering.Value;
 
-                if (shouldSuppress != inEngineRenderingSuppressed || countsChanged)
+                int currentCameraCount = Camera.allCamerasCount;
+                bool cameraCountChanged = (currentCameraCount != lastCameraCount);
+                bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || (sceneRefreshCounter > 0);
+
+                if (shouldCheck)
                 {
-                    lastCameraCount = currentCameraCount;
+                    if (sceneRefreshCounter > 0) sceneRefreshCounter--;
 
-                    if (shouldSuppress)
-                        ApplyInEngineRenderingSuppression();
-                    else
-                        RestoreInEngineRendering();
+                    int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
+                    bool countsChanged = cameraCountChanged;
+
+                    if (shouldSuppress != inEngineRenderingSuppressed || countsChanged)
+                    {
+                        lastCameraCount = currentCameraCount;
+
+                        if (shouldSuppress)
+                            ApplyInEngineRenderingSuppression();
+                        else
+                            RestoreInEngineRendering();
+                    }
+
+                    if (currentCanvasCount != lastCanvasCount && uiDetector.UICameras.Count > 0)
+                    {
+                        lastCanvasCount = currentCanvasCount;
+                        uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
+                        uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                    }
                 }
 
-                if ((periodicCheck || currentCanvasCount != lastCanvasCount) && uiDetector.UICameras.Count > 0)
+                if (frameCount % 300 == 0 && isSingle)
                 {
-                    lastCanvasCount = currentCanvasCount;
-                    uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
-                    uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                    logger?.LogInfo($"[RemixFramebufferPresenter] Frame #{frameCount} Status: SingleWindow={isSingle}, Suppressed={inEngineRenderingSuppressed}, WorldCams={uiDetector.WorldCameras.Count}, UICams={uiDetector.UICameras.Count}, Canvases={lastCanvasCount}, OverlayActive={(uiOverlay != null)}");
                 }
-            }
 
-            if (frameCount % 300 == 0 && isSingle)
-            {
-                logger?.LogInfo($"[RemixFramebufferPresenter] Frame #{frameCount} Status: SingleWindow={isSingle}, Suppressed={inEngineRenderingSuppressed}, WorldCams={uiDetector.WorldCameras.Count}, UICams={uiDetector.UICameras.Count}, Canvases={lastCanvasCount}, OverlayActive={(uiOverlay != null)}");
-            }
-
-            // Sync embedded window bounds
-            if (isSingle && configSingleWindowMethod.Value == SingleWindowMethod.Embedded && windowManager != null)
-            {
-                windowManager.SyncWindowBounds();
+                // Sync embedded window bounds
+                if (isSingle && configSingleWindowMethod.Value == SingleWindowMethod.Embedded && windowManager != null)
+                {
+                    windowManager.SyncWindowBounds();
+                }
             }
 
             // Handle Alt+X detection for Remix ImGui
