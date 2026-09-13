@@ -78,6 +78,7 @@ namespace UnityRemix
         
         private int frameCount = 0;
         private static bool isQuitting = false;
+        private static System.Diagnostics.Stopwatch interFrameSw;
         
         // Shared lock for all Remix API calls to prevent deadlocks
         private static readonly object remixApiLock = new object();
@@ -531,11 +532,17 @@ namespace UnityRemix
             
             frameCount++;
 
+            double engineMs = 0;
+            if (interFrameSw != null)
+            {
+                engineMs = interFrameSw.Elapsed.TotalMilliseconds;
+            }
+
             RemixTracy.FrameMark();
             using (RemixTracy.Zone("UnityMainThread_Frame"))
             {
                 var totalSw = System.Diagnostics.Stopwatch.StartNew();
-                double lightsMs = 0, staticMs = 0, skinnedMs = 0, dynamicMs = 0, overlayMs = 0;
+                double lightsMs = 0, staticMs = 0, skinnedMs = 0, dynamicMs = 0, scannerMs = 0, overlayMs = 0;
 
                 if (configUseGameGeometry.Value && frameCapture != null && renderThread != null)
                 {
@@ -591,6 +598,7 @@ namespace UnityRemix
                     {
                         using (RemixTracy.Zone("SceneMeshScanner_UpdateVisibility"))
                         {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
                             Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
                             sceneMeshScanner.UpdateVisibility(
                                 camPos,
@@ -598,6 +606,7 @@ namespace UnityRemix
                                 configMaxRenderDistance.Value,
                                 configUseVisibilityCulling.Value
                             );
+                            scannerMs = sw.Elapsed.TotalMilliseconds;
                         }
                     }
 
@@ -618,18 +627,27 @@ namespace UnityRemix
 
                 RemixProfiler.RecordMainThread(
                     totalSw.Elapsed.TotalMilliseconds,
+                    engineMs,
                     lightsMs,
                     staticMs,
+                    scannerMs,
                     skinnedMs,
                     dynamicMs,
                     overlayMs
                 );
             }
+
+            interFrameSw = System.Diagnostics.Stopwatch.StartNew();
         }
 
         public void OnEndOfFrame()
         {
-            framebufferPresenter?.OnEndOfFrame();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            using (RemixTracy.Zone("OnEndOfFrame"))
+            {
+                framebufferPresenter?.OnEndOfFrame();
+            }
+            RemixProfiler.RecordEndOfFrame(sw.Elapsed.TotalMilliseconds);
         }
         
         void OnDestroy()
