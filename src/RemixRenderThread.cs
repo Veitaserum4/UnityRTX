@@ -141,6 +141,7 @@ namespace UnityRemix
         private void RenderThreadLoop()
         {
             logger.LogInfo("Render thread loop starting...");
+            RemixTracy.SetThreadName("RemixRenderThread");
             
             // Create window on this thread
             if (!windowManager.CreateRemixWindow())
@@ -206,68 +207,103 @@ namespace UnityRemix
         /// </summary>
         private void RenderFrame(int frameNum)
         {
-            try
+            using (RemixTracy.Zone("RemixRenderThread_Frame"))
             {
-                if (configUseGameGeometry.Value)
+                var totalSw = System.Diagnostics.Stopwatch.StartNew();
+                double meshBatchMs = 0, renderGeomMs = 0, processLightsMs = 0, presentMs = 0;
+
+                try
                 {
-                    // Process queued mesh creation on render thread (prevents main thread deadlocks)
-                    frameCapture?.ProcessMeshCreationBatch();
-                    
-                    // Render game geometry
-                    RenderGameGeometry();
-                    
-                    // Process Unity lights
-                    lightConverter.ProcessLights(frameNum);
-                    
-                    // Draw test light if lights disabled
-                    if (!configEnableLights.Value && testLightHandle != IntPtr.Zero)
+                    if (configUseGameGeometry.Value)
                     {
-                        // DrawLightInstance would be called here
-                    }
-                }
-                else
-                {
-                    // Test mode - just render triangle and light
-                    cameraHandler.SetupTestCamera(
-                        windowManager.WindowWidth,
-                        windowManager.WindowHeight,
-                        frameNum
-                    );
-                    
-                    // Draw test objects
-                    if (testMeshHandle != IntPtr.Zero)
-                    {
-                        meshConverter.DrawMeshInstance(
-                            testMeshHandle,
-                            UnityEngine.Matrix4x4.identity,
-                            1
-                        );
-                    }
-                }
-                
-                // Present
-                if (presentFunc != null)
-                {
-                    var presentInfo = new RemixAPI.remixapi_PresentInfo
-                    {
-                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_PRESENT_INFO,
-                        pNext = IntPtr.Zero,
-                        hwndOverride = IntPtr.Zero
-                    };
-                    
-                    var result = presentFunc(ref presentInfo);
-                    if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
-                    {
-                        if (configDebugLogInterval.Value > 0 && frameNum % configDebugLogInterval.Value == 0)
+                        // Process queued mesh creation on render thread (prevents main thread deadlocks)
+                        using (RemixTracy.Zone("ProcessMeshCreationBatch"))
                         {
-                            logger.LogWarning($"Present failed: {result}");
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            frameCapture?.ProcessMeshCreationBatch();
+                            meshBatchMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                        
+                        // Render game geometry
+                        using (RemixTracy.Zone("RenderGameGeometry"))
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            RenderGameGeometry();
+                            renderGeomMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                        
+                        // Process Unity lights
+                        using (RemixTracy.Zone("ProcessLights"))
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            lightConverter.ProcessLights(frameNum);
+                            processLightsMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                        
+                        // Draw test light if lights disabled
+                        if (!configEnableLights.Value && testLightHandle != IntPtr.Zero)
+                        {
+                            // DrawLightInstance would be called here
                         }
                     }
+                    else
+                    {
+                        // Test mode - just render triangle and light
+                        cameraHandler.SetupTestCamera(
+                            windowManager.WindowWidth,
+                            windowManager.WindowHeight,
+                            frameNum
+                        );
+                        
+                        // Draw test objects
+                        if (testMeshHandle != IntPtr.Zero)
+                        {
+                            meshConverter.DrawMeshInstance(
+                                testMeshHandle,
+                                UnityEngine.Matrix4x4.identity,
+                                1
+                            );
+                        }
+                    }
+                    
+                    // Present
+                    if (presentFunc != null)
+                    {
+                        using (RemixTracy.Zone("RemixPresent"))
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            var presentInfo = new RemixAPI.remixapi_PresentInfo
+                            {
+                                sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_PRESENT_INFO,
+                                pNext = IntPtr.Zero,
+                                hwndOverride = IntPtr.Zero
+                            };
+                            
+                            var result = presentFunc(ref presentInfo);
+                            presentMs = sw.Elapsed.TotalMilliseconds;
+
+                            if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                            {
+                                if (configDebugLogInterval.Value > 0 && frameNum % configDebugLogInterval.Value == 0)
+                                {
+                                    logger.LogWarning($"Present failed: {result}");
+                                }
+                            }
+                        }
+                    }
+
+                    RemixProfiler.RecordRenderThread(
+                        totalSw.Elapsed.TotalMilliseconds,
+                        meshBatchMs,
+                        renderGeomMs,
+                        processLightsMs,
+                        presentMs
+                    );
                 }
-            }
-            catch (Exception ex)
-            {
-                logger.LogError($"Error in RenderFrame: {ex}");
+                catch (Exception ex)
+                {
+                    logger.LogError($"Error in RenderFrame: {ex}");
+                }
             }
         }
         

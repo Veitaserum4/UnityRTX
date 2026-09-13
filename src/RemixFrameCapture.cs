@@ -2601,19 +2601,43 @@ namespace UnityRemix
         public void CaptureDynamicEffects(FrameState state, int frameCount)
         {
             // Capture world-space weapon UI screens (e.g. Nailgun ammo counter/heat, Shotgun slider, Rocket Launcher timer)
-            try { CaptureWeaponCanvasScreens(state, frameCount); }
+            try
+            {
+                using (RemixTracy.Zone("CaptureWeaponCanvasScreens"))
+                {
+                    CaptureWeaponCanvasScreens(state, frameCount);
+                }
+            }
             catch (Exception ex) { if (configDebugLogInterval.Value > 0 && frameCount % 300 == 0) logger.LogWarning($"[DynamicEffects] CaptureWeaponCanvasScreens error: {ex.Message}"); }
 
             // Capture dynamic line and trail renderers (e.g. Revolver bullet trail, Railcannon beam)
-            try { CaptureLineRenderers(state, frameCount); }
+            try
+            {
+                using (RemixTracy.Zone("CaptureLineRenderers"))
+                {
+                    CaptureLineRenderers(state, frameCount);
+                }
+            }
             catch (Exception ex) { if (configDebugLogInterval.Value > 0 && frameCount % 300 == 0) logger.LogWarning($"[DynamicEffects] CaptureLineRenderers error: {ex.Message}"); }
 
             // Capture dynamic sprite renderers (e.g. Revolver muzzle flash)
-            try { CaptureSpriteRenderers(state, frameCount); }
+            try
+            {
+                using (RemixTracy.Zone("CaptureSpriteRenderers"))
+                {
+                    CaptureSpriteRenderers(state, frameCount);
+                }
+            }
             catch (Exception ex) { if (configDebugLogInterval.Value > 0 && frameCount % 300 == 0) logger.LogWarning($"[DynamicEffects] CaptureSpriteRenderers error: {ex.Message}"); }
 
             // Capture blood splatter decals (BloodsplatterManager on floors/walls)
-            try { CaptureBloodStains(state, frameCount); }
+            try
+            {
+                using (RemixTracy.Zone("CaptureBloodStains"))
+                {
+                    CaptureBloodStains(state, frameCount);
+                }
+            }
             catch (Exception ex) { if (configDebugLogInterval.Value > 0 && frameCount % 300 == 0) logger.LogWarning($"[DynamicEffects] CaptureBloodStains error: {ex.Message}"); }
         }
         

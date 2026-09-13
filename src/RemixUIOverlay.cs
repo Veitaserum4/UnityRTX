@@ -410,184 +410,203 @@ namespace UnityRemix
 
         private void ProcessAndPresentOverlay(int width, int height)
         {
-            if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
-                return;
-
-            bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
-            int totalPixels = width * height;
-            int nonZeroPixelCount = 0;
-            int opaquePixelCount = 0;
-
-            unsafe
+            using (RemixTracy.Zone("ProcessAndPresentOverlay"))
             {
-                fixed (byte* pSrc = processPixels)
-                {
-                    IntPtr srcPtr = (IntPtr)pSrc;
-                    IntPtr dstPtr = overlayBits;
+                var totalSw = System.Diagnostics.Stopwatch.StartNew();
+                double updateLayeredMs = 0;
 
-                    System.Threading.Tasks.Parallel.For(0, height, y =>
+                if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
+                    return;
+
+                bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
+                int totalPixels = width * height;
+                int nonZeroPixelCount = 0;
+                int opaquePixelCount = 0;
+
+                unsafe
+                {
+                    fixed (byte* pSrc = processPixels)
                     {
-                        int rowOffset = y * width * 4;
-                        byte* s = (byte*)srcPtr + rowOffset;
-                        byte* d = (byte*)dstPtr + rowOffset;
-                        int localNonZero = 0;
-                        int localOpaque = 0;
+                        IntPtr srcPtr = (IntPtr)pSrc;
+                        IntPtr dstPtr = overlayBits;
 
-                        for (int x = 0; x < width; x++)
+                        using (RemixTracy.Zone("UI_ScanlineConversion"))
                         {
-                            uint px = *(uint*)s;
-                            // Fast path for transparent empty pixels (96% of the screen in ULTRAKILL HUD)
-                            if (px == 0)
+                            System.Threading.Tasks.Parallel.For(0, height, y =>
                             {
-                                *(uint*)d = 0;
-                                s += 4;
-                                d += 4;
-                                continue;
-                            }
+                                int rowOffset = y * width * 4;
+                                byte* s = (byte*)srcPtr + rowOffset;
+                                byte* d = (byte*)dstPtr + rowOffset;
+                                int localNonZero = 0;
+                                int localOpaque = 0;
 
-                            byte r = s[0];
-                            byte g = s[1];
-                            byte b = s[2];
-                            byte a = s[3];
+                                for (int x = 0; x < width; x++)
+                                {
+                                    uint px = *(uint*)s;
+                                    // Fast path for transparent empty pixels (96% of the screen in ULTRAKILL HUD)
+                                    if (px == 0)
+                                    {
+                                        *(uint*)d = 0;
+                                        s += 4;
+                                        d += 4;
+                                        continue;
+                                    }
 
-                            // Fallback for additive / unlit UI shaders that output color with a == 0
-                            byte effA = a;
-                            if (effA == 0 && (r > 0 || g > 0 || b > 0))
-                            {
-                                effA = (byte)Math.Max(r, Math.Max(g, b));
-                            }
-                            // Pitch black with a == 255 in an overlay context is an opaque blackout quad or background fill.
-                            else if (effA == 255 && r == 0 && g == 0 && b == 0)
-                            {
-                                effA = 0;
-                            }
+                                    byte r = s[0];
+                                    byte g = s[1];
+                                    byte b = s[2];
+                                    byte a = s[3];
 
-                            if (effA > 0 || r > 0 || g > 0 || b > 0)
-                            {
-                                localNonZero++;
-                            }
-                            if (effA > 200) localOpaque++;
+                                    // Fallback for additive / unlit UI shaders that output color with a == 0
+                                    byte effA = a;
+                                    if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                                    {
+                                        effA = (byte)Math.Max(r, Math.Max(g, b));
+                                    }
+                                    // Pitch black with a == 255 in an overlay context is an opaque blackout quad or background fill.
+                                    else if (effA == 255 && r == 0 && g == 0 && b == 0)
+                                    {
+                                        effA = 0;
+                                    }
 
-                            if (effA == 255)
-                            {
-                                d[0] = b;
-                                d[1] = g;
-                                d[2] = r;
-                                d[3] = 255;
-                            }
-                            else if (effA == 0)
-                            {
-                                *(uint*)d = 0;
-                            }
-                            else
-                            {
-                                d[0] = (byte)((b * effA) / 255);
-                                d[1] = (byte)((g * effA) / 255);
-                                d[2] = (byte)((r * effA) / 255);
-                                d[3] = effA;
-                            }
+                                    if (effA > 0 || r > 0 || g > 0 || b > 0)
+                                    {
+                                        localNonZero++;
+                                    }
+                                    if (effA > 200) localOpaque++;
 
-                            s += 4;
-                            d += 4;
+                                    if (effA == 255)
+                                    {
+                                        d[0] = b;
+                                        d[1] = g;
+                                        d[2] = r;
+                                        d[3] = 255;
+                                    }
+                                    else if (effA == 0)
+                                    {
+                                        *(uint*)d = 0;
+                                    }
+                                    else
+                                    {
+                                        d[0] = (byte)((b * effA) / 255);
+                                        d[1] = (byte)((g * effA) / 255);
+                                        d[2] = (byte)((r * effA) / 255);
+                                        d[3] = effA;
+                                    }
+
+                                    s += 4;
+                                    d += 4;
+                                }
+
+                                if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
+                                if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                            });
                         }
-
-                        if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
-                        if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
-                    });
+                    }
                 }
-            }
 
-            float opaqueRatio = (float)opaquePixelCount / totalPixels;
+                float opaqueRatio = (float)opaquePixelCount / totalPixels;
 
-            if (diagLog)
-            {
-                int centerIdx = (height / 2 * width + width / 2) * 4;
-                logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
-            }
-
-            if (opaqueRatio > 0.98f)
-            {
-                if (!hasLoggedOpaqueWarning)
+                if (diagLog)
                 {
-                    logger?.LogWarning($"[RemixUIOverlay] UI camera output is {opaqueRatio * 100:F1}% opaque! Suppressing overlay to prevent black screen.");
-                    hasLoggedOpaqueWarning = true;
+                    int centerIdx = (height / 2 * width + width / 2) * 4;
+                    logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
                 }
-                if (isOverlayVisible)
+
+                if (opaqueRatio > 0.98f)
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
-                    isOverlayVisible = false;
+                    if (!hasLoggedOpaqueWarning)
+                    {
+                        logger?.LogWarning($"[RemixUIOverlay] UI camera output is {opaqueRatio * 100:F1}% opaque! Suppressing overlay to prevent black screen.");
+                        hasLoggedOpaqueWarning = true;
+                    }
+                    if (isOverlayVisible)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
+                    }
+                    return;
                 }
-                return;
-            }
-            else
-            {
-                hasLoggedOpaqueWarning = false;
-            }
-
-            // If completely empty (no UI pixels rendered at all), hide overlay
-            if (nonZeroPixelCount == 0)
-            {
-                if (isOverlayVisible)
+                else
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
-                    isOverlayVisible = false;
+                    hasLoggedOpaqueWarning = false;
                 }
-                return;
-            }
 
-            // Update Win32 Layered Window
-            var ptDst = new POINT { x = 0, y = 0 };
-            ClientToScreen(gameWindow, ref ptDst);
-            var sizeDst = new SIZE { cx = width, cy = height };
-            var ptSrc = new POINT { x = 0, y = 0 };
+                // If completely empty (no UI pixels rendered at all), hide overlay
+                if (nonZeroPixelCount == 0)
+                {
+                    if (isOverlayVisible)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
+                    }
+                    return;
+                }
 
-            var blend = new BLENDFUNCTION
-            {
-                BlendOp = AC_SRC_OVER,
-                BlendFlags = 0,
-                SourceConstantAlpha = 255,
-                AlphaFormat = AC_SRC_ALPHA
-            };
+                // Update Win32 Layered Window
+                var ptDst = new POINT { x = 0, y = 0 };
+                ClientToScreen(gameWindow, ref ptDst);
+                var sizeDst = new SIZE { cx = width, cy = height };
+                var ptSrc = new POINT { x = 0, y = 0 };
 
-            bool ok = UpdateLayeredWindow(
-                overlayWindow,
-                IntPtr.Zero,
-                ref ptDst,
-                ref sizeDst,
-                overlayHdc,
-                ref ptSrc,
-                0,
-                ref blend,
-                ULW_ALPHA
-            );
+                var blend = new BLENDFUNCTION
+                {
+                    BlendOp = AC_SRC_OVER,
+                    BlendFlags = 0,
+                    SourceConstantAlpha = 255,
+                    AlphaFormat = AC_SRC_ALPHA
+                };
 
-            if (!ok)
-            {
-                int err = Marshal.GetLastWin32Error();
-                logger?.LogError($"[RemixUIOverlay] UpdateLayeredWindow failed! Win32 Error: {err}");
-            }
+                bool ok;
+                using (RemixTracy.Zone("UpdateLayeredWindow"))
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    ok = UpdateLayeredWindow(
+                        overlayWindow,
+                        IntPtr.Zero,
+                        ref ptDst,
+                        ref sizeDst,
+                        overlayHdc,
+                        ref ptSrc,
+                        0,
+                        ref blend,
+                        ULW_ALPHA
+                    );
+                    updateLayeredMs = sw.Elapsed.TotalMilliseconds;
+                }
 
-            if (!isOverlayVisible)
-            {
-                ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
-                SetWindowPos(overlayWindow, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                isOverlayVisible = true;
+                if (!ok)
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    logger?.LogError($"[RemixUIOverlay] UpdateLayeredWindow failed! Win32 Error: {err}");
+                }
+
+                if (!isOverlayVisible)
+                {
+                    ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
+                    SetWindowPos(overlayWindow, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    isOverlayVisible = true;
+                }
+
+                RemixProfiler.RecordOverlayThread(totalSw.Elapsed.TotalMilliseconds, updateLayeredMs);
             }
         }
 
         public void SyncWindowBounds()
         {
-            if (overlayWindow == IntPtr.Zero || gameWindow == IntPtr.Zero) return;
-
-            if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
+            using (RemixTracy.Zone("SyncWindowBounds"))
             {
-                if (isOverlayVisible)
+                if (overlayWindow == IntPtr.Zero || gameWindow == IntPtr.Zero) return;
+
+                if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
-                    isOverlayVisible = false;
+                    if (isOverlayVisible)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
+                    }
+                    return;
                 }
-                return;
-            }
 
             if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
             {
@@ -608,6 +627,7 @@ namespace UnityRemix
                         SWP_NOACTIVATE | SWP_SHOWWINDOW
                     );
                 }
+            }
             }
         }
 

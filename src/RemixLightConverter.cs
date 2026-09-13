@@ -100,40 +100,48 @@ namespace UnityRemix
         {
             if (!configEnableLights.Value)
                 return;
-                
-            Light[] allLights = UnityEngine.Object.FindObjectsOfType<Light>();
+
+            Light[] allLights;
+            using (RemixTracy.Zone("Light_FindObjects"))
+            {
+                allLights = UnityEngine.Object.FindObjectsOfType<Light>();
+            }
+
             var lightList = new List<UnityLightData>(allLights.Length);
 
-            for (int i = 0; i < allLights.Length; i++)
+            using (RemixTracy.Zone("Light_BuildHierarchyPath"))
             {
-                Light l = allLights[i];
-                if (l == null || !l.enabled || !l.gameObject.activeInHierarchy || l.intensity <= 0.001f || l.range <= 0.001f)
-                    continue;
-
-                Transform t = l.transform;
-                string path = HashUtils.GetHierarchyPath(t);
-                ulong hash = HashUtils.HashStringFNV(path);
-
-                // For dynamically instantiated objects (like explosions, muzzle flashes, projectiles),
-                // include instance ID in hash to avoid hash collisions between multiple clones.
-                if (path.Contains("(Clone)"))
+                for (int i = 0; i < allLights.Length; i++)
                 {
-                    hash ^= ((ulong)(uint)l.GetInstanceID() * 1099511628211UL);
+                    Light l = allLights[i];
+                    if (l == null || !l.enabled || !l.gameObject.activeInHierarchy || l.intensity <= 0.001f || l.range <= 0.001f)
+                        continue;
+
+                    Transform t = l.transform;
+                    string path = HashUtils.GetHierarchyPath(t);
+                    ulong hash = HashUtils.HashStringFNV(path);
+
+                    // For dynamically instantiated objects (like explosions, muzzle flashes, projectiles),
+                    // include instance ID in hash to avoid hash collisions between multiple clones.
+                    if (path.Contains("(Clone)"))
+                    {
+                        hash ^= ((ulong)(uint)l.GetInstanceID() * 1099511628211UL);
+                    }
+
+                    lightList.Add(new UnityLightData
+                    {
+                        instanceId = l.GetInstanceID(),
+                        hash = hash,
+                        type = l.type,
+                        color = l.color,
+                        intensity = l.intensity,
+                        range = l.range,
+                        position = t.position,
+                        forward = t.forward,
+                        spotAngle = l.spotAngle,
+                        name = l.name
+                    });
                 }
-
-                lightList.Add(new UnityLightData
-                {
-                    instanceId = l.GetInstanceID(),
-                    hash = hash,
-                    type = l.type,
-                    color = l.color,
-                    intensity = l.intensity,
-                    range = l.range,
-                    position = t.position,
-                    forward = t.forward,
-                    spotAngle = l.spotAngle,
-                    name = l.name
-                });
             }
 
             lock (lightDataLock)

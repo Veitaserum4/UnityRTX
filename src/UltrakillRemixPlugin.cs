@@ -433,7 +433,11 @@ namespace UnityRemix
                 else
                     LogSource.LogWarning("Remix build does not support overlay callbacks — debug HUD unavailable");
             }
-            
+
+            // Initialize profiler
+            RemixProfiler.Logger = LogSource;
+            RemixTracy.SetThreadName("UnityMainThread");
+
             LogSource.LogInfo("All components initialized");
         }
         
@@ -526,54 +530,101 @@ namespace UnityRemix
             }
             
             frameCount++;
-            
-            if (configUseGameGeometry.Value && frameCapture != null && renderThread != null)
+
+            RemixTracy.FrameMark();
+            using (RemixTracy.Zone("UnityMainThread_Frame"))
             {
-                var nextState = new RemixFrameCapture.FrameState();
-                nextState.frameCount = frameCount;
-                
-                // Refresh light cache every frame to capture transient lights (explosions, muzzle flashes)
-                if (configEnableLights.Value && lightConverter != null)
-                {
-                    lightConverter.RefreshLightCache();
-                }
-                
-                // Refresh camera snapshot for the UI
-                if (frameCount % configRendererCacheDuration.Value == 0 && cameraHandler != null)
-                {
-                    cameraHandler.RefreshCameraSnapshots();
-                }
-                
-                // Capture static meshes and camera
-                frameCapture.CaptureStaticMeshes(nextState, frameCount);
-                
-                // Capture skinned meshes
-                frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
+                var totalSw = System.Diagnostics.Stopwatch.StartNew();
+                double lightsMs = 0, staticMs = 0, skinnedMs = 0, dynamicMs = 0, overlayMs = 0;
 
-                // Capture dynamic non-skinned effects (weapon screens, line/trail beams, sprites, blood decals, particles)
-                frameCapture.CaptureDynamicEffects(nextState, frameCount);
-                
-                // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
-                if (sceneMeshScanner != null)
+                if (configUseGameGeometry.Value && frameCapture != null && renderThread != null)
                 {
-                    Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
-                    sceneMeshScanner.UpdateVisibility(
-                        camPos,
-                        configUseDistanceCulling.Value,
-                        configMaxRenderDistance.Value,
-                        configUseVisibilityCulling.Value
-                    );
+                    var nextState = new RemixFrameCapture.FrameState();
+                    nextState.frameCount = frameCount;
+
+                    // Refresh light cache every frame to capture transient lights (explosions, muzzle flashes)
+                    if (configEnableLights.Value && lightConverter != null)
+                    {
+                        using (RemixTracy.Zone("RefreshLightCache"))
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            lightConverter.RefreshLightCache();
+                            lightsMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                    }
+
+                    // Refresh camera snapshot for the UI
+                    if (frameCount % configRendererCacheDuration.Value == 0 && cameraHandler != null)
+                    {
+                        using (RemixTracy.Zone("RefreshCameraSnapshots"))
+                        {
+                            cameraHandler.RefreshCameraSnapshots();
+                        }
+                    }
+
+                    // Capture static meshes and camera
+                    using (RemixTracy.Zone("CaptureStaticMeshes"))
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        frameCapture.CaptureStaticMeshes(nextState, frameCount);
+                        staticMs = sw.Elapsed.TotalMilliseconds;
+                    }
+
+                    // Capture skinned meshes
+                    using (RemixTracy.Zone("CaptureSkinnedMeshes"))
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
+                        skinnedMs = sw.Elapsed.TotalMilliseconds;
+                    }
+
+                    // Capture dynamic non-skinned effects (weapon screens, line/trail beams, sprites, blood decals, particles)
+                    using (RemixTracy.Zone("CaptureDynamicEffects"))
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        frameCapture.CaptureDynamicEffects(nextState, frameCount);
+                        dynamicMs = sw.Elapsed.TotalMilliseconds;
+                    }
+
+                    // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
+                    if (sceneMeshScanner != null)
+                    {
+                        using (RemixTracy.Zone("SceneMeshScanner_UpdateVisibility"))
+                        {
+                            Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
+                            sceneMeshScanner.UpdateVisibility(
+                                camPos,
+                                configUseDistanceCulling.Value,
+                                configMaxRenderDistance.Value,
+                                configUseVisibilityCulling.Value
+                            );
+                        }
+                    }
+
+                    // Send to render thread (mesh creation moved to render thread to avoid deadlocks)
+                    renderThread.UpdateFrameState(nextState);
                 }
 
-                // Send to render thread (mesh creation moved to render thread to avoid deadlocks)
-                renderThread.UpdateFrameState(nextState);
+                // Update SingleWindow framebuffer presenter & UI overlay
+                using (RemixTracy.Zone("UpdateOverlay"))
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    framebufferPresenter?.Update(frameCount);
+                    overlayMs = sw.Elapsed.TotalMilliseconds;
+                }
+
+                // Update debug HUD snapshot after all frame data is captured
+                debugHUD?.UpdateSnapshot();
+
+                RemixProfiler.RecordMainThread(
+                    totalSw.Elapsed.TotalMilliseconds,
+                    lightsMs,
+                    staticMs,
+                    skinnedMs,
+                    dynamicMs,
+                    overlayMs
+                );
             }
-
-            // Update SingleWindow framebuffer presenter & UI overlay
-            framebufferPresenter?.Update(frameCount);
-
-            // Update debug HUD snapshot after all frame data is captured
-            debugHUD?.UpdateSnapshot();
         }
 
         public void OnEndOfFrame()
