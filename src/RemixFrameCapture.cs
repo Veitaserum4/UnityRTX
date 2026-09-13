@@ -676,6 +676,11 @@ namespace UnityRemix
                 if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                 {
                     cachedSkinnedRenderers.Add(sr);
+                    if (!sr.updateWhenOffscreen)
+                        sr.updateWhenOffscreen = true;
+                    var anim = sr.GetComponentInParent<Animator>();
+                    if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 }
             }
             
@@ -876,6 +881,11 @@ namespace UnityRemix
                         if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                         {
                             cachedSkinnedRenderers.Add(sr);
+                            if (!sr.updateWhenOffscreen)
+                                sr.updateWhenOffscreen = true;
+                            var anim = sr.GetComponentInParent<Animator>();
+                            if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                                anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                         }
                     }
                 }
@@ -1466,6 +1476,13 @@ namespace UnityRemix
                     skipNull++;
                     continue;
                 }
+
+                if (!skinned.updateWhenOffscreen)
+                    skinned.updateWhenOffscreen = true;
+
+                var anim = skinned.GetComponentInParent<Animator>();
+                if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                    anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
                 var scale = skinned.transform.lossyScale;
                 if (scale.sqrMagnitude < 0.0001f)

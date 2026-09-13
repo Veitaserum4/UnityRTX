@@ -213,8 +213,8 @@ namespace UnityRemix
             configSingleWindowMethod = Config.Bind("Window", "SingleWindowMethod", SingleWindowMethod.Embedded,
                 "Method used for single window mode: Embedded (zero performance loss, native child window) or Copy (blits framebuffer into engine).");
 
-            configDisableInEngineRendering = Config.Bind("Window", "DisableInEngineRendering", true,
-                "Suppresses Unity's 3D scene rasterization passes when single window mode is enabled, eliminating duplicate rendering work.");
+            configDisableInEngineRendering = Config.Bind("Window", "DisableInEngineRendering", false,
+                "Suppresses Unity's 3D scene rasterization passes when single window mode is enabled (experimental; may affect animation culling).");
 
             configAutoDetectUI = Config.Bind("Window", "AutoDetectUI", true,
                 "Automatically detect UI/HUD cameras and Canvases, keeping them active while suppressing 3D scene rendering.");
