@@ -120,17 +120,13 @@ namespace UnityRemix
                 {
                     Camera worldCam = cameraHandler?.CurrentCamera ?? Camera.main;
 
-                    // Ensure UI Presentation is active
-                    if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded)
+                    // Ensure UI Presentation window is active if missing
+                    if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded && uiOverlay == null)
                     {
                         SetupEmbeddedUIOverlay();
                     }
-                    else if (configSingleWindowMethod.Value == SingleWindowMethod.Copy)
-                    {
-                        SetupCopyModeBlitter(worldCam);
-                    }
 
-                    // Handle 3D in-engine camera suppression
+                    // Handle 3D in-engine camera suppression & camera detection
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
 
                     int currentCameraCount = Camera.allCamerasCount;
@@ -142,10 +138,24 @@ namespace UnityRemix
                         if (sceneRefreshCounter > 0) sceneRefreshCounter--;
                         lastCameraCount = currentCameraCount;
 
+                        // 1. ALWAYS refresh UI detector to categorize World and UI cameras
+                        uiDetector.Refresh(worldCam);
+
+                        // 2. Handle 3D in-engine camera suppression
                         if (shouldSuppress)
-                            ApplyCameraSuppression(worldCam);
+                            ApplyCameraSuppressionInternal();
                         else
                             RestoreCameraSuppression();
+
+                        // 3. Configure UI presentation with newly detected UI cameras
+                        if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded)
+                        {
+                            SetupEmbeddedUIOverlay();
+                        }
+                        else if (configSingleWindowMethod.Value == SingleWindowMethod.Copy)
+                        {
+                            SetupCopyModeBlitter(worldCam);
+                        }
                     }
 
                     int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
@@ -225,7 +235,11 @@ namespace UnityRemix
             if (worldCam == null)
                 worldCam = cameraHandler?.CurrentCamera ?? Camera.main;
             uiDetector.Refresh(worldCam);
+            ApplyCameraSuppressionInternal();
+        }
 
+        private void ApplyCameraSuppressionInternal()
+        {
             // Suppress 3D World Cameras
             int suppressedCount = 0;
             foreach (var cam in uiDetector.WorldCameras)
@@ -281,6 +295,7 @@ namespace UnityRemix
                 uiOverlay.ConfigureUICameras(uiDetector.UICameras);
                 uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
                 uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                lastCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
             }
         }
 
@@ -304,23 +319,26 @@ namespace UnityRemix
         /// </summary>
         public void RestoreCameraSuppression()
         {
-            foreach (var kvp in originalCullingMasks)
+            if (originalCullingMasks.Count > 0 || inEngineRenderingSuppressed)
             {
-                var cam = kvp.Key;
-                if (cam != null)
+                foreach (var kvp in originalCullingMasks)
                 {
-                    cam.cullingMask = kvp.Value;
-                    if (originalClearFlags.TryGetValue(cam, out var flags))
+                    var cam = kvp.Key;
+                    if (cam != null)
                     {
-                        cam.clearFlags = flags;
+                        cam.cullingMask = kvp.Value;
+                        if (originalClearFlags.TryGetValue(cam, out var flags))
+                        {
+                            cam.clearFlags = flags;
+                        }
                     }
                 }
-            }
 
-            originalCullingMasks.Clear();
-            originalClearFlags.Clear();
-            inEngineRenderingSuppressed = false;
-            logger?.LogInfo("[RemixFramebufferPresenter] Restored in-engine camera rendering.");
+                originalCullingMasks.Clear();
+                originalClearFlags.Clear();
+                inEngineRenderingSuppressed = false;
+                logger?.LogInfo("[RemixFramebufferPresenter] Restored in-engine camera rendering.");
+            }
         }
 
         private void TearDownUIOverlay()

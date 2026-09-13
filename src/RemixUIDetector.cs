@@ -411,8 +411,10 @@ namespace UnityRemix
                 }
             }
 
-            // Strictly ensure UI camera ONLY culls the UI layer (5)
-            cam.cullingMask = (1 << uiLayer);
+            // Strictly isolate UI cameras: never render layer 0 (Default) and never AlwaysOnTop (13), ensure UI layer is included
+            cam.cullingMask &= ~1;
+            cam.cullingMask &= ~(1 << alwaysOnTopLayer);
+            cam.cullingMask |= (1 << uiLayer);
         }
 
         /// <summary>
