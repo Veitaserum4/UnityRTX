@@ -91,6 +91,9 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
@@ -596,23 +599,9 @@ namespace UnityRemix
                 // Ensure child window is initially disabled so it never intercepts mouse messages
                 EnableWindow(remixWindow, false);
 
-                // Attach input queues between render thread and game thread so Win32 input synchronization is seamless
-                try
-                {
-                    uint renderThreadId = GetCurrentThreadId();
-                    uint gameThreadId = GetWindowThreadProcessId(gameWindow, out _);
-                    if (renderThreadId != gameThreadId && gameThreadId != 0)
-                    {
-                        bool attached = AttachThreadInput(renderThreadId, gameThreadId, true);
-                        logger.LogInfo($"[RemixWindowManager] AttachThreadInput (render thread {renderThreadId} -> game thread {gameThreadId}): {attached}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning($"[RemixWindowManager] Failed to attach thread input: {ex.Message}");
-                }
-
-                // Explicitly keep focus on gameWindow
+                // Explicitly keep focus and foreground on gameWindow.
+                // Do NOT call AttachThreadInput, as attaching render thread to game thread stalls Unity's message pump into slow motion!
+                SetForegroundWindow(gameWindow);
                 SetFocus(gameWindow);
             }
             
