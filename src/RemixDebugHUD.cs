@@ -92,11 +92,18 @@ namespace UnityRemix
             };
         }
 
+        private StaticGeometryStats _cachedStaticStats;
+        private bool _hasStaticStats;
+        private int _staticStatsFrameTimer;
+
         /// <summary>
         /// Called from the Unity main thread each frame to snapshot diagnostic data.
         /// </summary>
         public void UpdateSnapshot()
         {
+            if (!_visible)
+                return;
+
             var snap = new HUDSnapshot();
 
             var mc = _plugin.MeshConverter;
@@ -130,7 +137,12 @@ namespace UnityRemix
                 snap.PersistentStatic = fc.PersistentStaticCount;
                 snap.CachedStaticRenderers = fc.CachedStaticRendererCount;
                 snap.CachedSkinnedRenderers = fc.CachedSkinnedRendererCount;
-                snap.StaticGeometryStats = fc.GetStaticGeometryStats(sc);
+                if (++_staticStatsFrameTimer % 60 == 1 || !_hasStaticStats)
+                {
+                    _cachedStaticStats = fc.GetStaticGeometryStats(sc);
+                    _hasStaticStats = true;
+                }
+                snap.StaticGeometryStats = _cachedStaticStats;
             }
 
             if (sc != null)

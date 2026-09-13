@@ -24,6 +24,7 @@ namespace UnityRemix
         private static double _curSkinnedMeshes;
         private static double _curDynamicEffects;
         private static double _curUpdateOverlay;
+        private static double _curHUD;
         private static double _curEndOfFrame;
 
         // Render thread timings (ms)
@@ -47,6 +48,7 @@ namespace UnityRemix
         private static double _sumSkinned, _maxSkinned;
         private static double _sumDynamic, _maxDynamic;
         private static double _sumOverlay, _maxOverlay;
+        private static double _sumHUD, _maxHUD;
         private static double _sumEndOfFrame, _maxEndOfFrame;
 
         private static double _sumRenderTotal, _maxRenderTotal;
@@ -61,7 +63,8 @@ namespace UnityRemix
             double scannerMs,
             double skinnedMs,
             double dynamicMs,
-            double overlayMs)
+            double overlayMs,
+            double hudMs = 0)
         {
             _curMainTotal = totalMs;
             _curEngine = engineMs;
@@ -71,6 +74,7 @@ namespace UnityRemix
             _curSkinnedMeshes = skinnedMs;
             _curDynamicEffects = dynamicMs;
             _curUpdateOverlay = overlayMs;
+            _curHUD = hudMs;
 
             RemixTracy.Plot("Main_Total_ms", totalMs);
             RemixTracy.Plot("Main_Engine_ms", engineMs);
@@ -80,6 +84,7 @@ namespace UnityRemix
             RemixTracy.Plot("Main_Skinned_ms", skinnedMs);
             RemixTracy.Plot("Main_Dynamic_ms", dynamicMs);
             RemixTracy.Plot("Main_Overlay_ms", overlayMs);
+            RemixTracy.Plot("Main_HUD_ms", hudMs);
 
             _sumMainTotal += totalMs; if (totalMs > _maxMainTotal) _maxMainTotal = totalMs;
             _sumEngine += engineMs; if (engineMs > _maxEngine) _maxEngine = engineMs;
@@ -89,6 +94,7 @@ namespace UnityRemix
             _sumSkinned += skinnedMs; if (skinnedMs > _maxSkinned) _maxSkinned = skinnedMs;
             _sumDynamic += dynamicMs; if (dynamicMs > _maxDynamic) _maxDynamic = dynamicMs;
             _sumOverlay += overlayMs; if (overlayMs > _maxOverlay) _maxOverlay = overlayMs;
+            _sumHUD += hudMs; if (hudMs > _maxHUD) _maxHUD = hudMs;
 
             _statSampleCount++;
             if (_statSampleCount >= LogIntervalFrames)
@@ -156,7 +162,7 @@ namespace UnityRemix
                 $"Skinned: {_sumSkinned/n:F2}ms (max {_maxSkinned:F1}ms), " +
                 $"Lights: {_sumLights/n:F2}ms (max {_maxLights:F1}ms), " +
                 $"Dynamic: {_sumDynamic/n:F2}ms (max {_maxDynamic:F1}ms), " +
-                $"Presenter: {_sumOverlay/n:F2}ms | AsyncOverlay: {_sumOverlayProcess/n:F2}ms"
+                $"Presenter: {_sumOverlay/n:F2}ms, HUD: {_sumHUD/n:F2}ms | AsyncOverlay: {_sumOverlayProcess/n:F2}ms"
             );
 
             _statSampleCount = 0;
@@ -168,6 +174,7 @@ namespace UnityRemix
             _sumSkinned = _maxSkinned = 0;
             _sumDynamic = _maxDynamic = 0;
             _sumOverlay = _maxOverlay = 0;
+            _sumHUD = _maxHUD = 0;
             _sumEndOfFrame = _maxEndOfFrame = 0;
             _sumRenderTotal = _maxRenderTotal = 0;
             _sumPresent = _maxPresent = 0;

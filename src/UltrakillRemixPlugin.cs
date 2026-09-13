@@ -623,7 +623,13 @@ namespace UnityRemix
                 }
 
                 // Update debug HUD snapshot after all frame data is captured
-                debugHUD?.UpdateSnapshot();
+                double hudMs = 0;
+                using (RemixTracy.Zone("DebugHUD_UpdateSnapshot"))
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    debugHUD?.UpdateSnapshot();
+                    hudMs = sw.Elapsed.TotalMilliseconds;
+                }
 
                 RemixProfiler.RecordMainThread(
                     totalSw.Elapsed.TotalMilliseconds,
@@ -633,7 +639,8 @@ namespace UnityRemix
                     scannerMs,
                     skinnedMs,
                     dynamicMs,
-                    overlayMs
+                    overlayMs,
+                    hudMs
                 );
             }
 

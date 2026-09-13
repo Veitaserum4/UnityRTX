@@ -358,17 +358,18 @@ namespace UnityRemix
             }
             
             // Draw scanned scene mesh instances
-            // Always call GetInstances during streaming to drain the queue
+            // Always call GetInstancesSnapshot during streaming to drain the queue
             if (sceneMeshScanner != null && (sceneMeshScanner.HasData || sceneMeshScanner.IsStreaming))
             {
-                var scannedInstances = sceneMeshScanner.GetInstances();
-                if (scannedInstances != null)
+                var snapshot = sceneMeshScanner.GetInstancesSnapshot();
+                if (snapshot.Items != null && snapshot.Count > 0)
                 {
                     var drawFunc = meshConverter.GetDrawInstanceFunc();
                     if (drawFunc != null)
                     {
-                        foreach (var instance in scannedInstances)
+                        for (int i = 0; i < snapshot.Count; i++)
                         {
+                            var instance = snapshot.Items[i];
                             if (instance.MeshHandle == IntPtr.Zero)
                                 continue;
                             

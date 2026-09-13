@@ -935,6 +935,9 @@ namespace UnityRemix
                 if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
                     continue;
 
+                if (renderer.isPartOfStaticBatch)
+                    continue;
+
                 var lossy = renderer.transform.lossyScale;
                 if (lossy.sqrMagnitude < 0.0001f)
                     continue;
@@ -1460,11 +1463,6 @@ namespace UnityRemix
                 var skinned = cachedSkinnedRenderers[i];
                 if (skinned == null || !skinned.enabled || !skinned.gameObject.activeInHierarchy)
                 {
-                    if (skinned != null)
-                    {
-                        int staleId = HashUtils.GetHierarchyHashInt(skinned.transform);
-                        persistentSkinnedData.Remove(staleId);
-                    }
                     skipNull++;
                     continue;
                 }
@@ -1472,13 +1470,19 @@ namespace UnityRemix
                 var scale = skinned.transform.lossyScale;
                 if (scale.sqrMagnitude < 0.0001f)
                 {
-                    int staleId = HashUtils.GetHierarchyHashInt(skinned.transform);
-                    persistentSkinnedData.Remove(staleId);
                     skipNull++;
                     continue;
                 }
                 
-                if (IsLayerDisabled(skinned.gameObject.layer) || IsRendererDisabled(HashUtils.GetHierarchyHashInt(skinned.transform)))
+                if (IsLayerDisabled(skinned.gameObject.layer))
+                {
+                    skipLayer++;
+                    continue;
+                }
+
+                int skinnedId = HashUtils.GetHierarchyHashInt(skinned.transform);
+
+                if (IsRendererDisabled(skinnedId))
                 {
                     skipLayer++;
                     continue;
@@ -1503,13 +1507,12 @@ namespace UnityRemix
                 
                 if (skinned.sharedMesh == null)
                 {
-                    if (configDebugLogInterval.Value > 0 && persistentSkinnedData.ContainsKey(HashUtils.GetHierarchyHashInt(skinned.transform)))
-                        logger.LogWarning($"[SkinSkip] '{skinned.gameObject.name}' id={HashUtils.GetHierarchyHashInt(skinned.transform)}: sharedMesh became NULL");
+                    if (configDebugLogInterval.Value > 0 && persistentSkinnedData.ContainsKey(skinnedId))
+                        logger.LogWarning($"[SkinSkip] '{skinned.gameObject.name}' id={skinnedId}: sharedMesh became NULL");
                     skipNoMesh++;
                     continue;
                 }
                 
-                int skinnedId = HashUtils.GetHierarchyHashInt(skinned.transform);
                 validSkinnedIds.Add(skinnedId);
                 
                 // Compute unscaled transform (sign-only scale preserves winding)
