@@ -9,7 +9,7 @@ namespace UnityRemix
     /// <summary>
     /// Real-time profiling integration using Tracy Profiler.
     /// Connects to Tracy Profiler GUI (v0.8.x) on localhost:8086.
-    /// Has near-zero overhead when Tracy is not connected.
+    /// Uses persistent native source location structures matching C++ Tracy.
     /// </summary>
     public static class RemixTracy
     {
@@ -18,6 +18,16 @@ namespace UnityRemix
         {
             public uint id;
             public int active;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SourceLocationData
+        {
+            public IntPtr name;
+            public IntPtr function;
+            public IntPtr file;
+            public uint line;
+            public uint color;
         }
 
         public readonly struct ZoneScope : IDisposable
@@ -58,17 +68,7 @@ namespace UnityRemix
         private static extern void ___tracy_emit_frame_mark(IntPtr name);
 
         [DllImport("TracyClient.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern ulong ___tracy_alloc_srcloc_name(
-            uint line,
-            byte[] source,
-            UIntPtr sourceSz,
-            byte[] function,
-            UIntPtr functionSz,
-            byte[] name,
-            UIntPtr nameSz);
-
-        [DllImport("TracyClient.dll", CallingConvention = CallingConvention.Cdecl)]
-        private static extern ZoneContext ___tracy_emit_zone_begin_alloc(ulong srcloc, int active);
+        private static extern ZoneContext ___tracy_emit_zone_begin(IntPtr srcloc, int active);
 
         [DllImport("TracyClient.dll", CallingConvention = CallingConvention.Cdecl)]
         private static extern void ___tracy_emit_zone_end(ZoneContext ctx);
@@ -83,7 +83,7 @@ namespace UnityRemix
 
         private static bool _isAvailable = false;
         private static bool _initialized = false;
-        private static readonly ConcurrentDictionary<string, ulong> _srclocCache = new ConcurrentDictionary<string, ulong>();
+        private static readonly ConcurrentDictionary<string, IntPtr> _srclocCache = new ConcurrentDictionary<string, IntPtr>();
 
         public static bool IsAvailable
         {
@@ -170,25 +170,23 @@ namespace UnityRemix
             try
             {
                 string cacheKey = name;
-                if (!_srclocCache.TryGetValue(cacheKey, out ulong srcloc))
+                if (!_srclocCache.TryGetValue(cacheKey, out IntPtr locPtr))
                 {
-                    byte[] srcBytes = Encoding.UTF8.GetBytes(file ?? "");
-                    byte[] fnBytes = Encoding.UTF8.GetBytes(member ?? "");
-                    byte[] nameBytes = Encoding.UTF8.GetBytes(name ?? "");
+                    var loc = new SourceLocationData
+                    {
+                        name = Marshal.StringToHGlobalAnsi(name ?? ""),
+                        function = Marshal.StringToHGlobalAnsi(member ?? ""),
+                        file = Marshal.StringToHGlobalAnsi(file ?? ""),
+                        line = (uint)line,
+                        color = 0
+                    };
 
-                    srcloc = ___tracy_alloc_srcloc_name(
-                        (uint)line,
-                        srcBytes,
-                        (UIntPtr)srcBytes.Length,
-                        fnBytes,
-                        (UIntPtr)fnBytes.Length,
-                        nameBytes,
-                        (UIntPtr)nameBytes.Length
-                    );
-                    _srclocCache[cacheKey] = srcloc;
+                    locPtr = Marshal.AllocHGlobal(Marshal.SizeOf<SourceLocationData>());
+                    Marshal.StructureToPtr(loc, locPtr, false);
+                    _srclocCache[cacheKey] = locPtr;
                 }
 
-                ZoneContext ctx = ___tracy_emit_zone_begin_alloc(srcloc, 1);
+                ZoneContext ctx = ___tracy_emit_zone_begin(locPtr, 1);
                 return new ZoneScope(ctx);
             }
             catch
