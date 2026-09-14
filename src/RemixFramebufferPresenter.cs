@@ -104,6 +104,11 @@ namespace UnityRemix
             sceneRefreshCounter = 15; // Re-evaluate suppression over the next 15 frames to catch async objects
             lastCameraCount = -1;
             lastCanvasCount = -1;
+            if (RemixWindowManager.IsRemixUIOpen)
+            {
+                RemixWindowManager.SetRemixUIOpen(false);
+                RemixGameStateHelper.SetRemixMenuState(false, logger);
+            }
         }
 
         public void Update(int frameCount)
@@ -191,6 +196,13 @@ namespace UnityRemix
             {
                 windowManager?.HandleAltX();
                 logger?.LogInfo($"[RemixFramebufferPresenter] Alt+X pressed, RemixUIOpen: {RemixWindowManager.IsRemixUIOpen}");
+            }
+
+            // While Remix UI is open, guarantee cursor is unlocked and visible
+            if (RemixWindowManager.IsRemixUIOpen)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
             }
 
             // Ensure game window retains activation and focus during startup

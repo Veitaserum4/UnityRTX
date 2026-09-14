@@ -44,6 +44,9 @@ namespace UnityRemix
             ToggleRemixUI();
             if (remixWindow != IntPtr.Zero)
             {
+                // Always release any active mouse capture so mouse clicks aren't stuck on either window
+                ReleaseCapture();
+
                 if (isEmbedded)
                 {
                     // When Remix UI is open, enable child window so mouse clicks reach Remix ImGui.
@@ -56,19 +59,42 @@ namespace UnityRemix
 
                 if (isRemixUIOpen)
                 {
+                    SetForegroundWindow(remixWindow);
+                    SetActiveWindow(remixWindow);
                     SetFocus(remixWindow);
                 }
                 else if (gameWindow != IntPtr.Zero)
                 {
+                    ReleaseCapture();
+                    SetForegroundWindow(gameWindow);
+                    SetActiveWindow(gameWindow);
                     SetFocus(gameWindow);
                 }
             }
+
+            RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
         }
         
         #region Win32 API Declarations
 
         [DllImport("user32.dll")]
         private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetParent(IntPtr hWnd);
+
+        private const uint WM_LBUTTONDOWN = 0x0201;
+        private const uint WM_LBUTTONUP = 0x0202;
+        private const uint WM_RBUTTONDOWN = 0x0204;
+        private const uint WM_RBUTTONUP = 0x0205;
+        private const uint WM_MBUTTONDOWN = 0x0207;
+        private const uint WM_MBUTTONUP = 0x0208;
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -454,6 +480,23 @@ namespace UnityRemix
                 case WM_ERASEBKGND:
                     return new IntPtr(1);
                     
+                case WM_LBUTTONDOWN:
+                case WM_RBUTTONDOWN:
+                case WM_MBUTTONDOWN:
+                case WM_LBUTTONUP:
+                case WM_RBUTTONUP:
+                case WM_MBUTTONUP:
+                    if (isEmbeddedStatic && !isRemixUIOpen)
+                    {
+                        IntPtr parent = GetParent(hWnd);
+                        if (parent != IntPtr.Zero)
+                        {
+                            PostMessage(parent, msg, wParam, lParam);
+                            return IntPtr.Zero;
+                        }
+                    }
+                    break;
+
                 case WM_NCHITTEST:
                     if (isEmbeddedStatic)
                     {
