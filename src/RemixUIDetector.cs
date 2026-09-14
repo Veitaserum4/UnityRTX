@@ -294,9 +294,15 @@ namespace UnityRemix
             {
                 if (canvas == null) continue;
 
+                // Skip loading blockers whose sole purpose is full-screen blackout during load transitions
+                if (canvas.name.Equals("Loading Blocker", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
-                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
+                    (canvas.worldCamera == null || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
 
                 if (isOverlay || needsRebinding)
                 {

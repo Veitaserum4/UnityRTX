@@ -195,6 +195,7 @@ namespace UnityRemix
             this.materialManager = materialManager;
             this.apiLock = apiLock;
             this.scanActiveOnly = scanActiveOnly;
+            NativeMeshReader.SetLogger(logger);
         }
 
         /// <summary>
@@ -452,11 +453,26 @@ namespace UnityRemix
 
                     if (vertices != null && vertices.Length > 0)
                     {
-                        // Standard universal Unity mesh data
+                        // Fast path: CPU mesh data available
                         normals = mesh.normals;
                         uvs = mesh.uv;
                         colors = mesh.colors32;
                         if (colors != null && colors.Length == 0) colors = null;
+                    }
+                    else if (mesh.vertexCount > 0 && SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D11)
+                    {
+                        // GPU readback path: vertex data is GPU-only (D3D11)
+                        try
+                        {
+                            if (ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out subMeshIndices))
+                                gpuReadbackCount++;
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning($"GPU readback failed for mesh '{mesh.name}': {ex.Message}");
+                            skippedReadError++;
+                            continue;
+                        }
                     }
 
                     if (isCombinedMesh && vertices != null && vertices.Length > 0)
@@ -766,9 +782,6 @@ namespace UnityRemix
                     };
                 }
 
-                if (surfaces.Length == 0)
-                    return IntPtr.Zero;
-
                 GCHandle surfaceArrayHandle = GCHandle.Alloc(surfaces, GCHandleType.Pinned);
                 surfaceHandles.Add(surfaceArrayHandle);
 
@@ -883,9 +896,14 @@ namespace UnityRemix
             colors = newCols;
         }
 
+        private bool ReadMeshFromGPU(Mesh mesh, out Vector3[] positions, out Vector3[] normals, out Vector2[] uvs, out int[][] subMeshIndices)
+        {
+            return NativeMeshReader.ReadMeshFromGPU(mesh, out positions, out normals, out uvs, out subMeshIndices);
+        }
+
         private static Vector3[] ComputeFaceNormals(Vector3[] verts, int[][] subMeshIndices)
         {
-            return MeshCompat.ComputeFaceNormals(verts, subMeshIndices);
+            return NativeMeshReader.ComputeFaceNormals(verts, subMeshIndices);
         }
     }
 }

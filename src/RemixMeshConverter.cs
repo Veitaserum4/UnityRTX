@@ -220,6 +220,29 @@ namespace UnityRemix
             }
 
             if (vertices == null || vertices.Length == 0 || submeshIndices.Count == 0)
+            {
+                try
+                {
+                    if (NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out int[][] subTris))
+                    {
+                        submeshIndices.Clear();
+                        submeshMaterials.Clear();
+                        for (int i = 0; i < subTris.Length; i++)
+                        {
+                            var tris = subTris[i];
+                            if (tris == null || tris.Length == 0 || tris.Length % 3 != 0) continue;
+                            uint[] sIdx = new uint[tris.Length];
+                            for (int j = 0; j < tris.Length; j++) sIdx[j] = (uint)tris[j];
+                            submeshIndices.Add(sIdx);
+                            Material mat = (materials != null && i < materials.Length) ? materials[i] : null;
+                            submeshMaterials.Add(mat);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            if (vertices == null || vertices.Length == 0 || submeshIndices.Count == 0)
                 return IntPtr.Zero;
 
             int totalIndices = 0;
@@ -396,9 +419,6 @@ namespace UnityRemix
                         material = materialHandle
                     };
                 }
-
-                if (surfaces.Length == 0)
-                    return IntPtr.Zero;
 
                 GCHandle surfaceArrayHandle = GCHandle.Alloc(surfaces, GCHandleType.Pinned);
                 surfaceHandles.Add(surfaceArrayHandle);

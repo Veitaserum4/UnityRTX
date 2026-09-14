@@ -402,8 +402,8 @@ namespace UnityRemix
             
             // Upload emission — three shader paths:
             // 1. Standard/URP: _EMISSION keyword gates emission; _EmissionColor + _EmissionMap
-            // 2. Custom shaders: _EmissiveColor + _EmissiveTex + _EmissiveIntensity + EMISSIVE toggle
-            // 3. Generic custom: _EmissionColor + _EmissionMultiplier
+            // 2. ULTRAKILL/Master: _EmissiveColor + _EmissiveTex + _EmissiveIntensity + EMISSIVE toggle
+            // 3. Generic custom: _EmissionColor + _EmissionMultiplier (e.g. Dark Machine/SHDR_Base)
             bool hasEmission = false;
             if (captureTextures.Value)
             {

@@ -145,12 +145,12 @@ namespace UnityRemix
             if (RemixImGui.Checkbox("Active Renderers Only", ref _sceneScanActiveOnly))
                 _plugin.SetConfig("ActiveRenderersOnly", _sceneScanActiveOnly);
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Only render geometry from active renderers. Prevents ghost geometry\nfrom inactive scene variants. Requires scene reload.");
+                RemixImGui.SetTooltip("Only render geometry from active renderers. Prevents ghost geometry\nfrom inactive scene variants (e.g. Stanley Parable). Requires scene reload.");
 
             if (RemixImGui.Checkbox("Persist Disabled Renderers", ref _persistDisabledRenderers))
                 _plugin.SetConfig("PersistDisabledRenderers", _persistDisabledRenderers);
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Keep drawing meshes after the game deactivates them.\nEnable for games that temporarily hide visible geometry.");
+                RemixImGui.SetTooltip("Keep drawing meshes after the game deactivates them.\nEnable for games that temporarily hide visible geometry (e.g. ULTRAKILL CyberGrind).");
         }
 
         private void DrawCameraSection()

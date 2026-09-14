@@ -95,7 +95,18 @@ namespace UnityRemix
             
             LogSource.LogInfo($"GameObject: {gameObject.name}, Active: {gameObject.activeSelf}, Enabled: {enabled}");
             
-
+            // Apply Harmony patches (e.g. MeshAccessPatch and UltrakillPostProcessPatch)
+            try
+            {
+                var harmony = new Harmony(PluginGUID);
+                MeshAccessPatch.Apply(harmony);
+                UltrakillPostProcessPatch.Apply(harmony, LogSource);
+                RemixGameStateHelper.Apply(harmony, LogSource);
+            }
+            catch (Exception ex)
+            {
+                LogSource.LogError($"Failed to apply Harmony patches: {ex}");
+            }
 
             // Subscribe to scene events
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
@@ -186,7 +197,7 @@ namespace UnityRemix
                 "Only scan and draw renderers that are currently active. Prevents ghost geometry from inactive scene variants (e.g. The Stanley Parable). Disable for games where inactive geometry should remain visible.");
 
             configPersistDisabledRenderers = Config.Bind("Rendering", "PersistDisabledRenderers", false,
-                "Keep drawing static meshes after their renderer is deactivated by the game. Enable for games that temporarily deactivate visible geometry.");
+                "Keep drawing static meshes after their renderer is deactivated by the game. Enable for games that temporarily deactivate visible geometry (e.g. ULTRAKILL CyberGrind).");
 
             configDisabledLayers = Config.Bind("Rendering", "DisabledLayers", "",
                 "Comma-separated list of Unity layer indices to disable (e.g. '8,13,21'). Managed by the in-game UI.");
