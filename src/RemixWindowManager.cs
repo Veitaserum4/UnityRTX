@@ -57,19 +57,15 @@ namespace UnityRemix
                 PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
                 PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
 
-                if (isRemixUIOpen)
+                if (gameWindow != IntPtr.Zero)
                 {
-                    SetForegroundWindow(remixWindow);
-                    SetActiveWindow(remixWindow);
-                    SetFocus(remixWindow);
-                }
-                else if (gameWindow != IntPtr.Zero)
-                {
-                    ReleaseCapture();
                     SetForegroundWindow(gameWindow);
                     SetActiveWindow(gameWindow);
                     SetFocus(gameWindow);
                 }
+
+                ClipCursor(IntPtr.Zero);
+                ReleaseCapture();
             }
 
             RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
@@ -79,6 +75,9 @@ namespace UnityRemix
 
         [DllImport("user32.dll")]
         private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClipCursor(IntPtr lpRect);
 
         [DllImport("user32.dll")]
         private static extern bool ReleaseCapture();
@@ -329,6 +328,9 @@ namespace UnityRemix
         private const uint WM_NCHITTEST = 0x0084;
         private const int HTCLIENT = 1;
         private const int HTTRANSPARENT = -1;
+        private const uint WM_MOUSEACTIVATE = 0x0021;
+        private const int MA_ACTIVATE = 1;
+        private const int MA_NOACTIVATE = 3;
         private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
         private const uint WS_POPUP = 0x80000000;
         private const uint WS_CHILD = 0x40000000;
@@ -486,14 +488,12 @@ namespace UnityRemix
                 case WM_LBUTTONUP:
                 case WM_RBUTTONUP:
                 case WM_MBUTTONUP:
-                    if (isEmbeddedStatic && !isRemixUIOpen)
+                    break;
+
+                case WM_MOUSEACTIVATE:
+                    if (isEmbeddedStatic)
                     {
-                        IntPtr parent = GetParent(hWnd);
-                        if (parent != IntPtr.Zero)
-                        {
-                            PostMessage(parent, msg, wParam, lParam);
-                            return IntPtr.Zero;
-                        }
+                        return isRemixUIOpen ? new IntPtr(MA_ACTIVATE) : new IntPtr(MA_NOACTIVATE);
                     }
                     break;
 
@@ -586,7 +586,7 @@ namespace UnityRemix
                 posX = 0;
                 posY = 0;
                 dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
-                dwExStyle = WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+                dwExStyle = WS_EX_TOOLWINDOW;
                 parentHwnd = gameWindow;
                 isEmbedded = true;
                 isEmbeddedStatic = true;

@@ -89,6 +89,13 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         private static extern IntPtr SetFocus(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        private const int VK_MENU = 0x12; // Alt key
+        private const int VK_X = 0x58;    // 'X' key
+        private bool wasAltXPressed = false;
+
         private void UpdateSingleWindowUIActive()
         {
             bool isSingle = configSingleWindow != null && configSingleWindow.Value;
@@ -190,12 +197,20 @@ namespace UnityRemix
                 }
             }
 
-            // Handle Alt+X detection for Remix ImGui
-            bool altPressed = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
-            if (altPressed && Input.GetKeyDown(KeyCode.X))
+            // Handle Alt+X detection for Remix ImGui using direct hardware query so it never drops even when window focus changes
+            bool altHeld = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 || Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+            bool xHeld = (GetAsyncKeyState(VK_X) & 0x8000) != 0 || Input.GetKey(KeyCode.X);
+            bool altXPressed = altHeld && xHeld;
+
+            if (altXPressed && !wasAltXPressed)
             {
+                wasAltXPressed = true;
                 windowManager?.HandleAltX();
-                logger?.LogInfo($"[RemixFramebufferPresenter] Alt+X pressed, RemixUIOpen: {RemixWindowManager.IsRemixUIOpen}");
+                logger?.LogInfo($"[RemixFramebufferPresenter] Alt+X triggered (Win32 GetAsyncKeyState), RemixUIOpen: {RemixWindowManager.IsRemixUIOpen}");
+            }
+            else if (!altXPressed)
+            {
+                wasAltXPressed = false;
             }
 
             // While Remix UI is open, guarantee cursor is unlocked and visible

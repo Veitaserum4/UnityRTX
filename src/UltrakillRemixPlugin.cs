@@ -106,6 +106,7 @@ namespace UnityRemix
                 var harmony = new Harmony(PluginGUID);
                 DynamicSpawnPatch.Apply(harmony, LogSource);
                 UltrakillPostProcessPatch.Apply(harmony, LogSource);
+                RemixGameStateHelper.Apply(harmony, LogSource);
             }
             catch (Exception ex)
             {
