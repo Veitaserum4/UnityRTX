@@ -442,11 +442,14 @@ namespace UnityRemix
 
                 if (vertices == null)
                 {
-                    try
+                    if (mesh.isReadable)
                     {
-                        vertices = mesh.vertices;
+                        try
+                        {
+                            vertices = mesh.vertices;
+                        }
+                        catch { }
                     }
-                    catch { }
 
                     if (vertices != null && vertices.Length > 0)
                     {

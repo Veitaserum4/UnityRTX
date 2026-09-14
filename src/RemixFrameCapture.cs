@@ -1426,7 +1426,7 @@ namespace UnityRemix
                             string cleanedName = meshName.Replace(" (Instance)", "").Replace(" Instance", "").Replace("(Clone)", "").Trim();
                             cleanedName = System.Text.RegularExpressions.Regex.Replace(cleanedName, @"[\s_-]*[0-9]+$", "");
                             int vertCount = skinned.sharedMesh.vertexCount;
-                            int triCount = skinned.sharedMesh.triangles.Length;
+                            int triCount = (skinned.sharedMesh != null && skinned.sharedMesh.isReadable) ? skinned.sharedMesh.triangles.Length : 0;
                             string boneNames = skinned.bones != null ? string.Join(",", System.Linq.Enumerable.Select(skinned.bones, b => b != null ? b.name : "null")) : "none";
                             logger.LogInfo($"[HashDebug-GPU] '{skinned.name}' meshName='{meshName}' cleanedName='{cleanedName}' verts={vertCount} tris={triCount} baseMeshHash=0x{baseMeshHash:X16} combinedMeshHash=0x{combinedMeshHash:X16} matId={matId} bones=[{boneNames}]");
                         }
@@ -1661,13 +1661,17 @@ namespace UnityRemix
                 Color32[] colors = null;
                 int[] tris = null;
 
-                if (mesh != null && mesh.vertexCount > 0)
+                if (mesh != null && mesh.vertexCount > 0 && mesh.isReadable)
                 {
-                    verts = mesh.vertices;
-                    normals = mesh.normals;
-                    uvs = mesh.uv;
-                    colors = mesh.colors32;
-                    tris = mesh.triangles;
+                    try
+                    {
+                        verts = mesh.vertices;
+                        normals = mesh.normals;
+                        uvs = mesh.uv;
+                        colors = mesh.colors32;
+                        tris = mesh.triangles;
+                    }
+                    catch { }
                 }
 
                 if (verts == null || verts.Length == 0 || tris == null || tris.Length == 0)
@@ -1775,6 +1779,40 @@ namespace UnityRemix
         {
             try
             {
+                if (!sharedMesh.isReadable)
+                {
+                    // Mesh not readable — can't get triangles directly.
+                    // Cache vertex buffer layout now; topology will be completed from first BakeMesh.
+                    int posOff2 = -1, nrmOff2 = -1, stride2 = 0;
+                    if (sharedMesh.HasVertexAttribute(VertexAttribute.Position))
+                    {
+                        int s = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Position);
+                        if (s == 0)
+                        {
+                            posOff2 = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Position);
+                            stride2 = MeshCompat.GetVertexBufferStride(sharedMesh, 0);
+                        }
+                    }
+                    if (sharedMesh.HasVertexAttribute(VertexAttribute.Normal))
+                    {
+                        int s = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Normal);
+                        if (s == 0)
+                            nrmOff2 = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Normal);
+                    }
+                    bool layoutOk = posOff2 >= 0 && stride2 > 0;
+                    cachedTopology[meshId] = new CachedMeshTopology
+                    {
+                        valid = false,
+                        layoutValid = layoutOk,
+                        vertexCount = sharedMesh.vertexCount,
+                        positionOffset = posOff2,
+                        normalOffset = nrmOff2,
+                        stride = stride2
+                    };
+                    logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' not readable — cached layout (layoutValid={layoutOk} stride={stride2} posOff={posOff2} nrmOff={nrmOff2} verts={sharedMesh.vertexCount}), awaiting BakeMesh for triangles/UVs");
+                    return;
+                }
+
                 var uvCoords = sharedMesh.uv;
                 
                 // Combine all submesh triangles
@@ -1790,40 +1828,6 @@ namespace UnityRemix
                 
                 if (allTris.Count == 0 || allTris.Count % 3 != 0)
                 {
-                    if (!sharedMesh.isReadable)
-                    {
-                        // Mesh not readable — can't get triangles directly.
-                        // Cache vertex buffer layout now; topology will be completed from first BakeMesh.
-                        int posOff2 = -1, nrmOff2 = -1, stride2 = 0;
-                        if (sharedMesh.HasVertexAttribute(VertexAttribute.Position))
-                        {
-                            int s = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Position);
-                            if (s == 0)
-                            {
-                                posOff2 = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Position);
-                                stride2 = MeshCompat.GetVertexBufferStride(sharedMesh, 0);
-                            }
-                        }
-                        if (sharedMesh.HasVertexAttribute(VertexAttribute.Normal))
-                        {
-                            int s = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Normal);
-                            if (s == 0)
-                                nrmOff2 = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Normal);
-                        }
-                        bool layoutOk = posOff2 >= 0 && stride2 > 0;
-                        cachedTopology[meshId] = new CachedMeshTopology
-                        {
-                            valid = false,
-                            layoutValid = layoutOk,
-                            vertexCount = sharedMesh.vertexCount,
-                            positionOffset = posOff2,
-                            normalOffset = nrmOff2,
-                            stride = stride2
-                        };
-                        logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' not readable — cached layout (layoutValid={layoutOk} stride={stride2} posOff={posOff2} nrmOff={nrmOff2} verts={sharedMesh.vertexCount}), awaiting BakeMesh for triangles/UVs");
-                        return;
-                    }
-
                     logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' INVALID: subMeshCount={sharedMesh.subMeshCount} triCount={allTris.Count} isReadable={sharedMesh.isReadable}");
                     cachedTopology[meshId] = new CachedMeshTopology { valid = false };
                     return;
@@ -2265,7 +2269,7 @@ namespace UnityRemix
                     string cleanedName = meshName.Replace(" (Instance)", "").Replace(" Instance", "").Replace("(Clone)", "").Trim();
                     cleanedName = System.Text.RegularExpressions.Regex.Replace(cleanedName, @"[\s_-]*[0-9]+$", "");
                     int vertCount = skinned.sharedMesh.vertexCount;
-                    int triCount = skinned.sharedMesh.triangles.Length;
+                    int triCount = (skinned.sharedMesh != null && skinned.sharedMesh.isReadable) ? skinned.sharedMesh.triangles.Length : 0;
                     string boneNames = skinned.bones != null ? string.Join(",", System.Linq.Enumerable.Select(skinned.bones, b => b != null ? b.name : "null")) : "none";
                     logger.LogInfo($"[HashDebug-BakeMesh] '{skinned.name}' meshName='{meshName}' cleanedName='{cleanedName}' verts={vertCount} tris={triCount} baseMeshHash=0x{baseMeshHash:X16} combinedMeshHash=0x{combinedMeshHash:X16} matId={matId} bones=[{boneNames}]");
                 }
