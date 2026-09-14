@@ -335,9 +335,9 @@ namespace UnityRemix
             if (currentCameraBlitter == null)
             {
                 currentCameraBlitter = worldCam.gameObject.AddComponent<RemixCameraBlitter>();
+                currentCameraBlitter.Initialize(windowManager, logger);
             }
 
-            currentCameraBlitter.Initialize(windowManager, logger);
             currentCameraBlitter.SetBlitEnabled(true);
         }
 

@@ -33,6 +33,7 @@ namespace UnityRemix
         private int lastOverlayH = -9999;
 
         // Win32 DIB state for UpdateLayeredWindow
+        private readonly object dibLock = new object();
         private IntPtr overlayHdc = IntPtr.Zero;
         private IntPtr overlayDib = IntPtr.Zero;
         private IntPtr overlayOldBmp = IntPtr.Zero;
@@ -225,7 +226,7 @@ namespace UnityRemix
         {
             if (uiRenderTexture == null) return;
             int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-            int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : (1 << 13);
+            int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : 0;
             int uiLayer = LayerMask.NameToLayer("UI");
             int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
 
@@ -237,7 +238,7 @@ namespace UnityRemix
                 cam.clearFlags = CameraClearFlags.SolidColor;
                 cam.backgroundColor = new Color(0, 0, 0, 0);
                 cam.cullingMask &= ~1; // Strip Default (0)
-                cam.cullingMask &= ~alwaysOnTopMask; // Strip AlwaysOnTop (13) so 3D weapons are never drawn as UI
+                if (alwaysOnTopMask != 0) cam.cullingMask &= ~alwaysOnTopMask; // Strip AlwaysOnTop if present
                 cam.cullingMask |= uiLayerBit;
             }
         }
@@ -350,7 +351,7 @@ namespace UnityRemix
         /// </summary>
         public void UpdateOverlay()
         {
-            if (overlayWindow == IntPtr.Zero || uiRenderTexture == null) return;
+            if (overlayWindow == IntPtr.Zero || uiRenderTexture == null || !uiRenderTexture.IsCreated()) return;
 
             SyncWindowBounds();
 
@@ -415,8 +416,10 @@ namespace UnityRemix
                 var totalSw = System.Diagnostics.Stopwatch.StartNew();
                 double updateLayeredMs = 0;
 
-                if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
-                    return;
+                lock (dibLock)
+                {
+                    if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
+                        return;
 
                 bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
                 int totalPixels = width * height;
@@ -587,6 +590,7 @@ namespace UnityRemix
                     SetWindowPos(overlayWindow, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     isOverlayVisible = true;
                 }
+                }
 
                 RemixProfiler.RecordOverlayThread(totalSw.Elapsed.TotalMilliseconds, updateLayeredMs);
             }
@@ -650,53 +654,74 @@ namespace UnityRemix
                 uiRenderTexture.Create();
                 currentWidth = width;
                 currentHeight = height;
+
+                // Update hooks and target textures on all active managed cameras
+                foreach (var cam in managedCameras)
+                {
+                    if (cam != null)
+                    {
+                        var hook = cam.GetComponent<RemixUICameraHook>();
+                        if (hook != null)
+                        {
+                            hook.targetTexture = uiRenderTexture;
+                        }
+                        cam.targetTexture = uiRenderTexture;
+                        cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
+                    }
+                }
             }
         }
 
         private void EnsureDIB(int width, int height)
         {
-            if (overlayHdc == IntPtr.Zero || dibWidth != width || dibHeight != height)
+            lock (dibLock)
             {
-                CleanupDIB();
+                if (overlayHdc == IntPtr.Zero || dibWidth != width || dibHeight != height)
+                {
+                    CleanupDIB();
 
-                IntPtr screenDC = GetDC(IntPtr.Zero);
-                overlayHdc = CreateCompatibleDC(screenDC);
+                    IntPtr screenDC = GetDC(IntPtr.Zero);
+                    overlayHdc = CreateCompatibleDC(screenDC);
 
-                var bmi = new BITMAPINFO();
-                bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
-                bmi.bmiHeader.biWidth = width;
-                bmi.bmiHeader.biHeight = height; // Bottom-up DIB (matches Unity Texture2D.ReadPixels row 0 at bottom)
-                bmi.bmiHeader.biPlanes = 1;
-                bmi.bmiHeader.biBitCount = 32;
-                bmi.bmiHeader.biCompression = 0; // BI_RGB
+                    var bmi = new BITMAPINFO();
+                    bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
+                    bmi.bmiHeader.biWidth = width;
+                    bmi.bmiHeader.biHeight = height; // Bottom-up DIB (matches Unity Texture2D.ReadPixels row 0 at bottom)
+                    bmi.bmiHeader.biPlanes = 1;
+                    bmi.bmiHeader.biBitCount = 32;
+                    bmi.bmiHeader.biCompression = 0; // BI_RGB
 
-                overlayDib = CreateDIBSection(overlayHdc, ref bmi, 0, out overlayBits, IntPtr.Zero, 0);
-                overlayOldBmp = SelectObject(overlayHdc, overlayDib);
-                ReleaseDC(IntPtr.Zero, screenDC);
+                    overlayDib = CreateDIBSection(overlayHdc, ref bmi, 0, out overlayBits, IntPtr.Zero, 0);
+                    overlayOldBmp = SelectObject(overlayHdc, overlayDib);
+                    ReleaseDC(IntPtr.Zero, screenDC);
 
-                dibWidth = width;
-                dibHeight = height;
+                    dibWidth = width;
+                    dibHeight = height;
+                }
             }
         }
 
         private void CleanupDIB()
         {
-            if (overlayHdc != IntPtr.Zero)
+            lock (dibLock)
             {
-                if (overlayOldBmp != IntPtr.Zero)
+                if (overlayHdc != IntPtr.Zero)
                 {
-                    SelectObject(overlayHdc, overlayOldBmp);
-                    overlayOldBmp = IntPtr.Zero;
+                    if (overlayOldBmp != IntPtr.Zero)
+                    {
+                        SelectObject(overlayHdc, overlayOldBmp);
+                        overlayOldBmp = IntPtr.Zero;
+                    }
+                    DeleteDC(overlayHdc);
+                    overlayHdc = IntPtr.Zero;
                 }
-                DeleteDC(overlayHdc);
-                overlayHdc = IntPtr.Zero;
+                if (overlayDib != IntPtr.Zero)
+                {
+                    DeleteObject(overlayDib);
+                    overlayDib = IntPtr.Zero;
+                }
+                overlayBits = IntPtr.Zero;
             }
-            if (overlayDib != IntPtr.Zero)
-            {
-                DeleteObject(overlayDib);
-                overlayDib = IntPtr.Zero;
-            }
-            overlayBits = IntPtr.Zero;
         }
 
         public void RestoreUICameras()
@@ -790,12 +815,12 @@ namespace UnityRemix
                 cam.backgroundColor = backgroundColor;
 
                 int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-                int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : (1 << 13);
+                int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : 0;
                 int uiLayer = LayerMask.NameToLayer("UI");
                 int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
 
                 cam.cullingMask &= ~1; // Ensure layer 0 (Default / 3D game scene) is never rendered by UI camera
-                cam.cullingMask &= ~alwaysOnTopMask; // Ensure layer 13 (AlwaysOnTop / 3D viewmodels) is never rendered by UI camera
+                if (alwaysOnTopMask != 0) cam.cullingMask &= ~alwaysOnTopMask; // Ensure AlwaysOnTop (if present) is never rendered by UI camera
                 cam.cullingMask |= uiLayerBit;
             }
         }

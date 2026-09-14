@@ -204,6 +204,9 @@ namespace UnityRemix
 
         [DllImport("user32.dll")]
         private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
         
         [DllImport("user32.dll", SetLastError = true)]
         private static extern ushort RegisterClassW(ref WNDCLASS lpWndClass);
@@ -700,7 +703,7 @@ namespace UnityRemix
         /// </summary>
         public bool CaptureRemixFramebuffer(byte[] destination, int width, int height)
         {
-            if (remixWindow == IntPtr.Zero || destination == null || width <= 0 || height <= 0)
+            if (remixWindow == IntPtr.Zero || destination == null || width <= 0 || height <= 0 || !IsWindow(remixWindow) || !IsWindowVisible(remixWindow))
                 return false;
 
             lock (captureLock)

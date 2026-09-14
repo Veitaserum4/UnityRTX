@@ -249,8 +249,8 @@ namespace UnityRemix
                     dedicatedUICamera.nearClipPlane = 0.1f;
                     dedicatedUICamera.farClipPlane = 1000f;
                     int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-                    int alwaysOnTopBit = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : (1 << 13);
-                    dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0) and never AlwaysOnTop (13 viewmodels)
+                    int alwaysOnTopBit = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : 0;
+                    dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0)
                     logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for scenes without a native UI camera.");
                 }
                 dedicatedUICamera.enabled = true;
@@ -261,15 +261,15 @@ namespace UnityRemix
                 dedicatedUICamera.enabled = false;
             }
 
-            // Strictly isolate UI cameras: never render layer 0 (Default 3D world) and never layer 13 (AlwaysOnTop 3D viewmodels)
+            // Strictly isolate UI cameras: never render layer 0 (Default 3D world) and never AlwaysOnTop (3D viewmodels if present)
             int aotLayer = LayerMask.NameToLayer("AlwaysOnTop");
-            int aotBit = aotLayer >= 0 ? (1 << aotLayer) : (1 << 13);
+            int aotBit = aotLayer >= 0 ? (1 << aotLayer) : 0;
             foreach (var cam in uiCameras)
             {
                 if (cam != null)
                 {
                     cam.cullingMask &= ~1; // Strip Default (0)
-                    cam.cullingMask &= ~aotBit; // Strip AlwaysOnTop (13) so 3D weapons are never drawn as UI
+                    if (aotBit != 0) cam.cullingMask &= ~aotBit; // Strip AlwaysOnTop if present so 3D weapons are never drawn as UI
                     cam.cullingMask |= uiLayerBit; // Include UI (5)
                 }
             }
@@ -300,22 +300,14 @@ namespace UnityRemix
                     continue;
                 }
 
-                // Ensure ALL canvases (including WorldSpace HUD Canvases like GunCanvas and StyleCanvas)
-                // have their elements on layer 5 (UI) instead of layer 13 (AlwaysOnTop).
-                // This allows HUD Camera (which culls layer 5) to render the HUD without culling 3D weapons on layer 13!
-                SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
-
-                if (canvas.renderMode == RenderMode.WorldSpace && canvas.worldCamera == null)
-                {
-                    canvas.worldCamera = uiCamera;
-                }
-
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
                     (canvas.worldCamera == null || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
 
                 if (isOverlay || needsRebinding)
                 {
+                    SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+
                     if (!originalCanvasRenderModes.ContainsKey(canvas))
                     {
                         originalCanvasRenderModes[canvas] = canvas.renderMode;
@@ -396,24 +388,26 @@ namespace UnityRemix
             if (uiLayer < 0) uiLayer = 5;
 
             int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-            if (alwaysOnTopLayer < 0) alwaysOnTopLayer = 13;
 
-            var transforms = root.GetComponentsInChildren<Transform>(true);
-            for (int i = 0; i < transforms.Length; i++)
+            var graphics = root.GetComponentsInChildren<UnityEngine.UI.Graphic>(true);
+            for (int i = 0; i < graphics.Length; i++)
             {
-                var go = transforms[i].gameObject;
-                // If a UI element inside a Canvas was on layer 0 (Default) or layer 13 (AlwaysOnTop),
+                var go = graphics[i].gameObject;
+                // If a UI graphic element inside a Canvas was on layer 0 (Default) or AlwaysOnTop,
                 // reassign it to the UI layer (5). This guarantees all 2D UI elements are rendered
-                // while preventing the UI camera from culling 3D level geometry or 3D weapon viewmodels.
-                if (go.layer == 0 || go.layer == alwaysOnTopLayer)
+                // by the UI camera.
+                if (go.layer == 0 || (alwaysOnTopLayer >= 0 && go.layer == alwaysOnTopLayer))
                 {
                     go.layer = uiLayer;
                 }
             }
 
-            // Strictly isolate UI cameras: never render layer 0 (Default) and never AlwaysOnTop (13), ensure UI layer is included
+            // Strictly isolate UI cameras: never render layer 0 (Default) and ensure UI layer is included
             cam.cullingMask &= ~1;
-            cam.cullingMask &= ~(1 << alwaysOnTopLayer);
+            if (alwaysOnTopLayer >= 0)
+            {
+                cam.cullingMask &= ~(1 << alwaysOnTopLayer);
+            }
             cam.cullingMask |= (1 << uiLayer);
         }
 
