@@ -44,21 +44,62 @@ namespace UnityRemix
             ToggleRemixUI();
             if (remixWindow != IntPtr.Zero)
             {
-                PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
-                PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
+                // Always release any active mouse capture so mouse clicks aren't stuck on either window
+                ReleaseCapture();
 
-                if (isRemixUIOpen)
+                if (isEmbedded)
                 {
-                    SetFocus(remixWindow);
+                    // When Remix UI is open, enable child window so mouse clicks reach Remix ImGui.
+                    // When closed, disable child window so all mouse clicks pass directly to Unity gameWindow!
+                    EnableWindow(remixWindow, isRemixUIOpen);
                 }
-                else if (gameWindow != IntPtr.Zero)
+
+                PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
+                PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
+
+                if (gameWindow != IntPtr.Zero)
                 {
+                    SetForegroundWindow(gameWindow);
+                    SetActiveWindow(gameWindow);
                     SetFocus(gameWindow);
                 }
+
+                ClipCursor(IntPtr.Zero);
+                ReleaseCapture();
             }
+
+            RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
         }
         
         #region Win32 API Declarations
+
+        [DllImport("user32.dll")]
+        private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClipCursor(IntPtr lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern bool ReleaseCapture();
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetParent(IntPtr hWnd);
+
+        private const uint WM_LBUTTONDOWN = 0x0201;
+        private const uint WM_LBUTTONUP = 0x0202;
+        private const uint WM_RBUTTONDOWN = 0x0204;
+        private const uint WM_RBUTTONUP = 0x0205;
+        private const uint WM_MBUTTONDOWN = 0x0207;
+        private const uint WM_MBUTTONUP = 0x0208;
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
         
         [DllImport("user32.dll")]
         private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -74,6 +115,9 @@ namespace UnityRemix
         
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
@@ -154,6 +198,12 @@ namespace UnityRemix
         
         [DllImport("user32.dll")]
         private static extern IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
         
         [DllImport("user32.dll", SetLastError = true)]
         private static extern ushort RegisterClassW(ref WNDCLASS lpWndClass);
@@ -229,6 +279,13 @@ namespace UnityRemix
         }
         
         [StructLayout(LayoutKind.Sequential)]
+        public struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
             public int left;
@@ -271,20 +328,26 @@ namespace UnityRemix
         private const uint WM_NCHITTEST = 0x0084;
         private const int HTCLIENT = 1;
         private const int HTTRANSPARENT = -1;
+        private const uint WM_MOUSEACTIVATE = 0x0021;
+        private const int MA_ACTIVATE = 1;
+        private const int MA_NOACTIVATE = 3;
         private const uint WS_OVERLAPPEDWINDOW = 0x00CF0000;
         private const uint WS_POPUP = 0x80000000;
         private const uint WS_CHILD = 0x40000000;
         private const uint WS_VISIBLE = 0x10000000;
         private const uint WS_CLIPSIBLINGS = 0x04000000;
         private const uint WS_CLIPCHILDREN = 0x02000000;
+        private const uint WS_DISABLED = 0x08000000;
         private const uint WS_EX_LAYERED = 0x00080000;
         private const uint WS_EX_TRANSPARENT = 0x00000020;
         private const uint WS_EX_TOPMOST = 0x00000008;
         private const uint WS_EX_TOOLWINDOW = 0x00000080;
         private const uint WS_EX_APPWINDOW = 0x00040000;
+        private const uint WS_EX_NOACTIVATE = 0x08000000;
         private const int GWL_STYLE = -16;
         private const int GWL_EXSTYLE = -20;
         private const int SW_HIDE = 0;
+        private const int SW_SHOWNOACTIVATE = 4;
         private const int SW_SHOW = 5;
         private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private const uint SWP_NOMOVE = 0x0002;
@@ -419,6 +482,21 @@ namespace UnityRemix
                 case WM_ERASEBKGND:
                     return new IntPtr(1);
                     
+                case WM_LBUTTONDOWN:
+                case WM_RBUTTONDOWN:
+                case WM_MBUTTONDOWN:
+                case WM_LBUTTONUP:
+                case WM_RBUTTONUP:
+                case WM_MBUTTONUP:
+                    break;
+
+                case WM_MOUSEACTIVATE:
+                    if (isEmbeddedStatic)
+                    {
+                        return isRemixUIOpen ? new IntPtr(MA_ACTIVATE) : new IntPtr(MA_NOACTIVATE);
+                    }
+                    break;
+
                 case WM_NCHITTEST:
                     if (isEmbeddedStatic)
                     {
@@ -507,7 +585,7 @@ namespace UnityRemix
                 }
                 posX = 0;
                 posY = 0;
-                dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS;
+                dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
                 dwExStyle = WS_EX_TOOLWINDOW;
                 parentHwnd = gameWindow;
                 isEmbedded = true;
@@ -571,6 +649,15 @@ namespace UnityRemix
             else
             {
                 ShowWindow(remixWindow, SW_SHOW);
+            }
+
+            if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
+            {
+                // Ensure child window is initially disabled so it never intercepts mouse messages
+                EnableWindow(remixWindow, false);
+
+                SetForegroundWindow(gameWindow);
+                SetFocus(gameWindow);
             }
             
             // Call Remix Startup

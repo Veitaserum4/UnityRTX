@@ -248,7 +248,9 @@ namespace UnityRemix
                     dedicatedUICamera.backgroundColor = new Color(0, 0, 0, 0);
                     dedicatedUICamera.nearClipPlane = 0.1f;
                     dedicatedUICamera.farClipPlane = 1000f;
-                    dedicatedUICamera.cullingMask = uiLayerBit | 1; // UI + Default
+                    int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
+                    int alwaysOnTopBit = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : (1 << 13);
+                    dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0) and never AlwaysOnTop (13 viewmodels)
                     logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for scenes without a native UI camera.");
                 }
                 dedicatedUICamera.enabled = true;
@@ -257,6 +259,19 @@ namespace UnityRemix
             else if (dedicatedUICamera != null)
             {
                 dedicatedUICamera.enabled = false;
+            }
+
+            // Strictly isolate UI cameras: never render layer 0 (Default 3D world) and never layer 13 (AlwaysOnTop 3D viewmodels)
+            int aotLayer = LayerMask.NameToLayer("AlwaysOnTop");
+            int aotBit = aotLayer >= 0 ? (1 << aotLayer) : (1 << 13);
+            foreach (var cam in uiCameras)
+            {
+                if (cam != null)
+                {
+                    cam.cullingMask &= ~1; // Strip Default (0)
+                    cam.cullingMask &= ~aotBit; // Strip AlwaysOnTop (13) so 3D weapons are never drawn as UI
+                    cam.cullingMask |= uiLayerBit; // Include UI (5)
+                }
             }
 
             // Order UI cameras ascending by depth so they render in natural sequence
@@ -279,6 +294,22 @@ namespace UnityRemix
             {
                 if (canvas == null) continue;
 
+                // Skip loading blockers whose sole purpose is full-screen blackout during load transitions
+                if (canvas.name.Equals("Loading Blocker", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // Ensure ALL canvases (including WorldSpace HUD Canvases like GunCanvas and StyleCanvas)
+                // have their elements on layer 5 (UI) instead of layer 13 (AlwaysOnTop).
+                // This allows HUD Camera (which culls layer 5) to render the HUD without culling 3D weapons on layer 13!
+                SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+
+                if (canvas.renderMode == RenderMode.WorldSpace && canvas.worldCamera == null)
+                {
+                    canvas.worldCamera = uiCamera;
+                }
+
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
                     (canvas.worldCamera == null || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
@@ -300,23 +331,90 @@ namespace UnityRemix
                         canvas.planeDistance = 100.0f;
                     }
 
-                    // Recursively ensure all layers used by the canvas and its UI elements are in camera culling mask
-                    IncludeCanvasLayers(uiCamera, canvas.gameObject);
+                    // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders
+                    var raycaster = canvas.GetComponent<UnityEngine.UI.GraphicRaycaster>();
+                    if (raycaster != null)
+                    {
+                        raycaster.blockingObjects = UnityEngine.UI.GraphicRaycaster.BlockingObjects.None;
+                    }
 
                     logger?.LogInfo($"[RemixUIDetector] Routed Overlay Canvas '{canvas.name}' to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
                 }
             }
         }
 
-        private static void IncludeCanvasLayers(Camera cam, GameObject root)
+        /// <summary>
+        /// Routes VideoPlayer components (e.g. intro cutscenes) targeting suppressed world cameras
+        /// to render through the UI camera so they display on the transparent UI overlay.
+        /// </summary>
+        public void RouteVideoPlayersToCamera(Camera uiCamera)
+        {
+            if (uiCamera == null) return;
+
+            try
+            {
+                var vpType = Type.GetType("UnityEngine.Video.VideoPlayer, UnityEngine.VideoModule");
+                if (vpType == null) return;
+
+                var videoPlayers = UnityEngine.Object.FindObjectsOfType(vpType);
+                if (videoPlayers == null || videoPlayers.Length == 0) return;
+
+                var targetCamProp = vpType.GetProperty("targetCamera");
+                var renderModeProp = vpType.GetProperty("renderMode");
+
+                foreach (var vp in videoPlayers)
+                {
+                    if (vp == null) continue;
+                    var modeObj = renderModeProp?.GetValue(vp);
+                    if (modeObj != null)
+                    {
+                        int mode = (int)modeObj;
+                        // 0 = CameraFarPlane, 1 = CameraNearPlane
+                        if (mode == 0 || mode == 1)
+                        {
+                            var curCam = targetCamProp?.GetValue(vp) as Camera;
+                            if (curCam != uiCamera)
+                            {
+                                targetCamProp?.SetValue(vp, uiCamera);
+                                renderModeProp?.SetValue(vp, Enum.ToObject(renderModeProp.PropertyType, 1));
+                                logger?.LogInfo($"[RemixUIDetector] Routed VideoPlayer '{(vp as Component)?.name}' to UI camera '{uiCamera.name}'");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[RemixUIDetector] Failed to route VideoPlayers: {ex.Message}");
+            }
+        }
+
+        private static void SanitizeAndIncludeCanvasLayers(Camera cam, GameObject root)
         {
             if (cam == null || root == null) return;
-            cam.cullingMask |= (1 << root.layer);
+            int uiLayer = LayerMask.NameToLayer("UI");
+            if (uiLayer < 0) uiLayer = 5;
+
+            int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
+            if (alwaysOnTopLayer < 0) alwaysOnTopLayer = 13;
+
             var transforms = root.GetComponentsInChildren<Transform>(true);
             for (int i = 0; i < transforms.Length; i++)
             {
-                cam.cullingMask |= (1 << transforms[i].gameObject.layer);
+                var go = transforms[i].gameObject;
+                // If a UI element inside a Canvas was on layer 0 (Default) or layer 13 (AlwaysOnTop),
+                // reassign it to the UI layer (5). This guarantees all 2D UI elements are rendered
+                // while preventing the UI camera from culling 3D level geometry or 3D weapon viewmodels.
+                if (go.layer == 0 || go.layer == alwaysOnTopLayer)
+                {
+                    go.layer = uiLayer;
+                }
             }
+
+            // Strictly isolate UI cameras: never render layer 0 (Default) and never AlwaysOnTop (13), ensure UI layer is included
+            cam.cullingMask &= ~1;
+            cam.cullingMask &= ~(1 << alwaysOnTopLayer);
+            cam.cullingMask |= (1 << uiLayer);
         }
 
         /// <summary>
