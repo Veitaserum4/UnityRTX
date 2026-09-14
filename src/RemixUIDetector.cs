@@ -302,7 +302,7 @@ namespace UnityRemix
 
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
-                    (canvas.worldCamera == null || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
+                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
 
                 if (isOverlay || needsRebinding)
                 {

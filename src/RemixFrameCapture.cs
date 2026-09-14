@@ -2332,15 +2332,21 @@ namespace UnityRemix
             foreach (var mat in materials)
             {
                 if (mat == null) continue;
-                bool hasTexture = mat.mainTexture != null;
-                if (!hasTexture)
+                bool hasTexture = false;
+                try
                 {
-                    foreach (var prop in textureProps)
+                    if (mat.HasProperty("_MainTex"))
+                        hasTexture = mat.mainTexture != null;
+                    if (!hasTexture)
                     {
-                        if (mat.HasProperty(prop) && mat.GetTexture(prop) != null)
-                        { hasTexture = true; break; }
+                        foreach (var prop in textureProps)
+                        {
+                            if (mat.HasProperty(prop) && mat.GetTexture(prop) != null)
+                            { hasTexture = true; break; }
+                        }
                     }
                 }
+                catch { }
                 if (hasTexture) { bestMaterial = mat; break; }
             }
             
