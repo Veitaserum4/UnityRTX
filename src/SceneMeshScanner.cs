@@ -854,9 +854,9 @@ namespace UnityRemix
                         colors = mesh.colors32;
                         if (colors != null && colors.Length == 0) colors = null;
                     }
-                    else if (mesh.vertexCount > 0)
+                    else if (mesh.vertexCount > 0 && SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D11)
                     {
-                        // GPU readback path: vertex data is GPU-only
+                        // GPU readback path: vertex data is GPU-only (D3D11)
                         try
                         {
                             if (ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out subMeshIndices))

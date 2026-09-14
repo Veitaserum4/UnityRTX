@@ -88,7 +88,7 @@ namespace UnityRemix
         public static bool ReadBuffer(IntPtr nativeBuffer, out byte[] data)
         {
             data = null;
-            if (nativeBuffer == IntPtr.Zero)
+            if (nativeBuffer == IntPtr.Zero || SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
                 return false;
 
             IntPtr device = IntPtr.Zero;
@@ -367,7 +367,7 @@ namespace UnityRemix
             uvs = null;
             subMeshIndices = null;
 
-            if (mesh == null)
+            if (mesh == null || SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
                 return false;
 
             int vertexCount = mesh.vertexCount;
