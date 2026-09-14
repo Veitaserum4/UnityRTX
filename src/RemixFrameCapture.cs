@@ -438,7 +438,7 @@ namespace UnityRemix
         private int staticCaptureCount = 0;
         
         // Persistent static instance cache: remembers transforms of disabled MeshRenderers
-        // so objects that get deactivated (e.g. CyberGrind cubes after wave settles) keep drawing
+        // so objects that get temporarily deactivated by the game keep drawing
         private struct PersistentStaticInstance
         {
             public MeshRenderer renderer; // weak ref via Unity object — becomes null when destroyed
@@ -973,47 +973,6 @@ namespace UnityRemix
                                 logger.LogWarning($"Failed reading readable mesh '{mesh.name}': {ex.Message}");
                         }
                     }
-
-                    if (vertices == null || vertices.Length == 0 || submeshIndices.Count == 0)
-                    {
-                        try
-                        {
-                            if (NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out int[][] subTris))
-                            {
-                                submeshIndices.Clear();
-                                submeshMaterials.Clear();
-                                for (int s = 0; s < subTris.Length; s++)
-                                {
-                                    var tris = subTris[s];
-                                    if (tris == null || tris.Length == 0 || tris.Length % 3 != 0)
-                                        continue;
-                                    bool valid = true;
-                                    uint[] sIdx = new uint[tris.Length];
-                                    for (int j = 0; j < tris.Length; j++)
-                                    {
-                                        if (tris[j] < 0 || tris[j] >= vertices.Length)
-                                        {
-                                            valid = false;
-                                            break;
-                                        }
-                                        sIdx[j] = (uint)tris[j];
-                                    }
-                                    if (valid)
-                                    {
-                                        submeshIndices.Add(sIdx);
-                                        Material mat = (materials != null && s < materials.Length) ? materials[s] : null;
-                                        submeshMaterials.Add(mat);
-                                    }
-                                }
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            if (configDebugLogInterval.Value > 0)
-                                logger.LogWarning($"GPU readback failed for mesh '{mesh.name}': {ex.Message}");
-                        }
-                    }
-
                     if (vertices == null || vertices.Length == 0 || submeshIndices.Count == 0)
                     {
                         lock (meshQueueLock) { failedMeshKeys.Add(meshKey); }
@@ -1112,7 +1071,7 @@ namespace UnityRemix
             }
             
             // Draw persistent instances for disabled (but not destroyed) renderers.
-            // This keeps objects visible that the game deactivates (e.g. CyberGrind cubes after wave settles).
+            // This keeps objects visible that the game deactivates.
             // Gated by config — disabled by default since games with scene variants (e.g. Stanley Parable)
             // use inactive GameObjects for alternate rooms that should NOT be rendered.
             int persistentDrawn = 0;
@@ -2332,15 +2291,21 @@ namespace UnityRemix
             foreach (var mat in materials)
             {
                 if (mat == null) continue;
-                bool hasTexture = mat.mainTexture != null;
-                if (!hasTexture)
+                bool hasTexture = false;
+                try
                 {
-                    foreach (var prop in textureProps)
+                    if (mat.HasProperty("_MainTex"))
+                        hasTexture = mat.mainTexture != null;
+                    if (!hasTexture)
                     {
-                        if (mat.HasProperty(prop) && mat.GetTexture(prop) != null)
-                        { hasTexture = true; break; }
+                        foreach (var prop in textureProps)
+                        {
+                            if (mat.HasProperty(prop) && mat.GetTexture(prop) != null)
+                            { hasTexture = true; break; }
+                        }
                     }
                 }
+                catch { }
                 if (hasTexture) { bestMaterial = mat; break; }
             }
             

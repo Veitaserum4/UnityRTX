@@ -97,5 +97,37 @@ namespace UnityRemix
                 default: return 4;
             }
         }
+
+        /// <summary>
+        /// Compute per-vertex normals by averaging face normals of adjacent triangles.
+        /// Pure mathematical utility, universal across all graphics APIs.
+        /// </summary>
+        public static Vector3[] ComputeFaceNormals(Vector3[] verts, int[][] subMeshIndices)
+        {
+            if (verts == null) return null;
+            var normals = new Vector3[verts.Length];
+            if (subMeshIndices != null)
+            {
+                foreach (var indices in subMeshIndices)
+                {
+                    if (indices == null) continue;
+                    for (int i = 0; i + 2 < indices.Length; i += 3)
+                    {
+                        int i0 = indices[i], i1 = indices[i + 1], i2 = indices[i + 2];
+                        if (i0 >= verts.Length || i1 >= verts.Length || i2 >= verts.Length) continue;
+                        var faceNormal = Vector3.Cross(verts[i1] - verts[i0], verts[i2] - verts[i0]);
+                        normals[i0] += faceNormal;
+                        normals[i1] += faceNormal;
+                        normals[i2] += faceNormal;
+                    }
+                }
+            }
+            for (int i = 0; i < normals.Length; i++)
+            {
+                float len = normals[i].magnitude;
+                normals[i] = len > 1e-6f ? normals[i] / len : Vector3.up;
+            }
+            return normals;
+        }
     }
 }

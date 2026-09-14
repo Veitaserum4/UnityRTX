@@ -446,7 +446,7 @@ namespace UnityRemix
                                 for (int x = 0; x < width; x++)
                                 {
                                     uint px = *(uint*)s;
-                                    // Fast path for transparent empty pixels (96% of the screen in ULTRAKILL HUD)
+                                    // Fast path for transparent empty pixels (common in HUD overlays)
                                     if (px == 0)
                                     {
                                         *(uint*)d = 0;
