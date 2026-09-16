@@ -358,7 +358,7 @@ namespace UnityRemix
             if (!isReadbackPending && !isProcessingOverlay)
             {
                 float now = Time.unscaledTime;
-                int targetFps = configUIOverlayFPS != null ? Mathf.Clamp(configUIOverlayFPS.Value, 10, 60) : 30;
+                int targetFps = configUIOverlayFPS != null ? Mathf.Clamp(configUIOverlayFPS.Value, 10, 300) : 60;
                 float minInterval = 1.0f / targetFps;
                 if (now - lastReadbackRequestTime < minInterval) return;
                 lastReadbackRequestTime = now;
@@ -466,11 +466,6 @@ namespace UnityRemix
                                     {
                                         effA = (byte)Math.Max(r, Math.Max(g, b));
                                     }
-                                    // Pitch black with a == 255 in an overlay context is an opaque blackout quad or background fill.
-                                    else if (effA == 255 && r == 0 && g == 0 && b == 0)
-                                    {
-                                        effA = 0;
-                                    }
 
                                     if (effA > 0 || r > 0 || g > 0 || b > 0)
                                     {
@@ -491,9 +486,12 @@ namespace UnityRemix
                                     }
                                     else
                                     {
-                                        d[0] = (byte)((b * effA) / 255);
-                                        d[1] = (byte)((g * effA) / 255);
-                                        d[2] = (byte)((r * effA) / 255);
+                                        // Windows AC_SRC_ALPHA requires premultiplied alpha: R <= A, G <= A, B <= A.
+                                        // Unity UI blending into the (0,0,0,0) target already premultiplies RGB by A.
+                                        // Clamping to effA ensures valid premultiplied format without double-multiplying.
+                                        d[0] = b <= effA ? b : effA;
+                                        d[1] = g <= effA ? g : effA;
+                                        d[2] = r <= effA ? r : effA;
                                         d[3] = effA;
                                     }
 

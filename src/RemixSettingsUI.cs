@@ -34,6 +34,7 @@ namespace UnityRemix
         private bool _disableInEngineRendering;
         private bool _autoDetectUI;
         private bool _singleWindowUIOverlay;
+        private int _uiOverlayFPS;
         private string _selectedCameraName;
         private int _engineFPSLimit;
         private bool _preventSlowMotion;
@@ -103,6 +104,16 @@ namespace UnityRemix
                     _plugin.SetConfig("SingleWindowUIOverlay", _singleWindowUIOverlay);
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Renders detected UI with per-pixel alpha directly over the embedded Remix viewport.");
+
+                if (_singleWindowUIOverlay)
+                {
+                    RemixImGui.Indent();
+                    if (RemixImGui.SliderInt("UI Overlay FPS", ref _uiOverlayFPS, 10, 300))
+                        _plugin.SetConfig("UIOverlayFPS", _uiOverlayFPS);
+                    if (RemixImGui.IsItemHovered())
+                        RemixImGui.SetTooltip("Target refresh rate for the transparent UI overlay window (10 to 300 FPS).");
+                    RemixImGui.Unindent();
+                }
 
                 var presenter = _plugin.FramebufferPresenter;
                 if (presenter?.UIDetector != null)
@@ -426,6 +437,7 @@ namespace UnityRemix
             _disableInEngineRendering = _plugin.GetConfigBool("DisableInEngineRendering");
             _autoDetectUI = _plugin.GetConfigBool("AutoDetectUI");
             _singleWindowUIOverlay = _plugin.GetConfigBool("SingleWindowUIOverlay");
+            _uiOverlayFPS = _plugin.GetConfigInt("UIOverlayFPS");
             _selectedCameraName = _plugin.GetConfigString("CameraName");
             _engineFPSLimit = _plugin.GetConfigInt("EngineFPSLimit");
             _preventSlowMotion = _plugin.GetConfigBool("PreventSlowMotion");

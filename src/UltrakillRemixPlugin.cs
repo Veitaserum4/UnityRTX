@@ -227,9 +227,9 @@ namespace UnityRemix
             configSingleWindowUIOverlay = Config.Bind("Window", "SingleWindowUIOverlay", true,
                 "For Embedded mode, renders autodetected UI onto a transparent layered overlay window sitting on top of the Remix viewport.");
 
-            configUIOverlayFPS = Config.Bind("Window", "UIOverlayFPS", 30,
-                new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Default 30 FPS prevents DWM compositor queue starvation.",
-                    new AcceptableValueRange<int>(10, 60)));
+            configUIOverlayFPS = Config.Bind("Window", "UIOverlayFPS", 60,
+                new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Supports up to 300 FPS.",
+                    new AcceptableValueRange<int>(10, 300)));
 
             // Performance & Frame Throttling
             configEngineFPSLimit = Config.Bind("Performance", "EngineFPSLimit", 60,
@@ -739,6 +739,7 @@ namespace UnityRemix
                 case "TargetFPS": return configTargetFPS.Value;
                 case "EngineFPSLimit": return configEngineFPSLimit.Value;
                 case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
+                case "UIOverlayFPS": return configUIOverlayFPS.Value;
                 default: return 0;
             }
         }
@@ -783,6 +784,7 @@ namespace UnityRemix
                 case "TargetFPS": configTargetFPS.Value = value; break;
                 case "EngineFPSLimit": configEngineFPSLimit.Value = value; break;
                 case "StaticMeshFrameSkip": configStaticMeshFrameSkip.Value = value; break;
+                case "UIOverlayFPS": configUIOverlayFPS.Value = value; break;
             }
         }
 
