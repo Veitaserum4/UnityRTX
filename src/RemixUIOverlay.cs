@@ -74,7 +74,6 @@ namespace UnityRemix
         private const uint ULW_ALPHA = 0x00000002;
 
         private bool isOverlayVisible = true;
-        private bool hasLoggedOpaqueWarning = false;
         private int updateLogCounter = 0;
         private static readonly IntPtr HWND_TOP = IntPtr.Zero;
 
@@ -471,7 +470,7 @@ namespace UnityRemix
                                     {
                                         localNonZero++;
                                     }
-                                    if (effA > 200) localOpaque++;
+                                    if (effA == 255) localOpaque++;
 
                                     if (effA == 255)
                                     {
@@ -514,24 +513,7 @@ namespace UnityRemix
                     logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
                 }
 
-                if (opaqueRatio > 0.98f)
-                {
-                    if (!hasLoggedOpaqueWarning)
-                    {
-                        logger?.LogWarning($"[RemixUIOverlay] UI camera output is {opaqueRatio * 100:F1}% opaque! Suppressing overlay to prevent black screen.");
-                        hasLoggedOpaqueWarning = true;
-                    }
-                    if (isOverlayVisible)
-                    {
-                        ShowWindow(overlayWindow, SW_HIDE);
-                        isOverlayVisible = false;
-                    }
-                    return;
-                }
-                else
-                {
-                    hasLoggedOpaqueWarning = false;
-                }
+
 
                 // If completely empty (no UI pixels rendered at all), hide overlay
                 if (nonZeroPixelCount == 0)
