@@ -648,7 +648,21 @@ namespace UnityRemix
                 if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                 {
                     cachedSkinnedRenderers.Add(sr);
+                    if (!sr.updateWhenOffscreen)
+                        sr.updateWhenOffscreen = true;
+                    var anim = sr.GetComponentInParent<Animator>();
+                    if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 }
+            }
+
+            // Ensure all scene Animators continue ticking when cameras have cullingMask = 0
+            var allAnimators = UnityEngine.Object.FindObjectsOfType<Animator>();
+            for (int i = 0; i < allAnimators.Length; i++)
+            {
+                var a = allAnimators[i];
+                if (a != null && a.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                    a.cullingMode = AnimatorCullingMode.AlwaysAnimate;
             }
             
             rendererCacheFrame = frameCount;
@@ -786,6 +800,11 @@ namespace UnityRemix
                 if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                 {
                     cachedSkinnedRenderers.Add(sr);
+                    if (!sr.updateWhenOffscreen)
+                        sr.updateWhenOffscreen = true;
+                    var anim = sr.GetComponentInParent<Animator>();
+                    if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 }
             }
         }
@@ -1389,6 +1408,13 @@ namespace UnityRemix
                     skipNull++;
                     continue;
                 }
+
+                if (!skinned.updateWhenOffscreen)
+                    skinned.updateWhenOffscreen = true;
+
+                var anim = skinned.GetComponentInParent<Animator>();
+                if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                    anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 
                 if (IsLayerDisabled(skinned.gameObject.layer) || IsRendererDisabled(HashUtils.GetHierarchyHashInt(skinned.transform)))
                 {
