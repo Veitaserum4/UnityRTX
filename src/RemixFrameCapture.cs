@@ -30,12 +30,14 @@ namespace UnityRemix
         private readonly ConfigEntry<bool> configCaptureSkinnedMeshes;
         private readonly ConfigEntry<bool> configHardwareSkinning;
         private readonly ConfigEntry<bool> configPersistDisabledRenderers;
+        private readonly ConfigEntry<int> configStaticMeshFrameSkip;
         
         // Renderer caching
         private List<MeshRenderer> cachedRenderers = new List<MeshRenderer>();
         private List<SkinnedMeshRenderer> cachedSkinnedRenderers = new List<SkinnedMeshRenderer>();
         private readonly HashSet<int> cachedRendererIds = new HashSet<int>();
         private readonly HashSet<int> cachedSkinnedRendererIds = new HashSet<int>();
+        private readonly List<MeshInstanceData> cachedStaticInstances = new List<MeshInstanceData>();
         private int rendererCacheFrame = -1;
         
         // Cached baked meshes for skinned renderers
@@ -567,7 +569,8 @@ namespace UnityRemix
             ConfigEntry<bool> captureStaticMeshes,
             ConfigEntry<bool> captureSkinnedMeshes,
             ConfigEntry<bool> hardwareSkinning,
-            ConfigEntry<bool> persistDisabledRenderers)
+            ConfigEntry<bool> persistDisabledRenderers,
+            ConfigEntry<int> staticMeshFrameSkip = null)
         {
             this.logger = logger;
             this.cameraHandler = cameraHandler;
@@ -582,6 +585,7 @@ namespace UnityRemix
             this.configCaptureSkinnedMeshes = captureSkinnedMeshes;
             this.configHardwareSkinning = hardwareSkinning;
             this.configPersistDisabledRenderers = persistDisabledRenderers;
+            this.configStaticMeshFrameSkip = staticMeshFrameSkip;
         }
         
         /// <summary>
@@ -595,6 +599,7 @@ namespace UnityRemix
             cachedRendererIds.Clear();
             cachedSkinnedRendererIds.Clear();
             lastSkinnedTransforms.Clear();
+            cachedStaticInstances.Clear();
             lock (meshQueueLock)
             {
                 meshesToCreate.Clear();
@@ -826,7 +831,20 @@ namespace UnityRemix
             // Debug toggle check
             if (!configCaptureStaticMeshes.Value)
                 return;
-            
+
+            // Static mesh frame skipping: reuse cached static instances if enabled and available
+            int frameSkip = configStaticMeshFrameSkip != null ? configStaticMeshFrameSkip.Value : 1;
+            if (frameSkip > 1 && (frameCount % frameSkip != 0) && cachedStaticInstances.Count > 0)
+            {
+                state.instances.AddRange(cachedStaticInstances);
+                if (mainCam != null)
+                {
+                    CaptureCameraViewModelMeshes(state, mainCam);
+                }
+                return;
+            }
+
+            cachedStaticInstances.Clear();
             staticCaptureCount++;
             int totalDrawn = 0;
             
@@ -1085,14 +1103,15 @@ namespace UnityRemix
                 
                 // Add instance
                 var transform = renderer.transform.localToWorldMatrix;
-                state.instances.Add(new MeshInstanceData
+                var instanceData = new MeshInstanceData
                 {
                     meshKey = meshKey,
                     meshId = meshId,
                     localToWorld = transform,
                     rendererInstanceId = rendererInstanceId,
                     dedupeKey = dedupeKey
-                });
+                };
+                state.instances.Add(instanceData);
                 totalDrawn++;
                 
                 // Remember this renderer's transform so we can keep drawing it if it gets disabled.
@@ -1100,6 +1119,7 @@ namespace UnityRemix
                 bool isCurrentViewModel = mainCam != null && renderer.transform.IsChildOf(mainCam.transform);
                 if (!isCurrentViewModel)
                 {
+                    cachedStaticInstances.Add(instanceData);
                     persistentStaticInstances[rendererInstanceId] = new PersistentStaticInstance
                     {
                         renderer = renderer,
@@ -1162,14 +1182,16 @@ namespace UnityRemix
                 }
                 
                 // Draw with last-known transform
-                state.instances.Add(new MeshInstanceData
+                var pInstanceData = new MeshInstanceData
                 {
                     meshKey = entry.meshKey,
                     meshId = entry.meshId,
                     localToWorld = entry.localToWorld,
                     rendererInstanceId = entry.renderer.GetInstanceID(),
                     dedupeKey = entry.dedupeKey
-                });
+                };
+                state.instances.Add(pInstanceData);
+                cachedStaticInstances.Add(pInstanceData);
                 persistentDrawn++;
             }
             if (keysToRemove != null)
@@ -1182,6 +1204,41 @@ namespace UnityRemix
             // Periodic tracking
             if (configDebugLogInterval.Value > 0 && staticCaptureCount % 300 == 1)
                 logger.LogInfo($"[StaticCapture] frame={frameCount} drawn={totalDrawn} persistent={persistentDrawn} total={persistentStaticInstances.Count} queued={meshesToCreate.Count} failedMeshes={failedMeshKeys.Count}");
+        }
+
+        /// <summary>
+        /// Captures camera-attached viewmodels/weapons on skipped frames so weapons never jitter or lag behind camera motion.
+        /// </summary>
+        private void CaptureCameraViewModelMeshes(FrameState state, Camera mainCam)
+        {
+            if (mainCam == null) return;
+            var viewmodelRenderers = mainCam.GetComponentsInChildren<MeshRenderer>(false);
+            for (int i = 0; i < viewmodelRenderers.Length; i++)
+            {
+                var renderer = viewmodelRenderers[i];
+                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
+                    continue;
+                if (IsLayerDisabled(renderer.gameObject.layer) || IsRendererDisabled(renderer.GetInstanceID()))
+                    continue;
+                var meshFilter = renderer.GetComponent<MeshFilter>();
+                if (meshFilter == null || meshFilter.sharedMesh == null)
+                    continue;
+                var mesh = meshFilter.sharedMesh;
+                int meshId = mesh.GetInstanceID();
+                int rendererInstanceId = renderer.GetInstanceID();
+                var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
+                var materials = renderer.sharedMaterials;
+                int matSig = StaticGeometryDedupe.ComputeMaterialSignature(materials);
+                ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
+                state.instances.Add(new MeshInstanceData
+                {
+                    meshKey = meshKey,
+                    meshId = meshId,
+                    localToWorld = renderer.transform.localToWorldMatrix,
+                    rendererInstanceId = rendererInstanceId,
+                    dedupeKey = dedupeKey
+                });
+            }
         }
         
         /// <summary>

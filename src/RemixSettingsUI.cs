@@ -35,6 +35,9 @@ namespace UnityRemix
         private bool _autoDetectUI;
         private bool _singleWindowUIOverlay;
         private string _selectedCameraName;
+        private int _engineFPSLimit;
+        private bool _preventSlowMotion;
+        private int _staticMeshFrameSkip;
 
         public RemixSettingsUI(ManualLogSource log, UnityRemixPlugin plugin)
         {
@@ -334,12 +337,52 @@ namespace UnityRemix
             if (!RemixImGui.CollapsingHeader("Performance"))
                 return;
 
-            RemixImGui.Text("Used to lock the framerate of the wrapper itself, not the game.");
-
-            if (RemixImGui.DragInt("Target FPS", ref _targetFPS, 1, 0, 500))
+            RemixImGui.Text("Remix Renderer Framerate:");
+            if (RemixImGui.DragInt("Remix Target FPS", ref _targetFPS, 1, 0, 500))
                 _plugin.SetConfig("TargetFPS", _targetFPS);
-
             RemixImGui.Text(_targetFPS == 0 ? "(Uncapped)" : "");
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Framerate cap for the Remix background render thread.\n0 = Uncapped.");
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
+
+            RemixImGui.Text("Single Window Engine Optimization:");
+            
+            // Engine FPS Limit Combo
+            string previewFps = _engineFPSLimit == 0 ? "Uncapped" : $"{_engineFPSLimit} FPS";
+            if (RemixImGui.BeginCombo("Engine FPS Limit", previewFps))
+            {
+                int[] fpsOptions = { 0, 30, 60, 90, 120 };
+                string[] fpsLabels = { "Uncapped", "30 FPS (Heavy Scenes / Best Stability)", "60 FPS (Balanced / Recommended)", "90 FPS", "120 FPS" };
+                for (int i = 0; i < fpsOptions.Length; i++)
+                {
+                    bool selected = (_engineFPSLimit == fpsOptions[i]);
+                    if (RemixImGui.Selectable(fpsLabels[i], selected))
+                    {
+                        _engineFPSLimit = fpsOptions[i];
+                        _plugin.SetConfig("EngineFPSLimit", _engineFPSLimit);
+                    }
+                }
+                RemixImGui.EndCombo();
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Caps Unity engine update rate in Single Window mode.\nRemix continues rendering at full speed (e.g. 150-250+ FPS).\nLowering this (30 or 60 FPS) prevents game slowdowns and CPU bottlenecks.");
+
+            if (RemixImGui.Checkbox("Prevent Slow-Motion", ref _preventSlowMotion))
+                _plugin.SetConfig("PreventSlowMotion", _preventSlowMotion);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Raises Time.maximumDeltaTime so Unity physics and game logic\ndo not run in slow motion when frame times spike.");
+
+            if (RemixImGui.SliderInt("Static Mesh Frame Skip", ref _staticMeshFrameSkip, 1, 4))
+                _plugin.SetConfig("StaticMeshFrameSkip", _staticMeshFrameSkip);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Reuses cached static mesh instances across N frames instead of re-scanning thousands of renderers every frame.\n1 = Scan every frame (Default), 2 = Every 2nd frame (50% CPU save), etc.");
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
 
             if (RemixImGui.Checkbox("Hardware Skinning", ref _hardwareSkinning))
                 _plugin.SetConfig("HardwareSkinning", _hardwareSkinning);
@@ -384,6 +427,9 @@ namespace UnityRemix
             _autoDetectUI = _plugin.GetConfigBool("AutoDetectUI");
             _singleWindowUIOverlay = _plugin.GetConfigBool("SingleWindowUIOverlay");
             _selectedCameraName = _plugin.GetConfigString("CameraName");
+            _engineFPSLimit = _plugin.GetConfigInt("EngineFPSLimit");
+            _preventSlowMotion = _plugin.GetConfigBool("PreventSlowMotion");
+            _staticMeshFrameSkip = _plugin.GetConfigInt("StaticMeshFrameSkip");
         }
 
         public void ResetState() { _initialized = false; }
