@@ -108,6 +108,50 @@ namespace UnityRemix
             return layers.Count > 0 ? string.Join(",", layers) : "Nothing(0)";
         }
 
+        public static string GetHierarchyPath(Transform t)
+        {
+            if (t == null) return "null";
+            string path = t.name;
+            while (t.parent != null)
+            {
+                t = t.parent;
+                path = t.name + "/" + path;
+            }
+            return path;
+        }
+
+        public void DumpUIState(string triggerReason)
+        {
+            logger?.LogInfo($"[RemixUIDetector] ==================== UI STATE DUMP ({triggerReason}) ====================");
+            
+            var allCameras = Camera.allCameras;
+            if (allCameras == null || allCameras.Length == 0)
+                allCameras = UnityEngine.Object.FindObjectsOfType<Camera>();
+
+            logger?.LogInfo($"[RemixUIDetector] --- Cameras ({allCameras.Length} active/enabled) ---");
+            foreach (var cam in allCameras)
+            {
+                if (cam == null) continue;
+                bool isUI = uiCameras.Contains(cam);
+                bool isWorld = worldCameras.Contains(cam);
+                string classification = isUI ? "UI" : (isWorld ? "World" : "Unclassified");
+                logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}]: class={classification}, depth={cam.depth}, clear={cam.clearFlags}, mask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), target='{cam.targetTexture?.name ?? "none"}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}");
+            }
+
+            var allCanvases = Resources.FindObjectsOfTypeAll<Canvas>();
+            var activeCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+            logger?.LogInfo($"[RemixUIDetector] --- Canvases ({allCanvases.Length} loaded in scene/assets, {activeCanvases.Length} active) ---");
+            foreach (var canvas in allCanvases)
+            {
+                if (canvas == null) continue;
+                if (string.IsNullOrEmpty(canvas.gameObject.scene.name)) continue;
+
+                int graphicCount = canvas.GetComponentsInChildren<UnityEngine.UI.Graphic>(true).Length;
+                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]: scene='{canvas.gameObject.scene.name}', layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, activeInHierarchy={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}, graphics={graphicCount}");
+            }
+            logger?.LogInfo($"[RemixUIDetector] ==========================================================================");
+        }
+
         /// <summary>
         /// Scans all active cameras in the scene and categorizes them into World and UI cameras.
         /// </summary>
@@ -137,12 +181,12 @@ namespace UnityRemix
             var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
             var canvasCameras = new HashSet<Camera>();
 
-            logger?.LogInfo($"[RemixUIDetector] --- Scan Started ({allCameras.Length} cameras, {canvases.Length} canvases) ---");
+            logger?.LogInfo($"[RemixUIDetector] --- Scan Started ({allCameras.Length} cameras, {canvases.Length} active canvases) ---");
 
             foreach (var canvas in canvases)
             {
                 if (canvas == null) continue;
-                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, active={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}]");
+                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}, layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, active={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}]");
 
                 if (canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera != null)
                 {
@@ -153,7 +197,7 @@ namespace UnityRemix
             foreach (var cam in allCameras)
             {
                 if (cam == null || cam == dedicatedUICamera) continue;
-                logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [depth={cam.depth}, clear={cam.clearFlags}, cullingMask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), targetTex='{cam.targetTexture?.name ?? "none"}', near={cam.nearClipPlane:F2}, far={cam.farClipPlane:F2}, parent='{cam.transform.parent?.name ?? "root"}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}]");
+                logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}, depth={cam.depth}, clear={cam.clearFlags}, cullingMask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), targetTex='{cam.targetTexture?.name ?? "none"}', near={cam.nearClipPlane:F2}, far={cam.farClipPlane:F2}, parent='{cam.transform.parent?.name ?? "root"}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}]");
             }
 
             int uiLayer = LayerMask.NameToLayer("UI");
@@ -282,7 +326,7 @@ namespace UnityRemix
         private Camera dedicatedUICamera;
 
         /// <summary>
-        /// Routes ScreenSpaceOverlay Canvases to render through the primary UI camera in ScreenSpaceCamera mode
+        /// Routes ScreenSpaceOverlay and unmanaged WorldSpace Canvases to render through the primary UI camera in ScreenSpaceCamera mode
         /// so their contents can be captured into a transparent UI texture.
         /// </summary>
         public void RouteOverlayCanvasesToCamera(Camera uiCamera)
@@ -300,14 +344,22 @@ namespace UnityRemix
                     continue;
                 }
 
+                // 1. Sanitize layers for ALL canvases (ScreenSpace AND WorldSpace HUD canvases like GunCanvas/StyleCanvas)
+                SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+
+                // 2. If WorldSpace canvas has no camera, assign it to uiCamera
+                if (canvas.renderMode == RenderMode.WorldSpace && canvas.worldCamera == null)
+                {
+                    canvas.worldCamera = uiCamera;
+                    logger?.LogInfo($"[RemixUIDetector] Assigned UI Camera '{uiCamera.name}' to WorldSpace Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]");
+                }
+
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
-                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
+                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || !canvas.worldCamera.enabled || !canvas.worldCamera.gameObject.activeInHierarchy || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
 
                 if (isOverlay || needsRebinding)
                 {
-                    SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
-
                     if (!originalCanvasRenderModes.ContainsKey(canvas))
                     {
                         originalCanvasRenderModes[canvas] = canvas.renderMode;
@@ -330,7 +382,7 @@ namespace UnityRemix
                         raycaster.blockingObjects = UnityEngine.UI.GraphicRaycaster.BlockingObjects.None;
                     }
 
-                    logger?.LogInfo($"[RemixUIDetector] Routed Overlay Canvas '{canvas.name}' to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
+                    logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
                 }
             }
         }
@@ -389,20 +441,32 @@ namespace UnityRemix
 
             int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
 
-            var graphics = root.GetComponentsInChildren<UnityEngine.UI.Graphic>(true);
-            for (int i = 0; i < graphics.Length; i++)
+            // Sanitize root canvas GameObject layer
+            if (root.layer == 0 || (alwaysOnTopLayer >= 0 && root.layer == alwaysOnTopLayer))
             {
-                var go = graphics[i].gameObject;
-                // If a UI graphic element inside a Canvas was on layer 0 (Default) or AlwaysOnTop,
-                // reassign it to the UI layer (5). This guarantees all 2D UI elements are rendered
-                // by the UI camera.
+                root.layer = uiLayer;
+            }
+            else if (root.layer != uiLayer && root.layer > 0)
+            {
+                cam.cullingMask |= (1 << root.layer);
+            }
+
+            // Sanitize all child transforms in the canvas
+            var transforms = root.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < transforms.Length; i++)
+            {
+                var go = transforms[i].gameObject;
                 if (go.layer == 0 || (alwaysOnTopLayer >= 0 && go.layer == alwaysOnTopLayer))
                 {
                     go.layer = uiLayer;
                 }
+                else if (go.layer != uiLayer && go.layer > 0)
+                {
+                    cam.cullingMask |= (1 << go.layer);
+                }
             }
 
-            // Strictly isolate UI cameras: never render layer 0 (Default) and ensure UI layer is included
+            // Strictly isolate UI cameras: never render layer 0 (Default 3D world scene)
             cam.cullingMask &= ~1;
             if (alwaysOnTopLayer >= 0)
             {

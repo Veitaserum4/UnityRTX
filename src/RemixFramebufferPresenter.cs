@@ -148,17 +148,42 @@ namespace UnityRemix
                         SetupEmbeddedUIOverlay();
                     }
 
+                    // Check for keypress diagnostics (F8 or Escape)
+                    if (Input.GetKeyDown(KeyCode.F8))
+                    {
+                        uiDetector.DumpUIState("F8 Key Pressed (Manual UI Diagnostic)");
+                    }
+                    else if (Input.GetKeyDown(KeyCode.Escape))
+                    {
+                        uiDetector.DumpUIState("Escape Key Pressed (Menu/Pause Diagnostic)");
+                    }
+
                     // Handle 3D in-engine camera suppression & camera detection
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
 
                     int currentCameraCount = Camera.allCamerasCount;
+                    int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
+                    int currentW = Screen.width;
+                    int currentH = Screen.height;
+                    bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
+                                             (currentW != lastScreenWidth || currentH != lastScreenHeight);
                     bool cameraCountChanged = (currentCameraCount != lastCameraCount);
-                    bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || (sceneRefreshCounter > 0);
+                    bool canvasCountChanged = (currentCanvasCount != lastCanvasCount);
+                    bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0);
 
                     if (shouldCheck)
                     {
                         if (sceneRefreshCounter > 0) sceneRefreshCounter--;
+                        if (canvasCountChanged)
+                        {
+                            logger?.LogInfo($"[RemixFramebufferPresenter] Canvas count changed: {lastCanvasCount} -> {currentCanvasCount}. Re-evaluating UI detection.");
+                            uiDetector.DumpUIState($"Canvas count changed: {lastCanvasCount} -> {currentCanvasCount}");
+                        }
+
                         lastCameraCount = currentCameraCount;
+                        lastCanvasCount = currentCanvasCount;
+                        lastScreenWidth = currentW;
+                        lastScreenHeight = currentH;
 
                         // 1. ALWAYS refresh UI detector to categorize World and UI cameras
                         uiDetector.Refresh(worldCam);
@@ -178,22 +203,14 @@ namespace UnityRemix
                         {
                             SetupCopyModeBlitter(worldCam);
                         }
-                    }
 
-                    int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
-                    int currentW = Screen.width;
-                    int currentH = Screen.height;
-                    bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
-                                             (currentW != lastScreenWidth || currentH != lastScreenHeight);
-
-                    if ((currentCanvasCount != lastCanvasCount || resolutionChanged) && uiDetector.UICameras.Count > 0)
-                    {
-                        lastCanvasCount = currentCanvasCount;
-                        lastScreenWidth = currentW;
-                        lastScreenHeight = currentH;
-                        uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
-                        uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
-                        Canvas.ForceUpdateCanvases();
+                        // 4. Route overlay and WorldSpace canvases to primary UI camera
+                        if (uiDetector.UICameras.Count > 0)
+                        {
+                            uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
+                            uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                            Canvas.ForceUpdateCanvases();
+                        }
                     }
                     else
                     {
