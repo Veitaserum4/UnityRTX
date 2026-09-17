@@ -354,13 +354,10 @@ namespace UnityRemix
 
             SyncWindowBounds();
 
+            // uiRenderTexture MUST match Unity engine Screen resolution (Screen.width x Screen.height)
+            // so that Unity's Canvas scaling and Input.mousePosition match 1:1 without coordinate distortion.
             int targetW = Screen.width > 0 ? Screen.width : 1920;
             int targetH = Screen.height > 0 ? Screen.height : 1080;
-            if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
-            {
-                targetW = clientRect.Width;
-                targetH = clientRect.Height;
-            }
 
             if (targetW > 0 && targetH > 0 && (currentWidth != targetW || currentHeight != targetH))
             {
@@ -396,7 +393,17 @@ namespace UnityRemix
 
             int width = request.width;
             int height = request.height;
-            EnsureDIB(width, height);
+
+            // Layered window and DIB must match physical gameWindow client area so overlay covers entire window
+            int destWidth = width;
+            int destHeight = height;
+            if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
+            {
+                destWidth = clientRect.Width;
+                destHeight = clientRect.Height;
+            }
+
+            EnsureDIB(destWidth, destHeight);
             if (overlayHdc == IntPtr.Zero || overlayBits == IntPtr.Zero) return;
 
             var rawData = request.GetData<byte>();
@@ -415,7 +422,7 @@ namespace UnityRemix
             {
                 try
                 {
-                    ProcessAndPresentOverlay(width, height);
+                    ProcessAndPresentOverlay(width, height, destWidth, destHeight);
                 }
                 catch (Exception ex)
                 {
@@ -428,7 +435,7 @@ namespace UnityRemix
             });
         }
 
-        private void ProcessAndPresentOverlay(int width, int height)
+        private void ProcessAndPresentOverlay(int srcWidth, int srcHeight, int destWidth, int destHeight)
         {
             using (RemixTracy.Zone("ProcessAndPresentOverlay"))
             {
@@ -441,7 +448,7 @@ namespace UnityRemix
                         return;
 
                 bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
-                int totalPixels = width * height;
+                int totalPixels = destWidth * destHeight;
                 int nonZeroPixelCount = 0;
                 int opaquePixelCount = 0;
 
@@ -454,73 +461,144 @@ namespace UnityRemix
 
                         using (RemixTracy.Zone("UI_ScanlineConversion"))
                         {
-                            System.Threading.Tasks.Parallel.For(0, height, y =>
+                            if (srcWidth == destWidth && srcHeight == destHeight)
                             {
-                                int rowOffset = y * width * 4;
-                                byte* s = (byte*)srcPtr + rowOffset;
-                                byte* d = (byte*)dstPtr + rowOffset;
-                                int localNonZero = 0;
-                                int localOpaque = 0;
-
-                                for (int x = 0; x < width; x++)
+                                // Direct 1:1 fast path (no scaling required)
+                                System.Threading.Tasks.Parallel.For(0, destHeight, y =>
                                 {
-                                    uint px = *(uint*)s;
-                                    // Fast path for transparent empty pixels (96% of the screen in ULTRAKILL HUD)
-                                    if (px == 0)
+                                    int rowOffset = y * destWidth * 4;
+                                    byte* s = (byte*)srcPtr + rowOffset;
+                                    byte* d = (byte*)dstPtr + rowOffset;
+                                    int localNonZero = 0;
+                                    int localOpaque = 0;
+
+                                    for (int x = 0; x < destWidth; x++)
                                     {
-                                        *(uint*)d = 0;
+                                        uint px = *(uint*)s;
+                                        // Fast path for transparent empty pixels (96% of the screen in HUD)
+                                        if (px == 0)
+                                        {
+                                            *(uint*)d = 0;
+                                            s += 4;
+                                            d += 4;
+                                            continue;
+                                        }
+
+                                        byte r = s[0];
+                                        byte g = s[1];
+                                        byte b = s[2];
+                                        byte a = s[3];
+
+                                        // Fallback for additive / unlit UI shaders that output color with a == 0
+                                        byte effA = a;
+                                        if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                                        {
+                                            effA = (byte)Math.Max(r, Math.Max(g, b));
+                                        }
+
+                                        if (effA > 0 || r > 0 || g > 0 || b > 0)
+                                        {
+                                            localNonZero++;
+                                        }
+                                        if (effA == 255) localOpaque++;
+
+                                        if (effA == 255)
+                                        {
+                                            d[0] = b;
+                                            d[1] = g;
+                                            d[2] = r;
+                                            d[3] = 255;
+                                        }
+                                        else if (effA == 0)
+                                        {
+                                            *(uint*)d = 0;
+                                        }
+                                        else
+                                        {
+                                            // Windows AC_SRC_ALPHA requires premultiplied alpha: R <= A, G <= A, B <= A.
+                                            d[0] = b <= effA ? b : effA;
+                                            d[1] = g <= effA ? g : effA;
+                                            d[2] = r <= effA ? r : effA;
+                                            d[3] = effA;
+                                        }
+
                                         s += 4;
                                         d += 4;
-                                        continue;
                                     }
 
-                                    byte r = s[0];
-                                    byte g = s[1];
-                                    byte b = s[2];
-                                    byte a = s[3];
+                                    if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
+                                    if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                                });
+                            }
+                            else
+                            {
+                                // Resolution scaling path (e.g. in-game 640x480 or 1080p scaled to physical window size)
+                                System.Threading.Tasks.Parallel.For(0, destHeight, y =>
+                                {
+                                    int srcY = (int)((long)y * srcHeight / destHeight);
+                                    if (srcY >= srcHeight) srcY = srcHeight - 1;
 
-                                    // Fallback for additive / unlit UI shaders that output color with a == 0
-                                    byte effA = a;
-                                    if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                                    byte* srcRow = (byte*)srcPtr + (srcY * srcWidth * 4);
+                                    byte* dstRow = (byte*)dstPtr + (y * destWidth * 4);
+                                    int localNonZero = 0;
+                                    int localOpaque = 0;
+
+                                    for (int x = 0; x < destWidth; x++)
                                     {
-                                        effA = (byte)Math.Max(r, Math.Max(g, b));
+                                        int srcX = (int)((long)x * srcWidth / destWidth);
+                                        if (srcX >= srcWidth) srcX = srcWidth - 1;
+
+                                        byte* s = srcRow + (srcX * 4);
+                                        byte* d = dstRow + (x * 4);
+
+                                        uint px = *(uint*)s;
+                                        if (px == 0)
+                                        {
+                                            *(uint*)d = 0;
+                                            continue;
+                                        }
+
+                                        byte r = s[0];
+                                        byte g = s[1];
+                                        byte b = s[2];
+                                        byte a = s[3];
+
+                                        byte effA = a;
+                                        if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                                        {
+                                            effA = (byte)Math.Max(r, Math.Max(g, b));
+                                        }
+
+                                        if (effA > 0 || r > 0 || g > 0 || b > 0)
+                                        {
+                                            localNonZero++;
+                                        }
+                                        if (effA == 255) localOpaque++;
+
+                                        if (effA == 255)
+                                        {
+                                            d[0] = b;
+                                            d[1] = g;
+                                            d[2] = r;
+                                            d[3] = 255;
+                                        }
+                                        else if (effA == 0)
+                                        {
+                                            *(uint*)d = 0;
+                                        }
+                                        else
+                                        {
+                                            d[0] = b <= effA ? b : effA;
+                                            d[1] = g <= effA ? g : effA;
+                                            d[2] = r <= effA ? r : effA;
+                                            d[3] = effA;
+                                        }
                                     }
 
-                                    if (effA > 0 || r > 0 || g > 0 || b > 0)
-                                    {
-                                        localNonZero++;
-                                    }
-                                    if (effA == 255) localOpaque++;
-
-                                    if (effA == 255)
-                                    {
-                                        d[0] = b;
-                                        d[1] = g;
-                                        d[2] = r;
-                                        d[3] = 255;
-                                    }
-                                    else if (effA == 0)
-                                    {
-                                        *(uint*)d = 0;
-                                    }
-                                    else
-                                    {
-                                        // Windows AC_SRC_ALPHA requires premultiplied alpha: R <= A, G <= A, B <= A.
-                                        // Unity UI blending into the (0,0,0,0) target already premultiplies RGB by A.
-                                        // Clamping to effA ensures valid premultiplied format without double-multiplying.
-                                        d[0] = b <= effA ? b : effA;
-                                        d[1] = g <= effA ? g : effA;
-                                        d[2] = r <= effA ? r : effA;
-                                        d[3] = effA;
-                                    }
-
-                                    s += 4;
-                                    d += 4;
-                                }
-
-                                if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
-                                if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
-                            });
+                                    if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
+                                    if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                                });
+                            }
                         }
                     }
                 }
@@ -529,8 +607,8 @@ namespace UnityRemix
 
                 if (diagLog)
                 {
-                    int centerIdx = (height / 2 * width + width / 2) * 4;
-                    logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {width}x{height}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
+                    int centerIdx = (srcHeight / 2 * srcWidth + srcWidth / 2) * 4;
+                    logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {srcWidth}x{srcHeight} -> {destWidth}x{destHeight}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
                 }
 
 
@@ -549,7 +627,7 @@ namespace UnityRemix
                 // Update Win32 Layered Window
                 var ptDst = new POINT { x = 0, y = 0 };
                 ClientToScreen(gameWindow, ref ptDst);
-                var sizeDst = new SIZE { cx = width, cy = height };
+                var sizeDst = new SIZE { cx = destWidth, cy = destHeight };
                 var ptSrc = new POINT { x = 0, y = 0 };
 
                 var blend = new BLENDFUNCTION
