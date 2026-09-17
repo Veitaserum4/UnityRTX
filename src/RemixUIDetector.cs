@@ -267,10 +267,10 @@ namespace UnityRemix
                 bool higherDepth = primaryWorld != null && cam.depth > primaryWorld.depth;
 
                 // Decision logic: A UI camera must either match UI name, have a Canvas, or render exclusively UI layers
-                if (nameMatch || isCanvasCam || (rendersUILayer && avoidsDefaultLayer) || (isOverlayClear && higherDepth && hasRestrictedLayers))
+                if (nameMatch || isCanvasCam || (rendersUILayer && avoidsDefaultLayer))
                 {
                     uiCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as UI (name:{nameMatch}, canvas:{isCanvasCam}, uiLayer:{rendersUILayer}, overlayClear:{isOverlayClear}, depth:{cam.depth})");
+                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as UI (name:{nameMatch}, canvas:{isCanvasCam}, uiLayer:{rendersUILayer}, depth:{cam.depth})");
                 }
                 else
                 {
@@ -279,41 +279,32 @@ namespace UnityRemix
                 }
             }
 
-            // If no native UI camera was found (e.g. main menu, title screens), create a dedicated UI camera
-            if (uiCameras.Count == 0 && (configAutoDetectUI == null || configAutoDetectUI.Value))
+            // Ensure dedicated UI camera exists to render ScreenSpaceOverlay canvases cleanly
+            if (dedicatedUICamera == null)
             {
-                if (dedicatedUICamera == null)
-                {
-                    var go = new GameObject("UnityRemix_DedicatedUICamera");
-                    UnityEngine.Object.DontDestroyOnLoad(go);
-                    dedicatedUICamera = go.AddComponent<Camera>();
-                    dedicatedUICamera.depth = 100;
-                    dedicatedUICamera.clearFlags = CameraClearFlags.SolidColor;
-                    dedicatedUICamera.backgroundColor = new Color(0, 0, 0, 0);
-                    dedicatedUICamera.nearClipPlane = 0.1f;
-                    dedicatedUICamera.farClipPlane = 1000f;
-                    int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-                    int alwaysOnTopBit = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : 0;
-                    dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0)
-                    logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for scenes without a native UI camera.");
-                }
-                dedicatedUICamera.enabled = true;
+                var go = new GameObject("UnityRemix_DedicatedUICamera");
+                UnityEngine.Object.DontDestroyOnLoad(go);
+                dedicatedUICamera = go.AddComponent<Camera>();
+                dedicatedUICamera.depth = 100;
+                dedicatedUICamera.clearFlags = CameraClearFlags.SolidColor;
+                dedicatedUICamera.backgroundColor = new Color(0, 0, 0, 0);
+                dedicatedUICamera.nearClipPlane = 0.1f;
+                dedicatedUICamera.farClipPlane = 1000f;
+                dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0)
+                logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for overlay canvases.");
+            }
+            dedicatedUICamera.enabled = true;
+            if (!uiCameras.Contains(dedicatedUICamera))
+            {
                 uiCameras.Add(dedicatedUICamera);
             }
-            else if (dedicatedUICamera != null)
-            {
-                dedicatedUICamera.enabled = false;
-            }
 
-            // Strictly isolate UI cameras: never render layer 0 (Default 3D world) and never AlwaysOnTop (3D viewmodels if present)
-            int aotLayer = LayerMask.NameToLayer("AlwaysOnTop");
-            int aotBit = aotLayer >= 0 ? (1 << aotLayer) : 0;
+            // Strictly isolate UI cameras: never render layer 0 (Default 3D world scene)
             foreach (var cam in uiCameras)
             {
-                if (cam != null)
+                if (cam != null && cam != dedicatedUICamera)
                 {
                     cam.cullingMask &= ~1; // Strip Default (0)
-                    if (aotBit != 0) cam.cullingMask &= ~aotBit; // Strip AlwaysOnTop if present so 3D weapons are never drawn as UI
                     cam.cullingMask |= uiLayerBit; // Include UI (5)
                 }
             }
@@ -323,14 +314,16 @@ namespace UnityRemix
             logger?.LogInfo($"[RemixUIDetector] Scan complete: {worldCameras.Count} World Cameras, {uiCameras.Count} UI Cameras detected.");
         }
 
+        public Camera DedicatedUICamera => dedicatedUICamera;
         private Camera dedicatedUICamera;
 
         /// <summary>
-        /// Routes ScreenSpaceOverlay and unmanaged WorldSpace Canvases to render through the primary UI camera in ScreenSpaceCamera mode
+        /// Routes ScreenSpaceOverlay Canvases to render through the dedicated UI camera in ScreenSpaceCamera mode
         /// so their contents can be captured into a transparent UI texture.
         /// </summary>
-        public void RouteOverlayCanvasesToCamera(Camera uiCamera)
+        public void RouteOverlayCanvasesToCamera(Camera targetCam = null)
         {
+            Camera uiCamera = targetCam ?? dedicatedUICamera ?? (uiCameras.Count > 0 ? uiCameras[0] : null);
             if (uiCamera == null) return;
 
             var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
@@ -344,22 +337,20 @@ namespace UnityRemix
                     continue;
                 }
 
-                // 1. Sanitize layers for ALL canvases (ScreenSpace AND WorldSpace HUD canvases like GunCanvas/StyleCanvas)
-                SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
-
-                // 2. If WorldSpace canvas has no camera, assign it to uiCamera
-                if (canvas.renderMode == RenderMode.WorldSpace && canvas.worldCamera == null)
+                // Never modify WorldSpace canvases (they belong in 3D level geometry)
+                if (canvas.renderMode == RenderMode.WorldSpace)
                 {
-                    canvas.worldCamera = uiCamera;
-                    logger?.LogInfo($"[RemixUIDetector] Assigned UI Camera '{uiCamera.name}' to WorldSpace Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]");
+                    continue;
                 }
 
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
-                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || !canvas.worldCamera.enabled || !canvas.worldCamera.gameObject.activeInHierarchy || (dedicatedUICamera != null && canvas.worldCamera == dedicatedUICamera && uiCamera != dedicatedUICamera));
+                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || !canvas.worldCamera.enabled || !canvas.worldCamera.gameObject.activeInHierarchy);
 
                 if (isOverlay || needsRebinding)
                 {
+                    SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+
                     if (!originalCanvasRenderModes.ContainsKey(canvas))
                     {
                         originalCanvasRenderModes[canvas] = canvas.renderMode;
@@ -439,16 +430,10 @@ namespace UnityRemix
             int uiLayer = LayerMask.NameToLayer("UI");
             if (uiLayer < 0) uiLayer = 5;
 
-            int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-
-            // Sanitize root canvas GameObject layer
-            if (root.layer == 0 || (alwaysOnTopLayer >= 0 && root.layer == alwaysOnTopLayer))
+            // Sanitize root canvas GameObject layer if it was on Default (0)
+            if (root.layer == 0)
             {
                 root.layer = uiLayer;
-            }
-            else if (root.layer != uiLayer && root.layer > 0)
-            {
-                cam.cullingMask |= (1 << root.layer);
             }
 
             // Sanitize all child transforms in the canvas
@@ -456,22 +441,13 @@ namespace UnityRemix
             for (int i = 0; i < transforms.Length; i++)
             {
                 var go = transforms[i].gameObject;
-                if (go.layer == 0 || (alwaysOnTopLayer >= 0 && go.layer == alwaysOnTopLayer))
+                if (go.layer == 0)
                 {
                     go.layer = uiLayer;
                 }
-                else if (go.layer != uiLayer && go.layer > 0)
-                {
-                    cam.cullingMask |= (1 << go.layer);
-                }
             }
 
-            // Strictly isolate UI cameras: never render layer 0 (Default 3D world scene)
-            cam.cullingMask &= ~1;
-            if (alwaysOnTopLayer >= 0)
-            {
-                cam.cullingMask &= ~(1 << alwaysOnTopLayer);
-            }
+            // Ensure UI layer is included in camera culling mask
             cam.cullingMask |= (1 << uiLayer);
         }
 
