@@ -92,6 +92,9 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetCursor(IntPtr hCursor);
+
         private const int VK_MENU = 0x12; // Alt key
         private const int VK_X = 0x58;    // 'X' key
         private bool wasAltXPressed = false;
@@ -235,6 +238,10 @@ namespace UnityRemix
             {
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
+            }
+            else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+            {
+                SetCursor(IntPtr.Zero);
             }
 
             // Ensure game window retains activation and focus during startup

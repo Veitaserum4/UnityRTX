@@ -86,8 +86,9 @@ namespace UnityRemix
         private static extern IntPtr SetActiveWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr GetParent(IntPtr hWnd);
+        private static extern IntPtr SetCursor(IntPtr hCursor);
 
+        private const uint WM_SETCURSOR = 0x0020;
         private const uint WM_LBUTTONDOWN = 0x0201;
         private const uint WM_LBUTTONUP = 0x0202;
         private const uint WM_RBUTTONDOWN = 0x0204;
@@ -509,6 +510,22 @@ namespace UnityRemix
                             return new IntPtr(HTTRANSPARENT);
                     }
                     return DefWindowProcW(hWnd, msg, wParam, lParam);
+
+                case WM_SETCURSOR:
+                    if (isEmbeddedStatic)
+                    {
+                        if (isRemixUIOpen)
+                        {
+                            SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
+                            return new IntPtr(1);
+                        }
+                        else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+                        {
+                            SetCursor(IntPtr.Zero);
+                            return new IntPtr(1);
+                        }
+                    }
+                    return DefWindowProcW(hWnd, msg, wParam, lParam);
             }
             
             return DefWindowProcW(hWnd, msg, wParam, lParam);
@@ -534,7 +551,7 @@ namespace UnityRemix
                     cbWndExtra = 0,
                     hInstance = hInstance,
                     hIcon = IntPtr.Zero,
-                    hCursor = LoadCursorW(IntPtr.Zero, IDC_ARROW),
+                    hCursor = IntPtr.Zero,
                     hbrBackground = IntPtr.Zero,
                     lpszMenuName = null,
                     lpszClassName = WINDOW_CLASS_NAME

@@ -210,6 +210,63 @@ namespace UnityRemix
         [DllImport("gdi32.dll")]
         private static extern bool DeleteObject(IntPtr hObject);
 
+        private const uint WM_SETCURSOR = 0x0020;
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetCursor(IntPtr hCursor);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr LoadCursorW(IntPtr hInstance, int lpCursorName);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr DefWindowProcW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern ushort RegisterClassW(ref WNDCLASS lpWndClass);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr GetModuleHandleW([MarshalAs(UnmanagedType.LPWStr)] string lpModuleName);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WNDCLASS
+        {
+            public uint style;
+            public IntPtr lpfnWndProc;
+            public int cbClsExtra;
+            public int cbWndExtra;
+            public IntPtr hInstance;
+            public IntPtr hIcon;
+            public IntPtr hCursor;
+            public IntPtr hbrBackground;
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string lpszMenuName;
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string lpszClassName;
+        }
+
+        private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+        private static WndProcDelegate overlayWndProcDelegate;
+        private static bool overlayClassRegistered = false;
+        private const string OVERLAY_CLASS_NAME = "UnityRemix_UIOverlay_Class";
+
+        private static IntPtr OverlayWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
+        {
+            if (msg == WM_SETCURSOR)
+            {
+                if (RemixWindowManager.IsRemixUIOpen)
+                {
+                    SetCursor(LoadCursorW(IntPtr.Zero, 32512 /* IDC_ARROW */));
+                    return new IntPtr(1);
+                }
+                else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+                {
+                    SetCursor(IntPtr.Zero);
+                    return new IntPtr(1);
+                }
+            }
+            return DefWindowProcW(hWnd, msg, wParam, lParam);
+        }
+
         #endregion
 
         public static RemixUIOverlay Instance { get; private set; }
@@ -258,6 +315,27 @@ namespace UnityRemix
                 return false;
             }
 
+            if (!overlayClassRegistered)
+            {
+                overlayWndProcDelegate = OverlayWndProc;
+                IntPtr hInstance = GetModuleHandleW(null);
+                var wc = new WNDCLASS
+                {
+                    style = 0,
+                    lpfnWndProc = Marshal.GetFunctionPointerForDelegate(overlayWndProcDelegate),
+                    cbClsExtra = 0,
+                    cbWndExtra = 0,
+                    hInstance = hInstance,
+                    hIcon = IntPtr.Zero,
+                    hCursor = IntPtr.Zero,
+                    hbrBackground = IntPtr.Zero,
+                    lpszMenuName = null,
+                    lpszClassName = OVERLAY_CLASS_NAME
+                };
+                RegisterClassW(ref wc);
+                overlayClassRegistered = true;
+            }
+
             GetClientRect(gameWindow, out RECT clientRect);
             int width = Math.Max(clientRect.Width, 100);
             int height = Math.Max(clientRect.Height, 100);
@@ -268,7 +346,7 @@ namespace UnityRemix
             // Create transparent, click-through layered popup owned by gameWindow
             overlayWindow = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                "STATIC",
+                OVERLAY_CLASS_NAME,
                 "UnityRemix_UIOverlay",
                 WS_POPUP | WS_VISIBLE | WS_DISABLED,
                 pt.x, pt.y, width, height,
@@ -351,6 +429,18 @@ namespace UnityRemix
         public void UpdateOverlay()
         {
             if (overlayWindow == IntPtr.Zero) return;
+
+            // When Remix Alt+X menu is open, hide the game UI overlay so the Remix ImGui menu
+            // appears completely above the game UI without being obstructed by crosshair/HUD.
+            if (RemixWindowManager.IsRemixUIOpen)
+            {
+                if (isOverlayVisible)
+                {
+                    ShowWindow(overlayWindow, SW_HIDE);
+                    isOverlayVisible = false;
+                }
+                return;
+            }
 
             SyncWindowBounds();
 
