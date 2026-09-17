@@ -25,6 +25,7 @@ namespace UnityRemix
         
         private readonly BepInEx.Configuration.ConfigEntry<bool> configSingleWindow;
         private readonly BepInEx.Configuration.ConfigEntry<SingleWindowMethod> configSingleWindowMethod;
+        private static RemixWindowManager instance;
         private IntPtr gameWindow = IntPtr.Zero;
         private bool isEmbedded = false;
         private static bool isEmbeddedStatic = false;
@@ -39,36 +40,91 @@ namespace UnityRemix
         public static void SetRemixUIOpen(bool open) => isRemixUIOpen = open;
         public static void ToggleRemixUI() => isRemixUIOpen = !isRemixUIOpen;
 
-        public void HandleAltX()
+        /// <summary>
+        /// Continuously queries the ground-truth UI state directly from the Remix runtime (RtxOptions::showUI).
+        /// Prevents state inversion across scene loads, startup modals (e.g. preset selection), or mouse clicks on ImGui windows.
+        /// </summary>
+        public static void SyncUIStateWithRemix(ManualLogSource logger = null)
         {
-            ToggleRemixUI();
-            if (remixWindow != IntPtr.Zero)
+            if (RemixAPI.GetUIStateFunc != null)
             {
-                // Always release any active mouse capture so mouse clicks aren't stuck on either window
+                try
+                {
+                    var state = RemixAPI.GetUIStateFunc();
+                    bool remixOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
+                    if (remixOpen != isRemixUIOpen)
+                    {
+                        isRemixUIOpen = remixOpen;
+                        logger?.LogInfo($"[RemixWindowManager] Synced isRemixUIOpen with Remix runtime: {isRemixUIOpen} (UIState={state})");
+                        OnRemixUIStateChanged(isRemixUIOpen, logger);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning($"[RemixWindowManager] Failed to query GetUIState: {ex.Message}");
+                }
+            }
+        }
+
+        public static void OnRemixUIStateChanged(bool open, ManualLogSource logger = null)
+        {
+            if (isEmbeddedStatic && instance != null && instance.remixWindow != IntPtr.Zero)
+            {
                 ReleaseCapture();
-
-                if (isEmbedded)
+                EnableWindow(instance.remixWindow, open);
+                if (open)
                 {
-                    // When Remix UI is open, enable child window so mouse clicks reach Remix ImGui.
-                    // When closed, disable child window so all mouse clicks pass directly to Unity gameWindow!
-                    EnableWindow(remixWindow, isRemixUIOpen);
+                    ClipCursor(IntPtr.Zero);
                 }
-
-                PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
-                PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
-
-                if (gameWindow != IntPtr.Zero)
+                else if (instance.gameWindow != IntPtr.Zero)
                 {
-                    SetForegroundWindow(gameWindow);
-                    SetActiveWindow(gameWindow);
-                    SetFocus(gameWindow);
+                    SetForegroundWindow(instance.gameWindow);
+                    SetActiveWindow(instance.gameWindow);
+                    SetFocus(instance.gameWindow);
                 }
-
-                ClipCursor(IntPtr.Zero);
                 ReleaseCapture();
             }
+            RemixGameStateHelper.SetRemixMenuState(open, logger);
+        }
 
-            RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
+        public void HandleAltX()
+        {
+            if (RemixAPI.SetUIStateFunc != null && RemixAPI.GetUIStateFunc != null)
+            {
+                var curState = RemixAPI.GetUIStateFunc();
+                var newState = (curState == RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE)
+                    ? RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_BASIC
+                    : RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE;
+                RemixAPI.SetUIStateFunc(newState);
+                SyncUIStateWithRemix(logger);
+            }
+            else
+            {
+                ToggleRemixUI();
+                if (remixWindow != IntPtr.Zero)
+                {
+                    ReleaseCapture();
+                    if (isEmbedded)
+                    {
+                        EnableWindow(remixWindow, isRemixUIOpen);
+                    }
+
+                    PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
+                    PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
+
+                    if (gameWindow != IntPtr.Zero)
+                    {
+                        SetForegroundWindow(gameWindow);
+                        SetActiveWindow(gameWindow);
+                        SetFocus(gameWindow);
+                    }
+
+                    ClipCursor(IntPtr.Zero);
+                    ReleaseCapture();
+                }
+
+                RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
+            }
         }
         
         #region Win32 API Declarations
@@ -405,6 +461,7 @@ namespace UnityRemix
             BepInEx.Configuration.ConfigEntry<bool> singleWindow = null,
             BepInEx.Configuration.ConfigEntry<SingleWindowMethod> singleWindowMethod = null)
         {
+            instance = this;
             this.logger = logger;
             this.configSingleWindow = singleWindow;
             this.configSingleWindowMethod = singleWindowMethod;

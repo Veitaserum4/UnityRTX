@@ -123,11 +123,7 @@ namespace UnityRemix
             lastActiveCanvasCount = -1;
             lastScreenWidth = -1;
             lastScreenHeight = -1;
-            if (RemixWindowManager.IsRemixUIOpen)
-            {
-                RemixWindowManager.SetRemixUIOpen(false);
-                RemixGameStateHelper.SetRemixMenuState(false, logger);
-            }
+            RemixWindowManager.SyncUIStateWithRemix(logger);
         }
 
         public void Update(int frameCount)
@@ -265,6 +261,9 @@ namespace UnityRemix
             {
                 wasAltXPressed = false;
             }
+
+            // Continuously query ground truth UI state directly from Remix runtime
+            RemixWindowManager.SyncUIStateWithRemix(logger);
 
             // While Remix UI is open, guarantee cursor is unlocked and visible
             if (RemixWindowManager.IsRemixUIOpen)
