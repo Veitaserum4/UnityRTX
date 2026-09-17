@@ -28,7 +28,7 @@ namespace UnityRemix
         private static readonly string[] UIKeywords = new string[]
         {
             "ui", "hud", "canvas", "menu", "gui", "overlay", "interface",
-            "crosshair", "reticle", "cursor",
+            "crosshair", "reticle", "cursor", "inventory",
             "text", "subtitles", "scoreboard", "minimap", "radar", "dialogue", "chat"
         };
 
@@ -210,10 +210,10 @@ namespace UnityRemix
             }
 
             // Find known canvases and their worldCameras
-            var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+            var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
             var canvasCameras = new HashSet<Camera>();
 
-            logger?.LogInfo($"[RemixUIDetector] --- Scan Started ({allCameras.Length} cameras, {canvases.Length} active canvases) ---");
+            logger?.LogInfo($"[RemixUIDetector] --- Scan Started ({allCameras.Length} cameras, {canvases.Length} active/loaded canvases) ---");
 
             foreach (var canvas in canvases)
             {
@@ -370,7 +370,7 @@ namespace UnityRemix
             Camera uiCamera = targetCam ?? dedicatedUICamera ?? (uiCameras.Count > 0 ? uiCameras[0] : null);
             if (uiCamera == null) return;
 
-            var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+            var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
             foreach (var canvas in canvases)
             {
                 if (canvas == null) continue;
@@ -403,7 +403,7 @@ namespace UnityRemix
 
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
-                    (canvas.worldCamera == null || worldCameras.Contains(canvas.worldCamera) || !canvas.worldCamera.enabled || !canvas.worldCamera.gameObject.activeInHierarchy);
+                    (canvas.worldCamera == null || !uiCameras.Contains(canvas.worldCamera) || !canvas.worldCamera.enabled || !canvas.worldCamera.gameObject.activeInHierarchy);
 
                 if (isOverlay || needsRebinding)
                 {
@@ -432,6 +432,11 @@ namespace UnityRemix
                     }
 
                     logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
+                }
+                else if (canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera == uiCamera)
+                {
+                    // Canvas is already bound to uiCamera, but ensure all children (newly instantiated or toggled) are on UI layer
+                    SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
                 }
             }
         }
