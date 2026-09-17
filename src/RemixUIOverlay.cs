@@ -282,8 +282,6 @@ namespace UnityRemix
         public void RebindAllUICameras()
         {
             if (uiRenderTexture == null) return;
-            int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-            int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : 0;
             int uiLayer = LayerMask.NameToLayer("UI");
             int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
 
@@ -295,7 +293,6 @@ namespace UnityRemix
                 cam.clearFlags = CameraClearFlags.SolidColor;
                 cam.backgroundColor = new Color(0, 0, 0, 0);
                 cam.cullingMask &= ~1; // Strip Default (0)
-                if (alwaysOnTopMask != 0) cam.cullingMask &= ~alwaysOnTopMask; // Strip AlwaysOnTop if present
                 cam.cullingMask |= uiLayerBit;
             }
         }
@@ -987,13 +984,10 @@ namespace UnityRemix
                 cam.clearFlags = clearFlags;
                 cam.backgroundColor = backgroundColor;
 
-                int alwaysOnTopLayer = LayerMask.NameToLayer("AlwaysOnTop");
-                int alwaysOnTopMask = alwaysOnTopLayer >= 0 ? (1 << alwaysOnTopLayer) : 0;
                 int uiLayer = LayerMask.NameToLayer("UI");
                 int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
 
                 cam.cullingMask &= ~1; // Ensure layer 0 (Default / 3D game scene) is never rendered by UI camera
-                if (alwaysOnTopMask != 0) cam.cullingMask &= ~alwaysOnTopMask; // Ensure AlwaysOnTop (if present) is never rendered by UI camera
                 cam.cullingMask |= uiLayerBit;
             }
         }
