@@ -457,39 +457,13 @@ namespace UnityRemix
             if (!isEmbedded || remixWindow == IntPtr.Zero || gameWindow == IntPtr.Zero)
                 return;
 
-            if (IsIconic(gameWindow))
-                return;
-
             if (GetClientRect(gameWindow, out RECT rect))
             {
-                if (rect.Width > 0 && rect.Height > 0)
+                if (rect.Width > 0 && rect.Height > 0 && (rect.Width != windowWidth || rect.Height != windowHeight))
                 {
-                    // Enforce minimum safe window resolution (1024x720) in windowed mode to prevent RTX Remix / NRC
-                    // Vulkan device loss crashes when running at tiny resolutions (e.g. 640x480 with DLSS Ultra Performance).
-                    const int MIN_SAFE_WIDTH = 1024;
-                    const int MIN_SAFE_HEIGHT = 720;
-
-                    if (rect.Width < MIN_SAFE_WIDTH || rect.Height < MIN_SAFE_HEIGHT)
-                    {
-                        if (GetWindowRect(gameWindow, out RECT winRect))
-                        {
-                            int borderW = Math.Max(0, winRect.Width - rect.Width);
-                            int borderH = Math.Max(0, winRect.Height - rect.Height);
-                            int targetWinW = Math.Max(rect.Width, MIN_SAFE_WIDTH) + borderW;
-                            int targetWinH = Math.Max(rect.Height, MIN_SAFE_HEIGHT) + borderH;
-
-                            logger?.LogWarning($"[RemixWindowManager] Game window client area ({rect.Width}x{rect.Height}) is below minimum safe RTX Remix resolution ({MIN_SAFE_WIDTH}x{MIN_SAFE_HEIGHT}). Enforcing minimum window size to prevent Vulkan device loss / NRC crash.");
-                            SetWindowPos(gameWindow, IntPtr.Zero, 0, 0, targetWinW, targetWinH, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-                            return;
-                        }
-                    }
-
-                    if (rect.Width != windowWidth || rect.Height != windowHeight)
-                    {
-                        windowWidth = rect.Width;
-                        windowHeight = rect.Height;
-                        SetWindowPos(remixWindow, IntPtr.Zero, 0, 0, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE);
-                    }
+                    windowWidth = rect.Width;
+                    windowHeight = rect.Height;
+                    SetWindowPos(remixWindow, IntPtr.Zero, 0, 0, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE);
                 }
             }
         }
@@ -607,8 +581,8 @@ namespace UnityRemix
             {
                 if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
                 {
-                    width = Math.Max(clientRect.Width, 1024);
-                    height = Math.Max(clientRect.Height, 720);
+                    width = clientRect.Width;
+                    height = clientRect.Height;
                     windowWidth = width;
                     windowHeight = height;
                 }
