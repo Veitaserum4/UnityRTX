@@ -371,10 +371,7 @@ namespace UnityRemix
             if (uiCamera == null) return;
 
             var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
-            var allCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
-            var routedCanvases = new System.Collections.Generic.List<Canvas>();
-
-            foreach (var canvas in allCanvases)
+            foreach (var canvas in canvases)
             {
                 if (canvas == null) continue;
 
@@ -384,25 +381,19 @@ namespace UnityRemix
                     continue;
                 }
 
-                // Never touch 3D world space canvases placed on level geometry / scene objects
-                if (canvas.renderMode == RenderMode.WorldSpace && canvas.transform.parent == null)
-                {
-                    continue;
-                }
-
-                // Skip canvases attached to 3D meshes or weapon bones — they belong to 3D model geometry
-                if (HasWeaponOrBoneInParent(canvas.transform) ||
-                    canvas.GetComponentInParent<SkinnedMeshRenderer>() != null || 
+                // Skip canvases attached to 3D meshes (e.g. ammo counter on weapon bone) — they belong to 3D model geometry
+                if (canvas.GetComponentInParent<SkinnedMeshRenderer>() != null || 
                     canvas.GetComponentInParent<MeshRenderer>() != null)
                 {
                     continue;
                 }
 
-                // If this is a WorldSpace canvas attached to a UI camera or HUD hierarchy,
+                // If this is a WorldSpace canvas attached to a camera or HUD hierarchy,
                 // sanitize its elements to UI layer so the UI camera captures it cleanly without capturing 3D viewmodels.
                 if (canvas.renderMode == RenderMode.WorldSpace)
                 {
-                    if (IsAttachedToUICameraOrHUD(canvas.transform))
+                    bool isCameraAttached = canvas.GetComponentInParent<Camera>() != null || HasCameraOrHUDInParent(canvas.transform);
+                    if (isCameraAttached)
                     {
                         SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
                         logger?.LogInfo($"[RemixUIDetector] Sanitized camera-attached HUD Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to UI layer");
@@ -427,6 +418,12 @@ namespace UnityRemix
                     canvas.renderMode = RenderMode.ScreenSpaceCamera;
                     canvas.worldCamera = uiCamera;
 
+                    // Ensure plane distance is at standard healthy distance (not pressed against near clip)
+                    if (canvas.planeDistance < 10.0f || canvas.planeDistance > 500.0f)
+                    {
+                        canvas.planeDistance = 100.0f;
+                    }
+
                     // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders
                     var raycaster = canvas.GetComponent<UnityEngine.UI.GraphicRaycaster>();
                     if (raycaster != null)
@@ -434,33 +431,12 @@ namespace UnityRemix
                         raycaster.blockingObjects = UnityEngine.UI.GraphicRaycaster.BlockingObjects.None;
                     }
 
-                    routedCanvases.Add(canvas);
-                    logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', mask: 0x{uiCamera.cullingMask:X})");
+                    logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
                 }
                 else if (canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera == uiCamera)
                 {
                     // Canvas is already bound to uiCamera, but ensure all children (newly instantiated or toggled) are on UI layer
                     SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
-                    routedCanvases.Add(canvas);
-                }
-            }
-
-            // Order routed overlay canvases so higher sortingOrder and deeper hierarchy elements are cleanly layered
-            routedCanvases.Sort((a, b) =>
-            {
-                int orderComp = a.sortingOrder.CompareTo(b.sortingOrder);
-                if (orderComp != 0) return orderComp;
-                return a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex());
-            });
-
-            for (int i = 0; i < routedCanvases.Count; i++)
-            {
-                var c = routedCanvases[i];
-                if (c != null)
-                {
-                    // Assign slight planeDistance offsets (e.g. 100, 99.5, 99.0...) so canvases with identical
-                    // sorting order don't Z-fight or suffer arbitrary occlusion in ScreenSpaceCamera.
-                    c.planeDistance = Mathf.Clamp(100.0f - (i * 0.5f), 10.0f, 500.0f);
                 }
             }
         }
@@ -511,35 +487,14 @@ namespace UnityRemix
             }
         }
 
-        private static bool HasWeaponOrBoneInParent(Transform t)
+        private static bool HasCameraOrHUDInParent(Transform t)
         {
             Transform cur = t;
             while (cur != null)
             {
+                if (cur.GetComponent<Camera>() != null) return true;
                 string n = cur.name.ToLowerInvariant();
-                if (n.Contains("armature") || n.Contains("bone") || n.Contains("gun") || 
-                    n.Contains("weapon") || n.Contains("viewmodel") || n.Contains("item") || n.Contains("hand"))
-                {
-                    return true;
-                }
-                cur = cur.parent;
-            }
-            return false;
-        }
-
-        private bool IsAttachedToUICameraOrHUD(Transform t)
-        {
-            Transform cur = t;
-            while (cur != null)
-            {
-                var cam = cur.GetComponent<Camera>();
-                if (cam != null)
-                {
-                    // Only match if the parent camera is explicitly classified as a UI camera!
-                    return uiCameras.Contains(cam);
-                }
-                string n = cur.name.ToLowerInvariant();
-                if (n.Contains("hud")) return true;
+                if (n.Contains("camera") || n.Contains("hud")) return true;
                 cur = cur.parent;
             }
             return false;
