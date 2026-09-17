@@ -28,9 +28,41 @@ namespace UnityRemix
         private static readonly string[] UIKeywords = new string[]
         {
             "ui", "hud", "canvas", "menu", "gui", "overlay", "interface",
-            "crosshair", "reticle", "cursor", "viewmodel", "gun", "weapon",
+            "crosshair", "reticle", "cursor",
             "text", "subtitles", "scoreboard", "minimap", "radar", "dialogue", "chat"
         };
+
+        /// <summary>
+        /// Bitmask of layers currently containing active 3D geometry (MeshRenderer or SkinnedMeshRenderer).
+        /// Updated during Refresh() so UI cameras can exclude 3D geometry from the 2D overlay texture.
+        /// </summary>
+        public static int CurrentThreeDLayerMask { get; private set; }
+
+        public static int ComputeThreeDLayerMask()
+        {
+            int mask = 0;
+            var mrs = UnityEngine.Object.FindObjectsOfType<MeshRenderer>();
+            for (int i = 0; i < mrs.Length; i++)
+            {
+                var r = mrs[i];
+                if (r != null && r.enabled && r.gameObject.activeInHierarchy)
+                {
+                    mask |= (1 << r.gameObject.layer);
+                }
+            }
+
+            var smrs = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>();
+            for (int i = 0; i < smrs.Length; i++)
+            {
+                var sr = smrs[i];
+                if (sr != null && sr.enabled && sr.gameObject.activeInHierarchy)
+                {
+                    mask |= (1 << sr.gameObject.layer);
+                }
+            }
+
+            return mask;
+        }
 
         // Explicitly excluded camera name patterns (post-processing, blit, utility, physics cameras)
         private static readonly string[] ExcludedKeywords = new string[]
@@ -200,8 +232,10 @@ namespace UnityRemix
                 logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}, depth={cam.depth}, clear={cam.clearFlags}, cullingMask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), targetTex='{cam.targetTexture?.name ?? "none"}', near={cam.nearClipPlane:F2}, far={cam.farClipPlane:F2}, parent='{cam.transform.parent?.name ?? "root"}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}]");
             }
 
+            CurrentThreeDLayerMask = ComputeThreeDLayerMask();
             int uiLayer = LayerMask.NameToLayer("UI");
             int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : 0x20;
+            int nonUIThreeDMask = CurrentThreeDLayerMask & ~uiLayerBit;
 
             // Determine primary 3D world camera
             Camera primaryWorld = preferredWorldCamera ?? Camera.main;
@@ -238,6 +272,16 @@ namespace UnityRemix
                 {
                     worldCameras.Add(cam);
                     logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as World (matches excluded postprocess/utility keyword)");
+                    continue;
+                }
+
+                // If camera renders 3D meshes and has NO UI canvases in or associated with it, classify as World
+                bool renders3D = (cam.cullingMask & nonUIThreeDMask) != 0;
+                bool hasAssociatedCanvas = canvasCameras.Contains(cam) || cam.GetComponentInChildren<Canvas>() != null;
+                if (renders3D && !hasAssociatedCanvas)
+                {
+                    worldCameras.Add(cam);
+                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as World (renders 3D objects, no UI canvases)");
                     continue;
                 }
 
@@ -337,9 +381,23 @@ namespace UnityRemix
                     continue;
                 }
 
-                // Never modify WorldSpace canvases (they belong in 3D level geometry)
+                // Skip canvases attached to 3D meshes (e.g. ammo counter on weapon bone) — they belong to 3D model geometry
+                if (canvas.GetComponentInParent<SkinnedMeshRenderer>() != null || 
+                    canvas.GetComponentInParent<MeshRenderer>() != null)
+                {
+                    continue;
+                }
+
+                // If this is a WorldSpace canvas attached to a camera or HUD hierarchy,
+                // sanitize its elements to UI layer so the UI camera captures it cleanly without capturing 3D viewmodels.
                 if (canvas.renderMode == RenderMode.WorldSpace)
                 {
+                    bool isCameraAttached = canvas.GetComponentInParent<Camera>() != null || HasCameraOrHUDInParent(canvas.transform);
+                    if (isCameraAttached)
+                    {
+                        SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+                        logger?.LogInfo($"[RemixUIDetector] Sanitized camera-attached HUD Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to UI layer");
+                    }
                     continue;
                 }
 
@@ -422,6 +480,19 @@ namespace UnityRemix
             {
                 logger?.LogWarning($"[RemixUIDetector] Failed to route VideoPlayers: {ex.Message}");
             }
+        }
+
+        private static bool HasCameraOrHUDInParent(Transform t)
+        {
+            Transform cur = t;
+            while (cur != null)
+            {
+                if (cur.GetComponent<Camera>() != null) return true;
+                string n = cur.name.ToLowerInvariant();
+                if (n.Contains("camera") || n.Contains("hud")) return true;
+                cur = cur.parent;
+            }
+            return false;
         }
 
         private static void SanitizeAndIncludeCanvasLayers(Camera cam, GameObject root)
