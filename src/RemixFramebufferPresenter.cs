@@ -111,6 +111,7 @@ namespace UnityRemix
 
         private int lastCameraCount = -1;
         private int lastCanvasCount = -1;
+        private int lastActiveCanvasCount = -1;
         private int lastScreenWidth = -1;
         private int lastScreenHeight = -1;
 
@@ -119,6 +120,7 @@ namespace UnityRemix
             sceneRefreshCounter = 15; // Re-evaluate suppression over the next 15 frames to catch async objects
             lastCameraCount = -1;
             lastCanvasCount = -1;
+            lastActiveCanvasCount = -1;
             lastScreenWidth = -1;
             lastScreenHeight = -1;
             if (RemixWindowManager.IsRemixUIOpen)
@@ -163,13 +165,21 @@ namespace UnityRemix
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
 
                     int currentCameraCount = Camera.allCamerasCount;
-                    int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>(true).Length;
+                    var allCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
+                    int currentCanvasCount = allCanvases.Length;
+                    int currentActiveCanvasCount = 0;
+                    for (int i = 0; i < allCanvases.Length; i++)
+                    {
+                        if (allCanvases[i] != null && allCanvases[i].isActiveAndEnabled)
+                            currentActiveCanvasCount++;
+                    }
+
                     int currentW = Screen.width;
                     int currentH = Screen.height;
                     bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
                                              (currentW != lastScreenWidth || currentH != lastScreenHeight);
                     bool cameraCountChanged = (currentCameraCount != lastCameraCount);
-                    bool canvasCountChanged = (currentCanvasCount != lastCanvasCount);
+                    bool canvasCountChanged = (currentCanvasCount != lastCanvasCount) || (currentActiveCanvasCount != lastActiveCanvasCount);
                     bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0) || escapePressed || (frameCount % 180 == 0);
 
                     if (shouldCheck)
@@ -177,12 +187,13 @@ namespace UnityRemix
                         if (sceneRefreshCounter > 0) sceneRefreshCounter--;
                         if (canvasCountChanged)
                         {
-                            logger?.LogInfo($"[RemixFramebufferPresenter] Canvas count changed: {lastCanvasCount} -> {currentCanvasCount}. Re-evaluating UI detection.");
-                            uiDetector.DumpUIState($"Canvas count changed: {lastCanvasCount} -> {currentCanvasCount}");
+                            logger?.LogInfo($"[RemixFramebufferPresenter] Canvas count changed: total={lastCanvasCount}->{currentCanvasCount}, active={lastActiveCanvasCount}->{currentActiveCanvasCount}. Re-evaluating UI detection.");
+                            uiDetector.DumpUIState($"Canvas count changed: total={lastCanvasCount}->{currentCanvasCount}, active={lastActiveCanvasCount}->{currentActiveCanvasCount}");
                         }
 
                         lastCameraCount = currentCameraCount;
                         lastCanvasCount = currentCanvasCount;
+                        lastActiveCanvasCount = currentActiveCanvasCount;
                         lastScreenWidth = currentW;
                         lastScreenHeight = currentH;
 

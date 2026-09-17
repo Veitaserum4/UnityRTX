@@ -26,6 +26,7 @@ namespace UnityRemix
         private bool isReadbackPending = false;
         private bool isProcessingOverlay = false;
         private bool isOverlayVisible = false;
+        private int lastPresentedNonZero = -1;
         private int currentWidth = 0;
         private int currentHeight = 0;
         private float lastReadbackRequestTime = 0f;
@@ -717,16 +718,16 @@ namespace UnityRemix
 
 
 
-                // If completely empty (no UI pixels rendered at all), hide overlay
+                // If completely empty (no UI pixels rendered at all), present transparent once and skip redundant updates
                 if (nonZeroPixelCount == 0)
                 {
-                    if (isOverlayVisible)
+                    if (lastPresentedNonZero == 0)
                     {
-                        ShowWindow(overlayWindow, SW_HIDE);
-                        isOverlayVisible = false;
+                        // Already presented fully transparent buffer; skip redundant DWM update
+                        return;
                     }
-                    return;
                 }
+                lastPresentedNonZero = nonZeroPixelCount;
 
                 // Update Win32 Layered Window
                 var ptDst = new POINT { x = 0, y = 0 };
@@ -769,7 +770,6 @@ namespace UnityRemix
                 if (!isOverlayVisible)
                 {
                     ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
-                    SetWindowPos(overlayWindow, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                     isOverlayVisible = true;
                 }
                 }
@@ -788,32 +788,38 @@ namespace UnityRemix
                 {
                     if (isOverlayVisible)
                     {
-                        ShowWindow(overlayWindow, SW_HIDE);
-                        isOverlayVisible = false;
+                        lock (dibLock)
+                        {
+                            ShowWindow(overlayWindow, SW_HIDE);
+                            isOverlayVisible = false;
+                        }
                     }
                     return;
                 }
 
-            if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
-            {
-                var pt = new POINT { x = 0, y = 0 };
-                ClientToScreen(gameWindow, ref pt);
-
-                if (pt.x != lastOverlayX || pt.y != lastOverlayY || clientRect.Width != lastOverlayW || clientRect.Height != lastOverlayH)
+                if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
                 {
-                    lastOverlayX = pt.x;
-                    lastOverlayY = pt.y;
-                    lastOverlayW = clientRect.Width;
-                    lastOverlayH = clientRect.Height;
+                    var pt = new POINT { x = 0, y = 0 };
+                    ClientToScreen(gameWindow, ref pt);
 
-                    SetWindowPos(
-                        overlayWindow,
-                        HWND_TOP,
-                        pt.x, pt.y, clientRect.Width, clientRect.Height,
-                        SWP_NOACTIVATE | SWP_SHOWWINDOW
-                    );
+                    if (pt.x != lastOverlayX || pt.y != lastOverlayY || clientRect.Width != lastOverlayW || clientRect.Height != lastOverlayH)
+                    {
+                        lastOverlayX = pt.x;
+                        lastOverlayY = pt.y;
+                        lastOverlayW = clientRect.Width;
+                        lastOverlayH = clientRect.Height;
+
+                        lock (dibLock)
+                        {
+                            SetWindowPos(
+                                overlayWindow,
+                                HWND_TOP,
+                                pt.x, pt.y, clientRect.Width, clientRect.Height,
+                                SWP_NOACTIVATE | SWP_SHOWWINDOW
+                            );
+                        }
+                    }
                 }
-            }
             }
         }
 
@@ -958,6 +964,9 @@ namespace UnityRemix
     /// </summary>
     public class RemixUICameraHook : MonoBehaviour
     {
+        private static int lastClearedFrame = -1;
+        private static Camera lastClearingCamera = null;
+
         public RenderTexture targetTexture;
         public CameraClearFlags clearFlags = CameraClearFlags.Depth;
         public Color backgroundColor = new Color(0, 0, 0, 0);
@@ -993,8 +1002,25 @@ namespace UnityRemix
 
                 cam.targetTexture = targetTexture;
                 cam.SetTargetBuffers(targetTexture.colorBuffer, targetTexture.depthBuffer);
-                cam.clearFlags = clearFlags;
-                cam.backgroundColor = backgroundColor;
+
+                // Dynamically ensure the first UI camera rendering on any given frame clears color to transparent (0,0,0,0),
+                // while any subsequent UI cameras rendering on the same frame clear only Depth to preserve previous UI elements.
+                if (lastClearedFrame != Time.frameCount)
+                {
+                    lastClearedFrame = Time.frameCount;
+                    lastClearingCamera = cam;
+                    cam.clearFlags = CameraClearFlags.SolidColor;
+                    cam.backgroundColor = new Color(0, 0, 0, 0);
+                }
+                else if (lastClearingCamera == cam)
+                {
+                    cam.clearFlags = CameraClearFlags.SolidColor;
+                    cam.backgroundColor = new Color(0, 0, 0, 0);
+                }
+                else
+                {
+                    cam.clearFlags = CameraClearFlags.Depth;
+                }
 
                 int uiLayer = LayerMask.NameToLayer("UI");
                 int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
