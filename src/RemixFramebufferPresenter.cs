@@ -35,6 +35,7 @@ namespace UnityRemix
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
         private ConfigEntry<int> configUIOverlayFPS;
+        private ConfigEntry<bool> configHideUIOnRemixMenu;
 
         // Tracking suppressed world cameras
         private readonly Dictionary<Camera, int> originalCullingMasks = new Dictionary<Camera, int>();
@@ -58,7 +59,8 @@ namespace UnityRemix
             ConfigEntry<bool> autoDetectUI,
             ConfigEntry<string> uiCameraNames,
             ConfigEntry<bool> singleWindowUIOverlay,
-            ConfigEntry<int> uiOverlayFPS = null)
+            ConfigEntry<int> uiOverlayFPS = null,
+            ConfigEntry<bool> hideUIOnRemixMenu = null)
         {
             this.logger = logger;
             this.windowManager = windowManager;
@@ -70,6 +72,7 @@ namespace UnityRemix
             this.configUICameraNames = uiCameraNames;
             this.configSingleWindowUIOverlay = singleWindowUIOverlay;
             this.configUIOverlayFPS = uiOverlayFPS;
+            this.configHideUIOnRemixMenu = hideUIOnRemixMenu;
 
             uiDetector = new RemixUIDetector(
                 logger,
@@ -333,7 +336,7 @@ namespace UnityRemix
 
             if (uiOverlay == null && gameWnd != IntPtr.Zero)
             {
-                uiOverlay = new RemixUIOverlay(logger, gameWnd, configUIOverlayFPS);
+                uiOverlay = new RemixUIOverlay(logger, gameWnd, configUIOverlayFPS, configHideUIOnRemixMenu);
                 if (!uiOverlay.Initialize())
                 {
                     uiOverlay = null;

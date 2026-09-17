@@ -20,6 +20,7 @@ namespace UnityRemix
 
         // UI rendering state
         private readonly BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS;
+        private readonly BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu;
         private RenderTexture uiRenderTexture;
         private bool isReadbackPending = false;
         private int currentWidth = 0;
@@ -299,11 +300,16 @@ namespace UnityRemix
             }
         }
 
-        public RemixUIOverlay(ManualLogSource logger, IntPtr gameWindow, BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS = null)
+        public RemixUIOverlay(
+            ManualLogSource logger,
+            IntPtr gameWindow,
+            BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS = null,
+            BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu = null)
         {
             this.logger = logger;
             this.gameWindow = gameWindow;
             this.configUIOverlayFPS = configUIOverlayFPS;
+            this.configHideUIOnRemixMenu = configHideUIOnRemixMenu;
             Instance = this;
         }
 
@@ -430,9 +436,8 @@ namespace UnityRemix
         {
             if (overlayWindow == IntPtr.Zero) return;
 
-            // When Remix Alt+X menu is open, hide the game UI overlay so the Remix ImGui menu
-            // appears completely above the game UI without being obstructed by crosshair/HUD.
-            if (RemixWindowManager.IsRemixUIOpen)
+            // If user enabled HideUIOnRemixMenu, hide the game UI overlay while Remix Alt+X menu is open.
+            if (configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen)
             {
                 if (isOverlayVisible)
                 {

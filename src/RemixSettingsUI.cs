@@ -35,6 +35,7 @@ namespace UnityRemix
         private bool _autoDetectUI;
         private bool _singleWindowUIOverlay;
         private int _uiOverlayFPS;
+        private bool _hideUIOnRemixMenu;
         private string _selectedCameraName;
         private int _engineFPSLimit;
         private bool _preventSlowMotion;
@@ -112,6 +113,11 @@ namespace UnityRemix
                         _plugin.SetConfig("UIOverlayFPS", _uiOverlayFPS);
                     if (RemixImGui.IsItemHovered())
                         RemixImGui.SetTooltip("Target refresh rate for the transparent UI overlay window (10 to 300 FPS).");
+
+                    if (RemixImGui.Checkbox("Remove Game UI upon Remix Menu Opening", ref _hideUIOnRemixMenu))
+                        _plugin.SetConfig("HideUIOnRemixMenu", _hideUIOnRemixMenu);
+                    if (RemixImGui.IsItemHovered())
+                        RemixImGui.SetTooltip("Hides the game UI overlay when the Alt+X Remix menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
                     RemixImGui.Unindent();
                 }
 
@@ -438,6 +444,7 @@ namespace UnityRemix
             _autoDetectUI = _plugin.GetConfigBool("AutoDetectUI");
             _singleWindowUIOverlay = _plugin.GetConfigBool("SingleWindowUIOverlay");
             _uiOverlayFPS = _plugin.GetConfigInt("UIOverlayFPS");
+            _hideUIOnRemixMenu = _plugin.GetConfigBool("HideUIOnRemixMenu");
             _selectedCameraName = _plugin.GetConfigString("CameraName");
             _engineFPSLimit = _plugin.GetConfigInt("EngineFPSLimit");
             _preventSlowMotion = _plugin.GetConfigBool("PreventSlowMotion");

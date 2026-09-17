@@ -54,6 +54,7 @@ namespace UnityRemix
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
         private ConfigEntry<int> configUIOverlayFPS;
+        private ConfigEntry<bool> configHideUIOnRemixMenu;
 
         // Performance & Throttling
         private ConfigEntry<int> configEngineFPSLimit;
@@ -231,6 +232,9 @@ namespace UnityRemix
                 new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Supports up to 300 FPS.",
                     new AcceptableValueRange<int>(10, 300)));
 
+            configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", false,
+                "Hides the game UI overlay when the Remix Alt+X menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
+
             // Performance & Frame Throttling
             configEngineFPSLimit = Config.Bind("Performance", "EngineFPSLimit", 60,
                 "Target frame rate for the Unity engine main loop in Single Window mode. 0 = Uncapped. Presets: 30 (heavy scenes), 60 (recommended/balanced), 90, 120, 0 (uncapped). Remix continues rendering at full speed.");
@@ -360,7 +364,8 @@ namespace UnityRemix
                 configAutoDetectUI,
                 configUICameraNames,
                 configSingleWindowUIOverlay,
-                configUIOverlayFPS
+                configUIOverlayFPS,
+                configHideUIOnRemixMenu
             );
             
             lightConverter = new RemixLightConverter(
@@ -692,6 +697,7 @@ namespace UnityRemix
                 case "AutoDetectUI": return configAutoDetectUI.Value;
                 case "SingleWindowUIOverlay": return configSingleWindowUIOverlay.Value;
                 case "PreventSlowMotion": return configPreventSlowMotion.Value;
+                case "HideUIOnRemixMenu": return configHideUIOnRemixMenu.Value;
                 default: return false;
             }
         }
@@ -765,6 +771,7 @@ namespace UnityRemix
                 case "AutoDetectUI": configAutoDetectUI.Value = value; break;
                 case "SingleWindowUIOverlay": configSingleWindowUIOverlay.Value = value; break;
                 case "PreventSlowMotion": configPreventSlowMotion.Value = value; break;
+                case "HideUIOnRemixMenu": configHideUIOnRemixMenu.Value = value; break;
             }
         }
 

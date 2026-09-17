@@ -96,6 +96,38 @@ namespace UnityRemix
         private const uint WM_MBUTTONDOWN = 0x0207;
         private const uint WM_MBUTTONUP = 0x0208;
 
+        [DllImport("comctl32.dll", SetLastError = true)]
+        private static extern bool SetWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, UIntPtr uIdSubclass, UIntPtr dwRefData);
+
+        [DllImport("comctl32.dll", SetLastError = true)]
+        private static extern bool RemoveWindowSubclass(IntPtr hWnd, SubclassProc pfnSubclass, UIntPtr uIdSubclass);
+
+        [DllImport("comctl32.dll")]
+        private static extern IntPtr DefSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+
+        private delegate IntPtr SubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData);
+        private static SubclassProc gameWindowSubclassDelegate;
+        private static bool gameWindowSubclassed = false;
+        private const uint SUBCLASS_ID_GAME_WINDOW = 1001;
+
+        private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
+        {
+            if (uMsg == WM_SETCURSOR)
+            {
+                if (isRemixUIOpen)
+                {
+                    SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
+                    return new IntPtr(1);
+                }
+                else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+                {
+                    SetCursor(IntPtr.Zero);
+                    return new IntPtr(1);
+                }
+            }
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
+
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 
@@ -450,11 +482,31 @@ namespace UnityRemix
             return found;
         }
 
+        public void EnsureGameWindowSubclassed()
+        {
+            if (gameWindow == IntPtr.Zero)
+            {
+                gameWindow = FindGameWindow();
+            }
+
+            if (gameWindow != IntPtr.Zero && !gameWindowSubclassed)
+            {
+                gameWindowSubclassDelegate = GameWindowSubclassProc;
+                gameWindowSubclassed = SetWindowSubclass(gameWindow, gameWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_GAME_WINDOW, UIntPtr.Zero);
+                if (gameWindowSubclassed)
+                {
+                    logger?.LogInfo($"[RemixWindowManager] Subclassed gameWindow 0x{gameWindow:X} to intercept WM_SETCURSOR and eliminate cursor flicker.");
+                }
+            }
+        }
+
         /// <summary>
         /// Synchronizes the embedded child window size and position with the parent game window.
         /// </summary>
         public void SyncWindowBounds()
         {
+            EnsureGameWindowSubclassed();
+
             if (!isEmbedded || remixWindow == IntPtr.Zero || gameWindow == IntPtr.Zero)
                 return;
 
@@ -583,6 +635,7 @@ namespace UnityRemix
                 else
                 {
                     logger.LogInfo($"[RemixWindowManager] SingleWindow mode active: game window = 0x{gameWindow:X}, method = {method}");
+                    EnsureGameWindowSubclassed();
                 }
             }
 
