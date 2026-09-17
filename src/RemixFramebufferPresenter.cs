@@ -204,11 +204,12 @@ namespace UnityRemix
                             SetupCopyModeBlitter(worldCam);
                         }
 
-                        // 4. Route overlay and WorldSpace canvases to primary UI camera
+                        // 4. Route overlay canvases to dedicated UI camera
                         if (uiDetector.UICameras.Count > 0)
                         {
-                            uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
-                            uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                            var targetCam = uiDetector.DedicatedUICamera ?? uiDetector.UICameras[0];
+                            uiDetector.RouteOverlayCanvasesToCamera(targetCam);
+                            uiDetector.RouteVideoPlayersToCamera(targetCam);
                             Canvas.ForceUpdateCanvases();
                         }
                     }
@@ -364,8 +365,9 @@ namespace UnityRemix
             if (uiOverlay != null && uiDetector.UICameras.Count > 0)
             {
                 uiOverlay.ConfigureUICameras(uiDetector.UICameras);
-                uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
-                uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                var targetCam = uiDetector.DedicatedUICamera ?? uiDetector.UICameras[0];
+                uiDetector.RouteOverlayCanvasesToCamera(targetCam);
+                uiDetector.RouteVideoPlayersToCamera(targetCam);
                 lastCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
             }
         }
