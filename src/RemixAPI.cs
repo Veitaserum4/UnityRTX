@@ -635,6 +635,22 @@ namespace UnityRemix
             [Out] char[] lpBuffer,
             IntPtr lpFilePart);
 
+        public enum remixapi_UIState : int
+        {
+            REMIXAPI_UI_STATE_NONE = 0,
+            REMIXAPI_UI_STATE_BASIC = 1,
+            REMIXAPI_UI_STATE_ADVANCED = 2
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_UIState PFN_remixapi_GetUIState();
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate int PFN_remixapi_SetUIState(remixapi_UIState state);
+
+        public static PFN_remixapi_GetUIState GetUIStateFunc;
+        public static PFN_remixapi_SetUIState SetUIStateFunc;
+
         private static IntPtr _remixDll = IntPtr.Zero;
 
         /// <summary>Handle to the loaded d3d9.dll (Remix runtime). Used by RemixImGui for GetProcAddress.</summary>
@@ -693,6 +709,18 @@ namespace UnityRemix
 
             remixDll = hModule;
             _remixDll = hModule;
+
+            IntPtr getUIStatePtr = GetProcAddress(hModule, "remixapi_GetUIState");
+            if (getUIStatePtr != IntPtr.Zero)
+            {
+                GetUIStateFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetUIState>(getUIStatePtr);
+            }
+            IntPtr setUIStatePtr = GetProcAddress(hModule, "remixapi_SetUIState");
+            if (setUIStatePtr != IntPtr.Zero)
+            {
+                SetUIStateFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_SetUIState>(setUIStatePtr);
+            }
+
             return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS;
         }
 
