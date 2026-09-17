@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using BepInEx.Logging;
 using UnityEngine;
@@ -23,66 +24,62 @@ namespace UnityRemix
         private readonly BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu;
         private RenderTexture uiRenderTexture;
         private bool isReadbackPending = false;
+        private bool isProcessingOverlay = false;
+        private bool isOverlayVisible = false;
         private int currentWidth = 0;
         private int currentHeight = 0;
         private float lastReadbackRequestTime = 0f;
-        private volatile bool isProcessingOverlay = false;
-        private byte[] processPixels = null;
-        private int lastOverlayX = -9999;
-        private int lastOverlayY = -9999;
-        private int lastOverlayW = -9999;
-        private int lastOverlayH = -9999;
+        private int updateLogCounter = 0;
 
-        // Win32 DIB state for UpdateLayeredWindow
-        private readonly object dibLock = new object();
-        private IntPtr overlayHdc = IntPtr.Zero;
-        private IntPtr overlayDib = IntPtr.Zero;
-        private IntPtr overlayOldBmp = IntPtr.Zero;
-        private IntPtr overlayBits = IntPtr.Zero;
-        private int dibWidth = 0;
-        private int dibHeight = 0;
+        // Overlay window geometry tracking
+        private int lastOverlayX = -1;
+        private int lastOverlayY = -1;
+        private int lastOverlayW = -1;
+        private int lastOverlayH = -1;
 
-        // Original camera settings to restore on disable/unload
+        // Camera capture state
+        private readonly Dictionary<Camera, SavedCameraState> originalCameraStates = new Dictionary<Camera, SavedCameraState>();
+
         private struct SavedCameraState
         {
             public RenderTexture targetTexture;
             public CameraClearFlags clearFlags;
             public Color backgroundColor;
         }
-        private readonly Dictionary<Camera, SavedCameraState> originalCameraStates = new Dictionary<Camera, SavedCameraState>();
+
+        // Win32 DIB presentation state
+        private IntPtr overlayHdc = IntPtr.Zero;
+        private IntPtr overlayDib = IntPtr.Zero;
+        private IntPtr overlayOldBmp = IntPtr.Zero;
+        private IntPtr overlayBits = IntPtr.Zero;
+        private int dibWidth = 0;
+        private int dibHeight = 0;
+        private readonly object dibLock = new object();
+        private byte[] processPixels;
 
         #region Win32 Constants and P/Invoke
 
-        private const uint WS_POPUP = 0x80000000;
-        private const uint WS_VISIBLE = 0x10000000;
-        private const uint WS_DISABLED = 0x08000000;
-        private const uint WS_EX_LAYERED = 0x00080000;
-        private const uint WS_EX_TRANSPARENT = 0x00000020;
-        private const uint WS_EX_TOOLWINDOW = 0x00000080;
-        private const uint WS_EX_NOACTIVATE = 0x08000000;
+        private const int WS_EX_LAYERED = 0x00080000;
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int WS_POPUP = unchecked((int)0x80000000);
+        private const int WS_VISIBLE = 0x10000000;
+        private const int WS_DISABLED = 0x08000000;
 
+        private const uint ULW_ALPHA = 0x00000002;
+        private const byte AC_SRC_OVER = 0x00;
+        private const byte AC_SRC_ALPHA = 0x01;
+
+        private static readonly IntPtr HWND_TOP = IntPtr.Zero;
+        private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOMOVE = 0x0002;
-        private const uint SWP_NOZORDER = 0x0004;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SWP_SHOWWINDOW = 0x0040;
 
         private const int SW_HIDE = 0;
         private const int SW_SHOWNOACTIVATE = 4;
-
-        private const byte AC_SRC_OVER = 0x00;
-        private const byte AC_SRC_ALPHA = 0x01;
-        private const uint ULW_ALPHA = 0x00000002;
-
-        private bool isOverlayVisible = true;
-        private int updateLogCounter = 0;
-        private static readonly IntPtr HWND_TOP = IntPtr.Zero;
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern bool BringWindowToTop(IntPtr hWnd);
 
         [StructLayout(LayoutKind.Sequential)]
         private struct POINT
@@ -138,15 +135,14 @@ namespace UnityRemix
         private struct BITMAPINFO
         {
             public BITMAPINFOHEADER bmiHeader;
-            public uint bmiColors;
         }
 
-        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr CreateWindowExW(
-            uint dwExStyle,
-            string lpClassName,
-            string lpWindowName,
-            uint dwStyle,
+            int dwExStyle,
+            [MarshalAs(UnmanagedType.LPWStr)] string lpClassName,
+            [MarshalAs(UnmanagedType.LPWStr)] string lpWindowName,
+            int dwStyle,
             int x, int y, int nWidth, int nHeight,
             IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
 
@@ -154,6 +150,9 @@ namespace UnityRemix
         private static extern bool DestroyWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
         [DllImport("user32.dll")]
@@ -196,7 +195,7 @@ namespace UnityRemix
         [DllImport("gdi32.dll")]
         private static extern bool DeleteDC(IntPtr hdc);
 
-        [DllImport("gdi32.dll")]
+        [DllImport("gdi32.dll", SetLastError = true)]
         private static extern IntPtr CreateDIBSection(
             IntPtr hdc,
             ref BITMAPINFO pbmi,
@@ -286,16 +285,29 @@ namespace UnityRemix
             int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
             int threeDMask = RemixUIDetector.CurrentThreeDLayerMask & ~uiLayerBit;
 
-            foreach (var cam in managedCameras)
+            var sortedCams = managedCameras.Where(c => c != null).OrderBy(c => c.depth).ToList();
+            bool isFirst = true;
+            foreach (var cam in sortedCams)
             {
-                if (cam == null) continue;
+                var targetClear = isFirst ? CameraClearFlags.SolidColor : CameraClearFlags.Depth;
+                var targetBg = new Color(0, 0, 0, 0);
+
+                var hook = cam.GetComponent<RemixUICameraHook>();
+                if (hook != null)
+                {
+                    hook.clearFlags = targetClear;
+                    hook.backgroundColor = targetBg;
+                    hook.targetTexture = uiRenderTexture;
+                }
+
                 cam.targetTexture = uiRenderTexture;
                 cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
-                cam.clearFlags = CameraClearFlags.SolidColor;
-                cam.backgroundColor = new Color(0, 0, 0, 0);
+                cam.clearFlags = targetClear;
+                cam.backgroundColor = targetBg;
                 cam.cullingMask &= ~threeDMask; // Ensure layers containing 3D meshes are never rendered by UI camera
                 cam.cullingMask &= ~1; // Strip Default (0)
                 cam.cullingMask |= uiLayerBit;
+                isFirst = false;
             }
         }
 
@@ -385,10 +397,10 @@ namespace UnityRemix
             EnsureRenderTexture(width, height);
 
             managedCameras.Clear();
+            var sortedCams = uiCameras.Where(c => c != null).OrderBy(c => c.depth).ToList();
             bool isFirst = true;
-            foreach (var cam in uiCameras)
+            foreach (var cam in sortedCams)
             {
-                if (cam == null) continue;
                 managedCameras.Add(cam);
 
                 if (!originalCameraStates.ContainsKey(cam))
@@ -416,12 +428,10 @@ namespace UnityRemix
                 hook.backgroundColor = targetBg;
 
                 cam.targetTexture = uiRenderTexture;
+                cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
                 cam.clearFlags = targetClear;
-                if (isFirst)
-                {
-                    cam.backgroundColor = targetBg;
-                    isFirst = false;
-                }
+                cam.backgroundColor = targetBg;
+                isFirst = false;
             }
 
             logger?.LogInfo($"[RemixUIOverlay] Configured {uiCameras.Count} UI cameras to render to UI RenderTexture.");

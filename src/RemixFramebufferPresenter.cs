@@ -149,11 +149,12 @@ namespace UnityRemix
                     }
 
                     // Check for keypress diagnostics (F8 or Escape)
+                    bool escapePressed = Input.GetKeyDown(KeyCode.Escape);
                     if (Input.GetKeyDown(KeyCode.F8))
                     {
                         uiDetector.DumpUIState("F8 Key Pressed (Manual UI Diagnostic)");
                     }
-                    else if (Input.GetKeyDown(KeyCode.Escape))
+                    else if (escapePressed)
                     {
                         uiDetector.DumpUIState("Escape Key Pressed (Menu/Pause Diagnostic)");
                     }
@@ -162,14 +163,14 @@ namespace UnityRemix
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
 
                     int currentCameraCount = Camera.allCamerasCount;
-                    int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
+                    int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>(true).Length;
                     int currentW = Screen.width;
                     int currentH = Screen.height;
                     bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
                                              (currentW != lastScreenWidth || currentH != lastScreenHeight);
                     bool cameraCountChanged = (currentCameraCount != lastCameraCount);
                     bool canvasCountChanged = (currentCanvasCount != lastCanvasCount);
-                    bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0) || (frameCount % 180 == 0);
+                    bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0) || escapePressed || (frameCount % 180 == 0);
 
                     if (shouldCheck)
                     {
@@ -368,7 +369,7 @@ namespace UnityRemix
                 var targetCam = uiDetector.DedicatedUICamera ?? uiDetector.UICameras[0];
                 uiDetector.RouteOverlayCanvasesToCamera(targetCam);
                 uiDetector.RouteVideoPlayersToCamera(targetCam);
-                lastCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
+                lastCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>(true).Length;
             }
         }
 
