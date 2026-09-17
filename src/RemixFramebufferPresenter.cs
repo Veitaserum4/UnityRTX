@@ -35,6 +35,7 @@ namespace UnityRemix
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
         private ConfigEntry<int> configUIOverlayFPS;
+        private ConfigEntry<bool> configHideUIOnRemixMenu;
 
         // Tracking suppressed world cameras
         private readonly Dictionary<Camera, int> originalCullingMasks = new Dictionary<Camera, int>();
@@ -58,7 +59,8 @@ namespace UnityRemix
             ConfigEntry<bool> autoDetectUI,
             ConfigEntry<string> uiCameraNames,
             ConfigEntry<bool> singleWindowUIOverlay,
-            ConfigEntry<int> uiOverlayFPS = null)
+            ConfigEntry<int> uiOverlayFPS = null,
+            ConfigEntry<bool> hideUIOnRemixMenu = null)
         {
             this.logger = logger;
             this.windowManager = windowManager;
@@ -70,6 +72,7 @@ namespace UnityRemix
             this.configUICameraNames = uiCameraNames;
             this.configSingleWindowUIOverlay = singleWindowUIOverlay;
             this.configUIOverlayFPS = uiOverlayFPS;
+            this.configHideUIOnRemixMenu = hideUIOnRemixMenu;
 
             uiDetector = new RemixUIDetector(
                 logger,
@@ -92,6 +95,9 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         private static extern short GetAsyncKeyState(int vKey);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetCursor(IntPtr hCursor);
+
         private const int VK_MENU = 0x12; // Alt key
         private const int VK_X = 0x58;    // 'X' key
         private bool wasAltXPressed = false;
@@ -105,12 +111,16 @@ namespace UnityRemix
 
         private int lastCameraCount = -1;
         private int lastCanvasCount = -1;
+        private int lastScreenWidth = -1;
+        private int lastScreenHeight = -1;
 
         public void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene)
         {
             sceneRefreshCounter = 15; // Re-evaluate suppression over the next 15 frames to catch async objects
             lastCameraCount = -1;
             lastCanvasCount = -1;
+            lastScreenWidth = -1;
+            lastScreenHeight = -1;
             if (RemixWindowManager.IsRemixUIOpen)
             {
                 RemixWindowManager.SetRemixUIOpen(false);
@@ -171,11 +181,24 @@ namespace UnityRemix
                     }
 
                     int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
-                    if (currentCanvasCount != lastCanvasCount && uiDetector.UICameras.Count > 0)
+                    int currentW = Screen.width;
+                    int currentH = Screen.height;
+                    bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
+                                             (currentW != lastScreenWidth || currentH != lastScreenHeight);
+
+                    if ((currentCanvasCount != lastCanvasCount || resolutionChanged) && uiDetector.UICameras.Count > 0)
                     {
                         lastCanvasCount = currentCanvasCount;
+                        lastScreenWidth = currentW;
+                        lastScreenHeight = currentH;
                         uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
                         uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                        Canvas.ForceUpdateCanvases();
+                    }
+                    else
+                    {
+                        lastScreenWidth = currentW;
+                        lastScreenHeight = currentH;
                     }
 
                     // Sync embedded window bounds
@@ -218,6 +241,10 @@ namespace UnityRemix
             {
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
+            }
+            else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+            {
+                SetCursor(IntPtr.Zero);
             }
 
             // Ensure game window retains activation and focus during startup
@@ -309,7 +336,7 @@ namespace UnityRemix
 
             if (uiOverlay == null && gameWnd != IntPtr.Zero)
             {
-                uiOverlay = new RemixUIOverlay(logger, gameWnd, configUIOverlayFPS);
+                uiOverlay = new RemixUIOverlay(logger, gameWnd, configUIOverlayFPS, configHideUIOnRemixMenu);
                 if (!uiOverlay.Initialize())
                 {
                     uiOverlay = null;

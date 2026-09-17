@@ -1186,6 +1186,9 @@ namespace UnityRemix
                     };
                 }
 
+                if (surfaces.Length == 0)
+                    return IntPtr.Zero;
+
                 GCHandle surfaceArrayHandle = GCHandle.Alloc(surfaces, GCHandleType.Pinned);
                 surfaceHandles.Add(surfaceArrayHandle);
 

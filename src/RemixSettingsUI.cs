@@ -34,7 +34,12 @@ namespace UnityRemix
         private bool _disableInEngineRendering;
         private bool _autoDetectUI;
         private bool _singleWindowUIOverlay;
+        private int _uiOverlayFPS;
+        private bool _hideUIOnRemixMenu;
         private string _selectedCameraName;
+        private int _engineFPSLimit;
+        private bool _preventSlowMotion;
+        private int _staticMeshFrameSkip;
 
         public RemixSettingsUI(ManualLogSource log, UnityRemixPlugin plugin)
         {
@@ -100,6 +105,21 @@ namespace UnityRemix
                     _plugin.SetConfig("SingleWindowUIOverlay", _singleWindowUIOverlay);
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Renders detected UI with per-pixel alpha directly over the embedded Remix viewport.");
+
+                if (_singleWindowUIOverlay)
+                {
+                    RemixImGui.Indent();
+                    if (RemixImGui.SliderInt("UI Overlay FPS", ref _uiOverlayFPS, 10, 300))
+                        _plugin.SetConfig("UIOverlayFPS", _uiOverlayFPS);
+                    if (RemixImGui.IsItemHovered())
+                        RemixImGui.SetTooltip("Target refresh rate for the transparent UI overlay window (10 to 300 FPS).");
+
+                    if (RemixImGui.Checkbox("Remove Game UI upon Remix Menu Opening", ref _hideUIOnRemixMenu))
+                        _plugin.SetConfig("HideUIOnRemixMenu", _hideUIOnRemixMenu);
+                    if (RemixImGui.IsItemHovered())
+                        RemixImGui.SetTooltip("Hides the game UI overlay when the Alt+X Remix menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
+                    RemixImGui.Unindent();
+                }
 
                 var presenter = _plugin.FramebufferPresenter;
                 if (presenter?.UIDetector != null)
@@ -334,12 +354,52 @@ namespace UnityRemix
             if (!RemixImGui.CollapsingHeader("Performance"))
                 return;
 
-            RemixImGui.Text("Used to lock the framerate of the wrapper itself, not the game.");
-
-            if (RemixImGui.DragInt("Target FPS", ref _targetFPS, 1, 0, 500))
+            RemixImGui.Text("Remix Renderer Framerate:");
+            if (RemixImGui.DragInt("Remix Target FPS", ref _targetFPS, 1, 0, 500))
                 _plugin.SetConfig("TargetFPS", _targetFPS);
-
             RemixImGui.Text(_targetFPS == 0 ? "(Uncapped)" : "");
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Framerate cap for the Remix background render thread.\n0 = Uncapped.");
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
+
+            RemixImGui.Text("Single Window Engine Optimization:");
+            
+            // Engine FPS Limit Combo
+            string previewFps = _engineFPSLimit == 0 ? "Uncapped" : $"{_engineFPSLimit} FPS";
+            if (RemixImGui.BeginCombo("Engine FPS Limit", previewFps))
+            {
+                int[] fpsOptions = { 0, 30, 60, 90, 120 };
+                string[] fpsLabels = { "Uncapped", "30 FPS (Heavy Scenes / Best Stability)", "60 FPS (Balanced / Recommended)", "90 FPS", "120 FPS" };
+                for (int i = 0; i < fpsOptions.Length; i++)
+                {
+                    bool selected = (_engineFPSLimit == fpsOptions[i]);
+                    if (RemixImGui.Selectable(fpsLabels[i], selected))
+                    {
+                        _engineFPSLimit = fpsOptions[i];
+                        _plugin.SetConfig("EngineFPSLimit", _engineFPSLimit);
+                    }
+                }
+                RemixImGui.EndCombo();
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Caps Unity engine update rate in Single Window mode.\nRemix continues rendering at full speed (e.g. 150-250+ FPS).\nLowering this (30 or 60 FPS) prevents game slowdowns and CPU bottlenecks.");
+
+            if (RemixImGui.Checkbox("Prevent Slow-Motion", ref _preventSlowMotion))
+                _plugin.SetConfig("PreventSlowMotion", _preventSlowMotion);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Raises Time.maximumDeltaTime so Unity physics and game logic\ndo not run in slow motion when frame times spike.");
+
+            if (RemixImGui.SliderInt("Static Mesh Frame Skip", ref _staticMeshFrameSkip, 1, 4))
+                _plugin.SetConfig("StaticMeshFrameSkip", _staticMeshFrameSkip);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Reuses cached static mesh instances across N frames instead of re-scanning thousands of renderers every frame.\n1 = Scan every frame (Default), 2 = Every 2nd frame (50% CPU save), etc.");
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
 
             if (RemixImGui.Checkbox("Hardware Skinning", ref _hardwareSkinning))
                 _plugin.SetConfig("HardwareSkinning", _hardwareSkinning);
@@ -383,7 +443,12 @@ namespace UnityRemix
             _disableInEngineRendering = _plugin.GetConfigBool("DisableInEngineRendering");
             _autoDetectUI = _plugin.GetConfigBool("AutoDetectUI");
             _singleWindowUIOverlay = _plugin.GetConfigBool("SingleWindowUIOverlay");
+            _uiOverlayFPS = _plugin.GetConfigInt("UIOverlayFPS");
+            _hideUIOnRemixMenu = _plugin.GetConfigBool("HideUIOnRemixMenu");
             _selectedCameraName = _plugin.GetConfigString("CameraName");
+            _engineFPSLimit = _plugin.GetConfigInt("EngineFPSLimit");
+            _preventSlowMotion = _plugin.GetConfigBool("PreventSlowMotion");
+            _staticMeshFrameSkip = _plugin.GetConfigInt("StaticMeshFrameSkip");
         }
 
         public void ResetState() { _initialized = false; }

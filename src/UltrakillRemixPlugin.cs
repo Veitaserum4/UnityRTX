@@ -55,6 +55,13 @@ namespace UnityRemix
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
         private ConfigEntry<int> configUIOverlayFPS;
+        private ConfigEntry<bool> configHideUIOnRemixMenu;
+
+        // Performance & Throttling
+        private ConfigEntry<int> configEngineFPSLimit;
+        private ConfigEntry<bool> configPreventSlowMotion;
+        private ConfigEntry<int> configStaticMeshFrameSkip;
+        private int lastAppliedEngineFPSLimit = -1;
         
         public static ManualLogSource LogSource { get; private set; }
         private RemixAPI.remixapi_Interface remixInterface;
@@ -226,16 +233,30 @@ namespace UnityRemix
             configSingleWindowUIOverlay = Config.Bind("Window", "SingleWindowUIOverlay", true,
                 "For Embedded mode, renders autodetected UI onto a transparent layered overlay window sitting on top of the Remix viewport.");
 
-            configUIOverlayFPS = Config.Bind("Window", "UIOverlayFPS", 30,
-                new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Default 30 FPS prevents DWM compositor queue starvation.",
-                    new AcceptableValueRange<int>(10, 60)));
+            configUIOverlayFPS = Config.Bind("Window", "UIOverlayFPS", 60,
+                new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Supports up to 300 FPS.",
+                    new AcceptableValueRange<int>(10, 300)));
+
+            configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", false,
+                "Hides the game UI overlay when the Remix Alt+X menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
+
+            // Performance & Frame Throttling
+            configEngineFPSLimit = Config.Bind("Performance", "EngineFPSLimit", 60,
+                "Target frame rate for the Unity engine main loop in Single Window mode. 0 = Uncapped. Presets: 30 (heavy scenes), 60 (recommended/balanced), 90, 120, 0 (uncapped). Remix continues rendering at full speed.");
+
+            configPreventSlowMotion = Config.Bind("Performance", "PreventSlowMotion", true,
+                "Prevents physics and game logic from slowing down when frame times spike by raising Time.maximumDeltaTime.");
+
+            configStaticMeshFrameSkip = Config.Bind("Performance", "StaticMeshFrameSkip", 1,
+                new ConfigDescription("Reuses cached static mesh instances across N frames instead of iterating thousands of renderers every frame. 1 = every frame (no skip), 2 = skip every other frame (50% CPU savings), etc.",
+                    new AcceptableValueRange<int>(1, 4)));
 
             LogSource.LogInfo("Configuration loaded:");
             LogSource.LogInfo($"  Camera Name: '{configCameraName.Value}' (empty = auto-detect)");
             LogSource.LogInfo($"  Camera Tag: '{configCameraTag.Value}'");
             LogSource.LogInfo($"  Game Geometry: {configUseGameGeometry.Value}");
             LogSource.LogInfo($"  Target FPS: {(configTargetFPS.Value == 0 ? "Uncapped" : configTargetFPS.Value.ToString())}");
-            LogSource.LogInfo($"  Single Window: {configSingleWindow.Value} (Method: {configSingleWindowMethod.Value}, SuppressInEngine: {configDisableInEngineRendering.Value}, AutoDetectUI: {configAutoDetectUI.Value})");
+            LogSource.LogInfo($"  Single Window: {configSingleWindow.Value} (Method: {configSingleWindowMethod.Value}, SuppressInEngine: {configDisableInEngineRendering.Value}, AutoDetectUI: {configAutoDetectUI.Value}, EngineFPSLimit: {configEngineFPSLimit.Value})");
         }
         
         private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
@@ -348,7 +369,8 @@ namespace UnityRemix
                 configAutoDetectUI,
                 configUICameraNames,
                 configSingleWindowUIOverlay,
-                configUIOverlayFPS
+                configUIOverlayFPS,
+                configHideUIOnRemixMenu
             );
             
             lightConverter = new RemixLightConverter(
@@ -391,7 +413,8 @@ namespace UnityRemix
                 configCaptureStaticMeshes,
                 configCaptureSkinnedMeshes,
                 configHardwareSkinning,
-                configPersistDisabledRenderers
+                configPersistDisabledRenderers,
+                configStaticMeshFrameSkip
             );
             frameCapture.LoadDisabledLayersString(configDisabledLayers.Value);
             
@@ -494,6 +517,29 @@ namespace UnityRemix
         void Update()
         {
             frameCount++;
+
+            // Engine frame throttling and DeltaTime slow-motion prevention
+            if (configSingleWindow.Value)
+            {
+                if (configEngineFPSLimit.Value > 0)
+                {
+                    if (Application.targetFrameRate != configEngineFPSLimit.Value)
+                        Application.targetFrameRate = configEngineFPSLimit.Value;
+                    if (QualitySettings.vSyncCount != 0)
+                        QualitySettings.vSyncCount = 0;
+                    lastAppliedEngineFPSLimit = configEngineFPSLimit.Value;
+                }
+                else if (lastAppliedEngineFPSLimit > 0)
+                {
+                    Application.targetFrameRate = -1;
+                    lastAppliedEngineFPSLimit = 0;
+                }
+
+                if (configPreventSlowMotion.Value && Time.maximumDeltaTime < 0.15f)
+                {
+                    Time.maximumDeltaTime = 0.15f;
+                }
+            }
 
             AdvanceDeviceRegistration();
             
@@ -734,6 +780,8 @@ namespace UnityRemix
                 case "DisableInEngineRendering": return configDisableInEngineRendering.Value;
                 case "AutoDetectUI": return configAutoDetectUI.Value;
                 case "SingleWindowUIOverlay": return configSingleWindowUIOverlay.Value;
+                case "PreventSlowMotion": return configPreventSlowMotion.Value;
+                case "HideUIOnRemixMenu": return configHideUIOnRemixMenu.Value;
                 default: return false;
             }
         }
@@ -779,6 +827,9 @@ namespace UnityRemix
             switch (key)
             {
                 case "TargetFPS": return configTargetFPS.Value;
+                case "EngineFPSLimit": return configEngineFPSLimit.Value;
+                case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
+                case "UIOverlayFPS": return configUIOverlayFPS.Value;
                 default: return 0;
             }
         }
@@ -806,6 +857,8 @@ namespace UnityRemix
                 case "DisableInEngineRendering": configDisableInEngineRendering.Value = value; break;
                 case "AutoDetectUI": configAutoDetectUI.Value = value; break;
                 case "SingleWindowUIOverlay": configSingleWindowUIOverlay.Value = value; break;
+                case "PreventSlowMotion": configPreventSlowMotion.Value = value; break;
+                case "HideUIOnRemixMenu": configHideUIOnRemixMenu.Value = value; break;
             }
         }
 
@@ -823,6 +876,9 @@ namespace UnityRemix
             switch (key)
             {
                 case "TargetFPS": configTargetFPS.Value = value; break;
+                case "EngineFPSLimit": configEngineFPSLimit.Value = value; break;
+                case "StaticMeshFrameSkip": configStaticMeshFrameSkip.Value = value; break;
+                case "UIOverlayFPS": configUIOverlayFPS.Value = value; break;
             }
         }
 
