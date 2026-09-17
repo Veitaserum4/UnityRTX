@@ -350,9 +350,29 @@ namespace UnityRemix
         /// </summary>
         public void UpdateOverlay()
         {
-            if (overlayWindow == IntPtr.Zero || uiRenderTexture == null || !uiRenderTexture.IsCreated()) return;
+            if (overlayWindow == IntPtr.Zero) return;
 
             SyncWindowBounds();
+
+            int targetW = Screen.width > 0 ? Screen.width : 1920;
+            int targetH = Screen.height > 0 ? Screen.height : 1080;
+            if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
+            {
+                targetW = clientRect.Width;
+                targetH = clientRect.Height;
+            }
+
+            if (targetW > 0 && targetH > 0 && (currentWidth != targetW || currentHeight != targetH))
+            {
+                if (!isReadbackPending && !isProcessingOverlay)
+                {
+                    logger?.LogInfo($"[RemixUIOverlay] Screen/Window resolution changed: {currentWidth}x{currentHeight} -> {targetW}x{targetH}. Resizing UI RenderTexture.");
+                    EnsureRenderTexture(targetW, targetH);
+                    Canvas.ForceUpdateCanvases();
+                }
+            }
+
+            if (uiRenderTexture == null || !uiRenderTexture.IsCreated()) return;
 
             if (!isReadbackPending && !isProcessingOverlay)
             {

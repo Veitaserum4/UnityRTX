@@ -105,12 +105,16 @@ namespace UnityRemix
 
         private int lastCameraCount = -1;
         private int lastCanvasCount = -1;
+        private int lastScreenWidth = -1;
+        private int lastScreenHeight = -1;
 
         public void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene)
         {
             sceneRefreshCounter = 15; // Re-evaluate suppression over the next 15 frames to catch async objects
             lastCameraCount = -1;
             lastCanvasCount = -1;
+            lastScreenWidth = -1;
+            lastScreenHeight = -1;
             if (RemixWindowManager.IsRemixUIOpen)
             {
                 RemixWindowManager.SetRemixUIOpen(false);
@@ -171,11 +175,24 @@ namespace UnityRemix
                     }
 
                     int currentCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>().Length;
-                    if (currentCanvasCount != lastCanvasCount && uiDetector.UICameras.Count > 0)
+                    int currentW = Screen.width;
+                    int currentH = Screen.height;
+                    bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
+                                             (currentW != lastScreenWidth || currentH != lastScreenHeight);
+
+                    if ((currentCanvasCount != lastCanvasCount || resolutionChanged) && uiDetector.UICameras.Count > 0)
                     {
                         lastCanvasCount = currentCanvasCount;
+                        lastScreenWidth = currentW;
+                        lastScreenHeight = currentH;
                         uiDetector.RouteOverlayCanvasesToCamera(uiDetector.UICameras[0]);
                         uiDetector.RouteVideoPlayersToCamera(uiDetector.UICameras[0]);
+                        Canvas.ForceUpdateCanvases();
+                    }
+                    else
+                    {
+                        lastScreenWidth = currentW;
+                        lastScreenHeight = currentH;
                     }
 
                     // Sync embedded window bounds
