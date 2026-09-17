@@ -430,21 +430,13 @@ namespace UnityRemix
             int uiLayer = LayerMask.NameToLayer("UI");
             if (uiLayer < 0) uiLayer = 5;
 
-            // Sanitize root canvas GameObject layer if it was on Default (0)
-            if (root.layer == 0)
-            {
-                root.layer = uiLayer;
-            }
+            // For ScreenSpaceOverlay canvases, ensure all UI elements are on UI layer so UI camera draws them
+            root.layer = uiLayer;
 
-            // Sanitize all child transforms in the canvas
             var transforms = root.GetComponentsInChildren<Transform>(true);
             for (int i = 0; i < transforms.Length; i++)
             {
-                var go = transforms[i].gameObject;
-                if (go.layer == 0)
-                {
-                    go.layer = uiLayer;
-                }
+                transforms[i].gameObject.layer = uiLayer;
             }
 
             // Ensure UI layer is included in camera culling mask

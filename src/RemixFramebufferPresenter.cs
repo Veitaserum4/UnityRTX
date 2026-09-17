@@ -169,7 +169,7 @@ namespace UnityRemix
                                              (currentW != lastScreenWidth || currentH != lastScreenHeight);
                     bool cameraCountChanged = (currentCameraCount != lastCameraCount);
                     bool canvasCountChanged = (currentCanvasCount != lastCanvasCount);
-                    bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0);
+                    bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0) || (frameCount % 180 == 0);
 
                     if (shouldCheck)
                     {
