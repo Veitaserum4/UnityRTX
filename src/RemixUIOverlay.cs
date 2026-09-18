@@ -305,9 +305,16 @@ namespace UnityRemix
                 cam.targetTexture = uiRenderTexture;
                 cam.clearFlags = targetClear;
                 cam.backgroundColor = targetBg;
-                cam.cullingMask &= ~threeDMask; // Ensure layers containing 3D meshes are never rendered by UI camera
-                cam.cullingMask &= ~1; // Strip Default (0)
-                cam.cullingMask |= uiLayerBit;
+                if (cam.name == "UnityRemix_DedicatedUICamera")
+                {
+                    cam.cullingMask = uiLayerBit;
+                }
+                else
+                {
+                    cam.cullingMask &= ~threeDMask; // Ensure layers containing 3D meshes are never rendered by UI camera
+                    cam.cullingMask &= ~1; // Strip Default (0)
+                    cam.cullingMask |= uiLayerBit;
+                }
                 isFirst = false;
             }
         }
@@ -1083,9 +1090,16 @@ namespace UnityRemix
                 int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
                 int threeDMask = RemixUIDetector.CurrentThreeDLayerMask & ~uiLayerBit;
 
-                cam.cullingMask &= ~threeDMask; // Ensure layers containing 3D meshes are never rendered by UI camera
-                cam.cullingMask &= ~1; // Ensure layer 0 (Default / 3D game scene) is never rendered by UI camera
-                cam.cullingMask |= uiLayerBit;
+                if (cam.name == "UnityRemix_DedicatedUICamera")
+                {
+                    cam.cullingMask = uiLayerBit;
+                }
+                else
+                {
+                    cam.cullingMask &= ~threeDMask; // Ensure layers containing 3D meshes are never rendered by UI camera
+                    cam.cullingMask &= ~1; // Ensure layer 0 (Default / 3D game scene) is never rendered by UI camera
+                    cam.cullingMask |= uiLayerBit;
+                }
             }
         }
 
