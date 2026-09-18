@@ -560,6 +560,7 @@ namespace UnityRemix
         void OnApplicationQuit()
         {
             LogSource.LogInfo("Application quitting...");
+            RemixWindowManager.UpdateCursorVisibility(false);
             isQuitting = true;
         }
         

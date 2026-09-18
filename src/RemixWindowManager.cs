@@ -30,6 +30,52 @@ namespace UnityRemix
         private bool isEmbedded = false;
         private static bool isEmbeddedStatic = false;
         private static volatile bool isRemixUIOpen = false;
+        public static volatile bool ShouldHideCursor = false;
+        private static bool isCursorHiddenViaShowCursor = false;
+        private static bool isRenderThreadCursorHidden = false;
+
+        [DllImport("user32.dll")]
+        public static extern int ShowCursor(bool bShow);
+
+        public static void UpdateCursorVisibility(bool shouldHide)
+        {
+            ShouldHideCursor = shouldHide;
+            if (shouldHide)
+            {
+                if (!isCursorHiddenViaShowCursor)
+                {
+                    int safety = 0;
+                    while (ShowCursor(false) >= 0 && safety++ < 10) { }
+                    isCursorHiddenViaShowCursor = true;
+                }
+            }
+            else
+            {
+                if (isCursorHiddenViaShowCursor)
+                {
+                    int safety = 0;
+                    while (ShowCursor(true) < 0 && safety++ < 10) { }
+                    isCursorHiddenViaShowCursor = false;
+                }
+            }
+        }
+
+        public static void SyncRenderThreadCursor()
+        {
+            bool hide = ShouldHideCursor;
+            if (hide && !isRenderThreadCursorHidden)
+            {
+                int safety = 0;
+                while (ShowCursor(false) >= 0 && safety++ < 10) { }
+                isRenderThreadCursorHidden = true;
+            }
+            else if (!hide && isRenderThreadCursorHidden)
+            {
+                int safety = 0;
+                while (ShowCursor(true) < 0 && safety++ < 10) { }
+                isRenderThreadCursorHidden = false;
+            }
+        }
 
         public IntPtr RemixWindow => remixWindow;
         public IntPtr GameWindow => gameWindow;
@@ -175,7 +221,7 @@ namespace UnityRemix
                     SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
                     return new IntPtr(1);
                 }
-                else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+                else if (ShouldHideCursor)
                 {
                     SetCursor(IntPtr.Zero);
                     return new IntPtr(1);
@@ -627,7 +673,7 @@ namespace UnityRemix
                             SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
                             return new IntPtr(1);
                         }
-                        else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+                        else if (ShouldHideCursor)
                         {
                             SetCursor(IntPtr.Zero);
                             return new IntPtr(1);
@@ -909,6 +955,7 @@ namespace UnityRemix
         /// </summary>
         public void PumpWindowsMessages()
         {
+            SyncRenderThreadCursor();
             MSG msg;
             while (PeekMessageW(out msg, IntPtr.Zero, 0, 0, PM_REMOVE))
             {
@@ -931,6 +978,13 @@ namespace UnityRemix
         /// </summary>
         public void DestroyRemixWindow()
         {
+            UpdateCursorVisibility(false);
+            if (isRenderThreadCursorHidden)
+            {
+                int safety = 0;
+                while (ShowCursor(true) < 0 && safety++ < 10) { }
+                isRenderThreadCursorHidden = false;
+            }
             CleanupCapture();
             if (remixWindow != IntPtr.Zero)
             {

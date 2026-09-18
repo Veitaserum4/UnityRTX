@@ -259,7 +259,7 @@ namespace UnityRemix
                     SetCursor(LoadCursorW(IntPtr.Zero, 32512 /* IDC_ARROW */));
                     return new IntPtr(1);
                 }
-                else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+                else if (RemixWindowManager.ShouldHideCursor)
                 {
                     SetCursor(IntPtr.Zero);
                     return new IntPtr(1);
