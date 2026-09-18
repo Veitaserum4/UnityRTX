@@ -265,13 +265,17 @@ namespace UnityRemix
             // Continuously query ground truth UI state directly from Remix runtime
             RemixWindowManager.SyncUIStateWithRemix(logger);
 
+            // Determine whether cursor should be hidden (in-game gameplay) or visible (menus/Remix UI/tabbed out)
+            bool shouldHide = Application.isFocused && !RemixWindowManager.IsRemixUIOpen && (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked);
+            RemixWindowManager.UpdateCursorVisibility(shouldHide);
+
             // While Remix UI is open, guarantee cursor is unlocked and visible
             if (RemixWindowManager.IsRemixUIOpen)
             {
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
             }
-            else if (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked)
+            else if (shouldHide)
             {
                 SetCursor(IntPtr.Zero);
             }
@@ -450,6 +454,7 @@ namespace UnityRemix
 
         public void Cleanup()
         {
+            RemixWindowManager.UpdateCursorVisibility(false);
             RestoreInEngineRendering();
         }
     }
