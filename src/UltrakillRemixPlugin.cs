@@ -573,11 +573,6 @@ namespace UnityRemix
             if (!deviceRegistered)
                 return;
             
-            if (frameCount % 300 == 1 && LogSource != null)
-            {
-                LogSource.LogInfo($"UpdateFromPersistent: frame={frameCount}, initialized={remixInitialized}, deviceReg={deviceRegistered}");
-            }
-            
             frameCount++;
 
             double engineMs = 0;

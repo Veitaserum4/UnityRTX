@@ -171,7 +171,6 @@ namespace UnityRemix
             {
                 cursorStateInitialized = true;
                 ShouldHideCursor = shouldHide;
-                instance?.logger?.LogInfo($"[CursorDiag] UpdateCursorVisibility: shouldHide={shouldHide}, Win32=[{GetCursorDiagnosticString()}]");
 
                 IntPtr targetCursor = shouldHide ? BlankCursor : LoadCursorW(IntPtr.Zero, IDC_ARROW);
                 SetCursor(targetCursor);
@@ -343,8 +342,6 @@ namespace UnityRemix
         private static bool gameWindowSubclassed = false;
         private const uint SUBCLASS_ID_GAME_WINDOW = 1001;
 
-        private static int gameWndMsgLogCount = 0;
-        private static int remixWndMsgLogCount = 0;
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
@@ -369,10 +366,6 @@ namespace UnityRemix
 
             if (uMsg == WM_SETCURSOR)
             {
-                if (gameWndMsgLogCount++ < 30 || (gameWndMsgLogCount % 120 == 0))
-                {
-                    instance?.logger?.LogInfo($"[CursorDiag-GameWnd #{gameWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={ShouldHideCursor}, RemixOpen={isRemixUIOpen}, Win32=[{GetCursorDiagnosticString()}]");
-                }
                 if (isRemixUIOpen)
                 {
                     SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
@@ -823,10 +816,6 @@ namespace UnityRemix
                     return DefWindowProcW(hWnd, msg, wParam, lParam);
 
                 case WM_SETCURSOR:
-                    if (remixWndMsgLogCount++ < 30 || (remixWndMsgLogCount % 120 == 0))
-                    {
-                        instance?.logger?.LogInfo($"[CursorDiag-RemixWnd #{remixWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={ShouldHideCursor}, RemixOpen={isRemixUIOpen}, Win32=[{GetCursorDiagnosticString()}]");
-                    }
                     if (isRemixUIOpen)
                     {
                         SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));

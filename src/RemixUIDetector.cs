@@ -23,6 +23,10 @@ namespace UnityRemix
         private readonly List<Camera> worldCameras = new List<Camera>();
         private readonly Dictionary<Canvas, RenderMode> originalCanvasRenderModes = new Dictionary<Canvas, RenderMode>();
         private readonly Dictionary<Canvas, Camera> originalCanvasCameras = new Dictionary<Canvas, Camera>();
+        private readonly HashSet<int> loggedRoutedCanvases = new HashSet<int>();
+        private readonly HashSet<int> loggedSanitizedCanvases = new HashSet<int>();
+        private int lastLoggedWorldCamCount = -1;
+        private int lastLoggedUICamCount = -1;
 
         // UI keywords: checked via token matching or substring for longer keywords
         private static readonly string[] UIKeywords = new string[]
@@ -213,23 +217,14 @@ namespace UnityRemix
             var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
             var canvasCameras = new HashSet<Camera>();
 
-            logger?.LogInfo($"[RemixUIDetector] --- Scan Started ({allCameras.Length} cameras, {canvases.Length} active/loaded canvases) ---");
-
             foreach (var canvas in canvases)
             {
                 if (canvas == null) continue;
-                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}, layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, active={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}]");
 
                 if (canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera != null)
                 {
                     canvasCameras.Add(canvas.worldCamera);
                 }
-            }
-
-            foreach (var cam in allCameras)
-            {
-                if (cam == null || cam == dedicatedUICamera) continue;
-                logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}, depth={cam.depth}, clear={cam.clearFlags}, cullingMask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), targetTex='{cam.targetTexture?.name ?? "none"}', near={cam.nearClipPlane:F2}, far={cam.farClipPlane:F2}, parent='{cam.transform.parent?.name ?? "root"}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}]");
             }
 
             CurrentThreeDLayerMask = ComputeThreeDLayerMask();
@@ -255,7 +250,6 @@ namespace UnityRemix
                 if (manualUINames.Contains(camName))
                 {
                     uiCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as UI (manual override)");
                     continue;
                 }
 
@@ -263,7 +257,6 @@ namespace UnityRemix
                 if (cam == primaryWorld)
                 {
                     worldCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as World (primary 3D camera)");
                     continue;
                 }
 
@@ -271,7 +264,6 @@ namespace UnityRemix
                 if (MatchesExcludedKeyword(camName))
                 {
                     worldCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as World (matches excluded postprocess/utility keyword)");
                     continue;
                 }
 
@@ -281,7 +273,6 @@ namespace UnityRemix
                 if (renders3D && !hasAssociatedCanvas)
                 {
                     worldCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as World (renders 3D objects, no UI canvases)");
                     continue;
                 }
 
@@ -314,12 +305,10 @@ namespace UnityRemix
                 if (nameMatch || isCanvasCam || (rendersUILayer && avoidsDefaultLayer))
                 {
                     uiCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as UI (name:{nameMatch}, canvas:{isCanvasCam}, uiLayer:{rendersUILayer}, depth:{cam.depth})");
                 }
                 else
                 {
                     worldCameras.Add(cam);
-                    logger?.LogInfo($"[RemixUIDetector] Camera '{camName}' classified as World (cullingMask:0x{cam.cullingMask:X}, depth:{cam.depth})");
                 }
             }
 
@@ -355,7 +344,12 @@ namespace UnityRemix
 
             // Order UI cameras ascending by depth so they render in natural sequence
             uiCameras.Sort((a, b) => a.depth.CompareTo(b.depth));
-            logger?.LogInfo($"[RemixUIDetector] Scan complete: {worldCameras.Count} World Cameras, {uiCameras.Count} UI Cameras detected.");
+            if (worldCameras.Count != lastLoggedWorldCamCount || uiCameras.Count != lastLoggedUICamCount)
+            {
+                lastLoggedWorldCamCount = worldCameras.Count;
+                lastLoggedUICamCount = uiCameras.Count;
+                logger?.LogInfo($"[RemixUIDetector] Scan complete: {worldCameras.Count} World Cameras, {uiCameras.Count} UI Cameras detected.");
+            }
         }
 
         public Camera DedicatedUICamera => dedicatedUICamera;
@@ -396,7 +390,10 @@ namespace UnityRemix
                     if (isCameraAttached)
                     {
                         SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
-                        logger?.LogInfo($"[RemixUIDetector] Sanitized camera-attached HUD Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to UI layer");
+                        if (loggedSanitizedCanvases.Add(canvas.GetInstanceID()))
+                        {
+                            logger?.LogInfo($"[RemixUIDetector] Sanitized camera-attached HUD Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to UI layer");
+                        }
                     }
                     continue;
                 }
@@ -431,7 +428,10 @@ namespace UnityRemix
                         raycaster.blockingObjects = UnityEngine.UI.GraphicRaycaster.BlockingObjects.None;
                     }
 
-                    logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
+                    if (loggedRoutedCanvases.Add(canvas.GetInstanceID()))
+                    {
+                        logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
+                    }
                 }
                 else if (canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera == uiCamera)
                 {
@@ -539,6 +539,10 @@ namespace UnityRemix
 
             originalCanvasRenderModes.Clear();
             originalCanvasCameras.Clear();
+            loggedSanitizedCanvases.Clear();
+            loggedRoutedCanvases.Clear();
+            lastLoggedWorldCamCount = -1;
+            lastLoggedUICamCount = -1;
         }
 
         private static int CountBits(uint v)

@@ -31,7 +31,6 @@ namespace UnityRemix
         private int currentWidth = 0;
         private int currentHeight = 0;
         private float lastReadbackRequestTime = 0f;
-        private int updateLogCounter = 0;
 
         // Overlay window geometry tracking
         private int lastOverlayX = -1;
@@ -251,16 +250,11 @@ namespace UnityRemix
         private static bool overlayClassRegistered = false;
         private const string OVERLAY_CLASS_NAME = "UnityRemix_UIOverlay_Class";
 
-        private static int overlayWndMsgLogCount = 0;
 
         private static IntPtr OverlayWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
             if (msg == WM_SETCURSOR)
             {
-                if (overlayWndMsgLogCount++ < 30 || (overlayWndMsgLogCount % 120 == 0))
-                {
-                    Instance?.logger?.LogInfo($"[CursorDiag-OverlayWnd #{overlayWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={RemixWindowManager.ShouldHideCursor}, RemixOpen={RemixWindowManager.IsRemixUIOpen}, Win32=[{RemixWindowManager.GetCursorDiagnosticString()}]");
-                }
                 if (RemixWindowManager.IsRemixUIOpen)
                 {
                     SetCursor(LoadCursorW(IntPtr.Zero, 32512 /* IDC_ARROW */));
@@ -559,7 +553,6 @@ namespace UnityRemix
                     if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
                         return;
 
-                bool diagLog = (updateLogCounter++ < 20) || (updateLogCounter % 120 == 0);
                 int totalPixels = destWidth * destHeight;
                 int nonZeroPixelCount = 0;
                 int opaquePixelCount = 0;
@@ -714,16 +707,6 @@ namespace UnityRemix
                         }
                     }
                 }
-
-                float opaqueRatio = (float)opaquePixelCount / totalPixels;
-
-                if (diagLog)
-                {
-                    int centerIdx = (srcHeight / 2 * srcWidth + srcWidth / 2) * 4;
-                    logger?.LogInfo($"[RemixUIOverlay] AsyncFrame #{updateLogCounter}: {srcWidth}x{srcHeight} -> {destWidth}x{destHeight}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount} ({opaqueRatio:P2}), center=(R={processPixels[centerIdx]},G={processPixels[centerIdx+1]},B={processPixels[centerIdx+2]},A={processPixels[centerIdx+3]}), visible={isOverlayVisible}");
-                }
-
-
 
                 // If completely empty (no UI pixels rendered at all), present transparent once and skip redundant updates
                 if (nonZeroPixelCount == 0)
@@ -978,9 +961,7 @@ namespace UnityRemix
         public CameraClearFlags clearFlags = CameraClearFlags.Depth;
         public Color backgroundColor = new Color(0, 0, 0, 0);
         public ManualLogSource logger;
-
         private Camera cam;
-        private int hookCount = 0;
 
         void Awake()
         {
@@ -1002,11 +983,6 @@ namespace UnityRemix
             if (cam == null) cam = GetComponent<Camera>();
             if (cam != null && targetTexture != null)
             {
-                if (stage == "OnPreRender" && (hookCount++ < 15 || hookCount % 180 == 0))
-                {
-                    logger?.LogInfo($"[RemixUICameraHook] #{hookCount} {stage} on '{cam.name}' - preTarget='{cam.targetTexture?.name ?? "null"}', preClear={cam.clearFlags}, preMask=0x{cam.cullingMask:X}, assigning target '{targetTexture.name}'");
-                }
-
                 cam.targetTexture = targetTexture;
                 cam.SetTargetBuffers(targetTexture.colorBuffer, targetTexture.depthBuffer);
 
@@ -1041,10 +1017,6 @@ namespace UnityRemix
 
         void OnPostRender()
         {
-            if (hookCount <= 15 || hookCount % 180 == 0)
-            {
-                logger?.LogInfo($"[RemixUICameraHook] #{hookCount} OnPostRender on '{cam?.name}' finished.");
-            }
         }
     }
 }
