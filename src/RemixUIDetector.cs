@@ -338,12 +338,12 @@ namespace UnityRemix
                     dedicatedUICamera.backgroundColor = new Color(0, 0, 0, 0);
                     dedicatedUICamera.nearClipPlane = 0.1f;
                     dedicatedUICamera.farClipPlane = 1000f;
-                    dedicatedUICamera.cullingMask = ~1 & ~nonUIThreeDMask; // Render all layers except Default (0) and 3D geometry!
+                    dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0) or 3D world layers!
                     ConfigureSRPRenderData(dedicatedUICamera);
                     logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for overlay canvases.");
                 }
                 dedicatedUICamera.enabled = true;
-                dedicatedUICamera.cullingMask = ~1 & ~nonUIThreeDMask;
+                dedicatedUICamera.cullingMask = uiLayerBit;
                 if (primaryWorld != null)
                 {
                     SyncDedicatedUICameraTransform(primaryWorld);
@@ -549,11 +549,14 @@ namespace UnityRemix
                     canvas.renderMode = RenderMode.ScreenSpaceCamera;
                     canvas.worldCamera = uiCamera;
 
-                    // Ensure plane distance is placed closely in front of camera frustum
-                    // Use a close distance (1.5f) so 3D world geometry never occludes the canvas
-                    float minPlane = uiCamera.nearClipPlane + 0.05f;
-                    float maxPlane = Mathf.Max(minPlane + 0.5f, uiCamera.farClipPlane - 0.5f);
-                    canvas.planeDistance = Mathf.Clamp(1.5f, minPlane, maxPlane);
+                    // Ensure plane distance is at standard healthy distance within camera frustum
+                    // 100.0f aligns perfectly with GraphicRaycaster and CanvasScaler
+                    float minPlane = uiCamera.nearClipPlane + 1.0f;
+                    float maxPlane = Mathf.Max(minPlane + 1.0f, uiCamera.farClipPlane - 10.0f);
+                    if (canvas.planeDistance < minPlane || canvas.planeDistance > maxPlane)
+                    {
+                        canvas.planeDistance = Mathf.Clamp(100.0f, minPlane, maxPlane);
+                    }
 
                     // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders
                     var raycaster = canvas.GetComponent<UnityEngine.UI.GraphicRaycaster>();
