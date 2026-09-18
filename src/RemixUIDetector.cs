@@ -156,6 +156,8 @@ namespace UnityRemix
             return path;
         }
 
+        private bool hasDumpedInitialUIState = false;
+
         public void DumpUIState(string triggerReason)
         {
             logger?.LogInfo($"[RemixUIDetector] ==================== UI STATE DUMP ({triggerReason}) ====================");
@@ -171,7 +173,28 @@ namespace UnityRemix
                 bool isUI = uiCameras.Contains(cam);
                 bool isWorld = worldCameras.Contains(cam);
                 string classification = isUI ? "UI" : (isWorld ? "World" : "Unclassified");
-                logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}]: class={classification}, depth={cam.depth}, clear={cam.clearFlags}, mask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), target='{cam.targetTexture?.name ?? "none"}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}");
+                string targetTexStr = cam.targetTexture != null
+                    ? $"{cam.targetTexture.name} ({cam.targetTexture.width}x{cam.targetTexture.height}, fmt={cam.targetTexture.format})"
+                    : "none";
+                string urpInfo = "";
+                try
+                {
+                    var addDataCamType = Type.GetType("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
+                    if (addDataCamType != null)
+                    {
+                        var comp = cam.GetComponent(addDataCamType);
+                        if (comp != null)
+                        {
+                            var rType = addDataCamType.GetProperty("renderType")?.GetValue(comp, null);
+                            var post = addDataCamType.GetProperty("renderPostProcessing")?.GetValue(comp, null);
+                            var aa = addDataCamType.GetProperty("antialiasing")?.GetValue(comp, null);
+                            urpInfo = $", URP(renderType={rType}, post={post}, aa={aa})";
+                        }
+                    }
+                }
+                catch { }
+
+                logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}]: class={classification}, depth={cam.depth}, clear={cam.clearFlags}, bg=RGBA({cam.backgroundColor.r:F2},{cam.backgroundColor.g:F2},{cam.backgroundColor.b:F2},{cam.backgroundColor.a:F2}), mask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), target='{targetTexStr}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}{urpInfo}");
             }
 
             var allCanvases = Resources.FindObjectsOfTypeAll<Canvas>();
@@ -182,8 +205,35 @@ namespace UnityRemix
                 if (canvas == null) continue;
                 if (string.IsNullOrEmpty(canvas.gameObject.scene.name)) continue;
 
-                int graphicCount = canvas.GetComponentsInChildren<UnityEngine.UI.Graphic>(true).Length;
-                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]: scene='{canvas.gameObject.scene.name}', layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, activeInHierarchy={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}, graphics={graphicCount}");
+                var activeGraphics = canvas.GetComponentsInChildren<UnityEngine.UI.Graphic>(false);
+                int totalGraphics = canvas.GetComponentsInChildren<UnityEngine.UI.Graphic>(true).Length;
+                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]: scene='{canvas.gameObject.scene.name}', layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, activeInHierarchy={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}, activeGraphics={activeGraphics.Length}/{totalGraphics}");
+
+                if (canvas.gameObject.activeInHierarchy && canvas.enabled)
+                {
+                    foreach (var g in activeGraphics)
+                    {
+                        if (g == null) continue;
+                        var rt = g.rectTransform;
+                        string dim = rt != null ? $"{rt.rect.width:F0}x{rt.rect.height:F0}" : "unknown";
+                        string anchors = rt != null ? $"anchors=({rt.anchorMin.x:F2},{rt.anchorMin.y:F2})-({rt.anchorMax.x:F2},{rt.anchorMax.y:F2})" : "";
+                        string colorStr = $"RGBA({g.color.r:F2},{g.color.g:F2},{g.color.b:F2},{g.color.a:F2})";
+                        string shaderName = g.material != null && g.material.shader != null ? g.material.shader.name : "Default";
+
+                        bool isFullScreen = false;
+                        if (rt != null && (rt.rect.width >= Screen.width * 0.8f && rt.rect.height >= Screen.height * 0.8f))
+                        {
+                            isFullScreen = true;
+                        }
+                        else if (rt != null && rt.anchorMin == Vector2.zero && rt.anchorMax == Vector2.one)
+                        {
+                            isFullScreen = true;
+                        }
+
+                        string flag = isFullScreen ? " [*** POTENTIAL FULLSCREEN BACKGROUND/OVERLAY ***]" : "";
+                        logger?.LogInfo($"[RemixUIDetector]       Graphic '{g.name}' [{g.GetType().Name}]: size={dim}, {anchors}, color={colorStr}, shader='{shaderName}'{flag}");
+                    }
+                }
             }
             logger?.LogInfo($"[RemixUIDetector] ==========================================================================");
         }
@@ -203,6 +253,16 @@ namespace UnityRemix
             {
                 lastDumpedScene = curScene;
                 DumpUIState($"Scene Transition '{curScene}'");
+            }
+            else if (!hasDumpedInitialUIState)
+            {
+                var activeCams = Camera.allCameras;
+                var activeCanvs = UnityEngine.Object.FindObjectsOfType<Canvas>();
+                if ((activeCams != null && activeCams.Length > 0) || (activeCanvs != null && activeCanvs.Length > 0))
+                {
+                    hasDumpedInitialUIState = true;
+                    DumpUIState("Initial UI Discovery");
+                }
             }
 
             var allCameras = Camera.allCameras;
