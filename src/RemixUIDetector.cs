@@ -540,6 +540,18 @@ namespace UnityRemix
                         // Explicitly select default renderer index 0
                         var setRendererMethod = addDataCamType.GetMethod("SetRenderer", new Type[] { typeof(int) });
                         setRendererMethod?.Invoke(comp, new object[] { 0 });
+
+                        // Enable alpha output on URP asset so intermediate blits / passes preserve alpha
+                        try
+                        {
+                            var pipeAsset = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
+                            if (pipeAsset != null)
+                            {
+                                var alphaField = pipeAsset.GetType().GetField("m_AllowPostProcessAlphaOutput", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                                alphaField?.SetValue(pipeAsset, true);
+                            }
+                        }
+                        catch { }
                     }
                 }
             }
