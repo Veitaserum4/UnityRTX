@@ -214,6 +214,7 @@ namespace UnityRemix
 
                 try
                 {
+                    bool hasGeometry = false;
                     if (configUseGameGeometry.Value)
                     {
                         // Process queued mesh creation on render thread (prevents main thread deadlocks)
@@ -228,7 +229,7 @@ namespace UnityRemix
                         using (RemixTracy.Zone("RenderGameGeometry"))
                         {
                             var sw = System.Diagnostics.Stopwatch.StartNew();
-                            RenderGameGeometry();
+                            hasGeometry = RenderGameGeometry();
                             renderGeomMs = sw.Elapsed.TotalMilliseconds;
                         }
                         
@@ -263,11 +264,12 @@ namespace UnityRemix
                                 UnityEngine.Matrix4x4.identity,
                                 1
                             );
+                            hasGeometry = true;
                         }
                     }
                     
-                    // Present
-                    if (presentFunc != null)
+                    // Present (only when geometry has been submitted to prevent DXVK divide-by-zero crashes on empty scenes)
+                    if (presentFunc != null && hasGeometry)
                     {
                         using (RemixTracy.Zone("RemixPresent"))
                         {
@@ -310,7 +312,7 @@ namespace UnityRemix
         /// <summary>
         /// Render game geometry from captured frame state
         /// </summary>
-        private void RenderGameGeometry()
+        private bool RenderGameGeometry()
         {
             // Get frame state atomically
             RemixFrameCapture.FrameState state;
@@ -397,16 +399,32 @@ namespace UnityRemix
             }
             
             // Draw skinned meshes
-            RenderSkinnedMeshes(state, objectPickingValue);
+            objectPickingValue = RenderSkinnedMeshes(state, objectPickingValue);
+
+            // If no geometry was drawn this frame, submit a tiny dummy triangle far below the world.
+            // DXVK-Remix has a divide-by-zero crash in DxvkBuffer::DxvkBuffer (256 / (surfaceCount * 128))
+            // if materials exist in the material cache but 0 mesh surfaces/instances are submitted during present.
+            if (objectPickingValue == 1 && testMeshHandle != IntPtr.Zero)
+            {
+                var dummyMatrix = UnityEngine.Matrix4x4.TRS(
+                    new UnityEngine.Vector3(0, -999999f, 0),
+                    UnityEngine.Quaternion.identity,
+                    UnityEngine.Vector3.one * 0.0001f
+                );
+                meshConverter.DrawMeshInstance(testMeshHandle, dummyMatrix, objectPickingValue);
+                objectPickingValue++;
+            }
+
+            return objectPickingValue > 1;
         }
         
         /// <summary>
         /// Render skinned meshes from frame state
         /// </summary>
-        private void RenderSkinnedMeshes(RemixFrameCapture.FrameState state, uint startObjectPickingValue)
+        private uint RenderSkinnedMeshes(RemixFrameCapture.FrameState state, uint startObjectPickingValue)
         {
             if (state.skinned == null || state.skinned.Count == 0)
-                return;
+                return startObjectPickingValue;
             
             HashSet<ulong> updatedMeshes = new HashSet<ulong>();
             uint objectPickingValue = startObjectPickingValue;
@@ -497,6 +515,8 @@ namespace UnityRemix
             {
                 meshConverter.CleanupStaleSkinnedMeshes(updatedMeshes);
             }
+
+            return objectPickingValue;
         }
     }
 }

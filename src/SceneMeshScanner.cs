@@ -1073,6 +1073,10 @@ namespace UnityRemix
 
         private IntPtr CreateRemixMesh(ScannedMeshData data)
         {
+            if (data.Vertices == null || data.Vertices.Length == 0 ||
+                data.Surfaces == null || data.Surfaces.Length == 0)
+                return IntPtr.Zero;
+
             if (meshHandles.TryGetValue(data.MeshHash, out IntPtr existing))
                 return existing;
 
@@ -1127,11 +1131,14 @@ namespace UnityRemix
                     vertexHandles.Add(sharedVertexHandle);
                 }
 
-                // Build one surface per submesh, each with its own material
-                var surfaces = new RemixAPI.remixapi_MeshInfoSurfaceTriangles[data.Surfaces.Length];
+                // Build one surface per submesh, each with its own material (skipping non-triangle or empty surfaces)
+                var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 for (int s = 0; s < data.Surfaces.Length; s++)
                 {
                     var surf = data.Surfaces[s];
+                    if (surf.Indices == null || surf.Indices.Length < 3 || (surf.Indices.Length % 3) != 0)
+                        continue;
+
                     uint[] surfIndices = new uint[surf.Indices.Length];
                     for (int i = 0; i < surf.Indices.Length; i++)
                         surfIndices[i] = (uint)surf.Indices[i];
@@ -1174,7 +1181,7 @@ namespace UnityRemix
                         vertsCount = (ulong)sharedRemixVerts.Length;
                     }
 
-                    surfaces[s] = new RemixAPI.remixapi_MeshInfoSurfaceTriangles
+                    surfaces.Add(new RemixAPI.remixapi_MeshInfoSurfaceTriangles
                     {
                         vertices_values = vertsPtr,
                         vertices_count = vertsCount,
@@ -1183,13 +1190,14 @@ namespace UnityRemix
                         skinning_hasvalue = 0,
                         skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
                         material = materialHandle
-                    };
+                    });
                 }
 
-                if (surfaces.Length == 0)
+                if (surfaces.Count == 0)
                     return IntPtr.Zero;
 
-                GCHandle surfaceArrayHandle = GCHandle.Alloc(surfaces, GCHandleType.Pinned);
+                var surfacesArray = surfaces.ToArray();
+                GCHandle surfaceArrayHandle = GCHandle.Alloc(surfacesArray, GCHandleType.Pinned);
                 surfaceHandles.Add(surfaceArrayHandle);
 
                 var meshInfo = new RemixAPI.remixapi_MeshInfo
@@ -1198,7 +1206,7 @@ namespace UnityRemix
                     pNext = IntPtr.Zero,
                     hash = data.MeshHash,
                     surfaces_values = surfaceArrayHandle.AddrOfPinnedObject(),
-                    surfaces_count = (uint)surfaces.Length
+                    surfaces_count = (uint)surfacesArray.Length
                 };
 
                 IntPtr handle;

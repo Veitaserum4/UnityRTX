@@ -357,10 +357,13 @@ namespace UnityRemix
                     meshToMaterialMap[meshKey] = primaryMatId;
                 }
 
-                var surfaces = new RemixAPI.remixapi_MeshInfoSurfaceTriangles[submeshIndices.Count];
+                var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 for (int s = 0; s < submeshIndices.Count; s++)
                 {
                     var surfIndices = submeshIndices[s];
+                    if (surfIndices == null || surfIndices.Length < 3 || (surfIndices.Length % 3) != 0)
+                        continue;
+
                     GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
                     indexHandles.Add(idxHandle);
 
@@ -408,7 +411,7 @@ namespace UnityRemix
                         vertsCount = (ulong)sharedRemixVerts.Length;
                     }
 
-                    surfaces[s] = new RemixAPI.remixapi_MeshInfoSurfaceTriangles
+                    surfaces.Add(new RemixAPI.remixapi_MeshInfoSurfaceTriangles
                     {
                         vertices_values = vertsPtr,
                         vertices_count = vertsCount,
@@ -417,13 +420,14 @@ namespace UnityRemix
                         skinning_hasvalue = 0,
                         skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
                         material = materialHandle
-                    };
+                    });
                 }
 
-                if (surfaces.Length == 0)
+                if (surfaces.Count == 0)
                     return IntPtr.Zero;
 
-                GCHandle surfaceArrayHandle = GCHandle.Alloc(surfaces, GCHandleType.Pinned);
+                var surfacesArray = surfaces.ToArray();
+                GCHandle surfaceArrayHandle = GCHandle.Alloc(surfacesArray, GCHandleType.Pinned);
                 surfaceHandles.Add(surfaceArrayHandle);
 
                 ulong meshHash = data.MeshHash;
@@ -433,7 +437,7 @@ namespace UnityRemix
                     pNext = IntPtr.Zero,
                     hash = meshHash,
                     surfaces_values = surfaceArrayHandle.AddrOfPinnedObject(),
-                    surfaces_count = (uint)surfaces.Length
+                    surfaces_count = (uint)surfacesArray.Length
                 };
 
                 IntPtr handle;
@@ -450,7 +454,7 @@ namespace UnityRemix
                 }
 
                 meshCache[meshKey] = handle;
-                logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Length} surfaces");
+                logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces");
 
                 return handle;
             }
@@ -704,7 +708,7 @@ namespace UnityRemix
             int materialId,
             Color32[] colors = null)
         {
-            if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0)
+            if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length < 3 || (triangles.Length % 3) != 0)
                 return IntPtr.Zero;
             
             if (normals == null || normals.Length != vertices.Length)
@@ -1045,8 +1049,10 @@ namespace UnityRemix
                 RemixAPI.MakeVertex( 0,  5, 10),
                 RemixAPI.MakeVertex(-5, -5, 10),
             };
+            uint[] indices = new uint[3] { 0, 1, 2 };
             
             GCHandle vertexHandle = GCHandle.Alloc(vertices, GCHandleType.Pinned);
+            GCHandle indexHandle = GCHandle.Alloc(indices, GCHandleType.Pinned);
             
             try
             {
@@ -1054,8 +1060,8 @@ namespace UnityRemix
                 {
                     vertices_values = vertexHandle.AddrOfPinnedObject(),
                     vertices_count = (ulong)vertices.Length,
-                    indices_values = IntPtr.Zero,
-                    indices_count = 0,
+                    indices_values = indexHandle.AddrOfPinnedObject(),
+                    indices_count = (ulong)indices.Length,
                     skinning_hasvalue = 0,
                     skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
                     material = IntPtr.Zero
@@ -1094,6 +1100,7 @@ namespace UnityRemix
             finally
             {
                 vertexHandle.Free();
+                indexHandle.Free();
             }
         }
         
