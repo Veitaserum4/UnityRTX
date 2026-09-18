@@ -419,9 +419,32 @@ namespace UnityRemix
         {
             if (cam != null && managedCameras.Contains(cam))
             {
-                if (Time.frameCount % 180 == 1)
+                if (Time.frameCount % 180 == 1 || Time.frameCount <= 30)
                 {
-                    logger?.LogInfo($"[RemixUIOverlay] SRP beginCameraRendering: cam='{cam.name}', depth={cam.depth}, cullingMask=0x{cam.cullingMask:X}, targetTex={(cam.targetTexture != null ? cam.targetTexture.name : "null")}");
+                    string rtInfo = cam.targetTexture != null
+                        ? $"{cam.targetTexture.name} ({cam.targetTexture.width}x{cam.targetTexture.height}, fmt={cam.targetTexture.format}, gfxFmt={cam.targetTexture.graphicsFormat})"
+                        : "null";
+                    string addDataInfo = "";
+                    try
+                    {
+                        var addDataCamType = Type.GetType("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
+                        if (addDataCamType != null)
+                        {
+                            var comp = cam.GetComponent(addDataCamType);
+                            if (comp != null)
+                            {
+                                var rType = addDataCamType.GetProperty("renderType")?.GetValue(comp, null);
+                                var post = addDataCamType.GetProperty("renderPostProcessing")?.GetValue(comp, null);
+                                var aa = addDataCamType.GetProperty("antialiasing")?.GetValue(comp, null);
+                                var reqDepth = addDataCamType.GetProperty("requiresDepthTexture")?.GetValue(comp, null);
+                                var reqColor = addDataCamType.GetProperty("requiresColorTexture")?.GetValue(comp, null);
+                                addDataInfo = $", URP(renderType={rType}, post={post}, aa={aa}, reqDepth={reqDepth}, reqColor={reqColor})";
+                            }
+                        }
+                    }
+                    catch { }
+
+                    logger?.LogInfo($"[RemixUIOverlay] SRP beginCameraRendering: cam='{cam.name}', depth={cam.depth}, clear={cam.clearFlags}, bg=RGBA({cam.backgroundColor.r:F2},{cam.backgroundColor.g:F2},{cam.backgroundColor.b:F2},{cam.backgroundColor.a:F2}), mask=0x{cam.cullingMask:X}, targetTex={rtInfo}{addDataInfo}");
                 }
 
                 var hook = cam.GetComponent<RemixUICameraHook>();
@@ -633,6 +656,10 @@ namespace UnityRemix
                 int totalPixels = destWidth * destHeight;
                 int nonZeroPixelCount = 0;
                 int opaquePixelCount = 0;
+                int blackOpaqueCount = 0;
+                int colorOpaqueCount = 0;
+                int colorSemiCount = 0;
+                int colorZeroACount = 0;
 
                 unsafe
                 {
@@ -653,6 +680,10 @@ namespace UnityRemix
                                     byte* d = (byte*)dstPtr + rowOffset;
                                     int localNonZero = 0;
                                     int localOpaque = 0;
+                                    int localBlackOpaque = 0;
+                                    int localColorOpaque = 0;
+                                    int localColorSemi = 0;
+                                    int localColorZeroA = 0;
 
                                     for (int x = 0; x < destWidth; x++)
                                     {
@@ -671,18 +702,31 @@ namespace UnityRemix
                                         byte b = s[2];
                                         byte a = s[3];
 
+                                        bool isColor = (r > 0 || g > 0 || b > 0);
+
                                         // Fallback for additive / unlit UI shaders that output color with a == 0
                                         byte effA = a;
-                                        if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                                        if (effA == 0 && isColor)
                                         {
                                             effA = (byte)Math.Max(r, Math.Max(g, b));
+                                            localColorZeroA++;
                                         }
 
-                                        if (effA > 0 || r > 0 || g > 0 || b > 0)
+                                        if (effA > 0 || isColor)
                                         {
                                             localNonZero++;
                                         }
-                                        if (effA == 255) localOpaque++;
+
+                                        if (effA == 255)
+                                        {
+                                            localOpaque++;
+                                            if (!isColor) localBlackOpaque++;
+                                            else localColorOpaque++;
+                                        }
+                                        else if (effA > 0 && isColor)
+                                        {
+                                            localColorSemi++;
+                                        }
 
                                         if (effA == 255)
                                         {
@@ -710,6 +754,10 @@ namespace UnityRemix
 
                                     if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
                                     if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                                    if (localBlackOpaque > 0) System.Threading.Interlocked.Add(ref blackOpaqueCount, localBlackOpaque);
+                                    if (localColorOpaque > 0) System.Threading.Interlocked.Add(ref colorOpaqueCount, localColorOpaque);
+                                    if (localColorSemi > 0) System.Threading.Interlocked.Add(ref colorSemiCount, localColorSemi);
+                                    if (localColorZeroA > 0) System.Threading.Interlocked.Add(ref colorZeroACount, localColorZeroA);
                                 });
                             }
                             else
@@ -724,6 +772,10 @@ namespace UnityRemix
                                     byte* dstRow = (byte*)dstPtr + (y * destWidth * 4);
                                     int localNonZero = 0;
                                     int localOpaque = 0;
+                                    int localBlackOpaque = 0;
+                                    int localColorOpaque = 0;
+                                    int localColorSemi = 0;
+                                    int localColorZeroA = 0;
 
                                     for (int x = 0; x < destWidth; x++)
                                     {
@@ -745,17 +797,30 @@ namespace UnityRemix
                                         byte b = s[2];
                                         byte a = s[3];
 
+                                        bool isColor = (r > 0 || g > 0 || b > 0);
+
                                         byte effA = a;
-                                        if (effA == 0 && (r > 0 || g > 0 || b > 0))
+                                        if (effA == 0 && isColor)
                                         {
                                             effA = (byte)Math.Max(r, Math.Max(g, b));
+                                            localColorZeroA++;
                                         }
 
-                                        if (effA > 0 || r > 0 || g > 0 || b > 0)
+                                        if (effA > 0 || isColor)
                                         {
                                             localNonZero++;
                                         }
-                                        if (effA == 255) localOpaque++;
+
+                                        if (effA == 255)
+                                        {
+                                            localOpaque++;
+                                            if (!isColor) localBlackOpaque++;
+                                            else localColorOpaque++;
+                                        }
+                                        else if (effA > 0 && isColor)
+                                        {
+                                            localColorSemi++;
+                                        }
 
                                         if (effA == 255)
                                         {
@@ -779,6 +844,10 @@ namespace UnityRemix
 
                                     if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
                                     if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                                    if (localBlackOpaque > 0) System.Threading.Interlocked.Add(ref blackOpaqueCount, localBlackOpaque);
+                                    if (localColorOpaque > 0) System.Threading.Interlocked.Add(ref colorOpaqueCount, localColorOpaque);
+                                    if (localColorSemi > 0) System.Threading.Interlocked.Add(ref colorSemiCount, localColorSemi);
+                                    if (localColorZeroA > 0) System.Threading.Interlocked.Add(ref colorZeroACount, localColorZeroA);
                                 });
                             }
                         }
@@ -787,7 +856,35 @@ namespace UnityRemix
 
                 if (readbackCompletionCount <= 5 || currentFrame % 180 == 0)
                 {
-                    logger?.LogInfo($"[RemixUIOverlay] Overlay stats (frame {currentFrame}): nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, total={totalPixels}, res={destWidth}x{destHeight}");
+                    string sampleInfo = "";
+                    unsafe
+                    {
+                        fixed (byte* pSrc = processPixels)
+                        {
+                            int[] sampleCoords = new int[] {
+                                0, 0,
+                                10, 10,
+                                destWidth / 2, destHeight / 2,
+                                destWidth / 4, destHeight / 4,
+                                destWidth * 3 / 4, destHeight * 3 / 4
+                            };
+                            var sb = new System.Text.StringBuilder();
+                            for (int i = 0; i < sampleCoords.Length; i += 2)
+                            {
+                                int sx = Math.Min(sampleCoords[i], srcWidth - 1);
+                                int sy = Math.Min(sampleCoords[i + 1], srcHeight - 1);
+                                int offset = (sy * srcWidth + sx) * 4;
+                                byte sr = pSrc[offset];
+                                byte sg = pSrc[offset + 1];
+                                byte sb_val = pSrc[offset + 2];
+                                byte sa = pSrc[offset + 3];
+                                sb.Append($"({sx},{sy}):[R={sr},G={sg},B={sb_val},A={sa}] ");
+                            }
+                            sampleInfo = sb.ToString();
+                        }
+                    }
+
+                    logger?.LogInfo($"[RemixUIOverlay] Overlay stats (frame {currentFrame}): total={totalPixels}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, blackOpaque={blackOpaqueCount}, colorOpaque={colorOpaqueCount}, colorSemi={colorSemiCount}, colorZeroA={colorZeroACount}, res={destWidth}x{destHeight}. Samples: {sampleInfo}");
                 }
 
                 // If completely empty (no UI pixels rendered at all), present transparent once and skip redundant updates
