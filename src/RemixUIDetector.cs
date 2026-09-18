@@ -800,6 +800,11 @@ namespace UnityRemix
         {
             if (canvas == null) return false;
 
+            // A compositor/blit canvas is ALWAYS a screen-space canvas that presents to the display.
+            // WorldSpace canvases (such as diegetic HUDs, player visual attachments, weapon ammo counters)
+            // exist in 3D world space and must NEVER be treated as screen compositors.
+            if (canvas.renderMode == RenderMode.WorldSpace) return false;
+
             // Check 1: Components indicating render target presentation
             var allComps = canvas.GetComponentsInChildren<Component>(true);
             if (allComps != null)
@@ -817,28 +822,26 @@ namespace UnityRemix
                 }
             }
 
-            // Check 2: Screen-space canvas containing a RawImage displaying a RenderTexture from a World Camera
+            // Check 2: Screen-space canvas containing a RawImage displaying the primary world camera's RenderTexture
             var rawImages = canvas.GetComponentsInChildren<UnityEngine.UI.RawImage>(true);
             if (rawImages != null && rawImages.Length > 0)
             {
+                Camera primaryWorld = Camera.main;
+                RenderTexture mainTarget = primaryWorld != null ? primaryWorld.targetTexture : null;
+
                 foreach (var rawImage in rawImages)
                 {
                     if (rawImage == null || rawImage.texture == null) continue;
 
                     if (rawImage.texture is RenderTexture rt)
                     {
-                        // A: Matches the targetTexture of any World Camera
-                        foreach (var cam in Camera.allCameras)
+                        // A: Matches the targetTexture of the primary 3D World Camera (Camera.main)
+                        if (mainTarget != null && rt == mainTarget)
                         {
-                            if (cam == null) continue;
-                            if (uiCameras.Contains(cam) || cam == dedicatedUICamera) continue;
-                            if (cam.targetTexture == rt)
-                            {
-                                return true;
-                            }
+                            return true;
                         }
 
-                        // B: Matches naming patterns for primary render textures
+                        // B: Matches naming patterns for primary screen blit render textures
                         string imgName = (rawImage.name ?? "").ToLowerInvariant();
                         string texName = (rt.name ?? "").ToLowerInvariant();
                         if (imgName.Contains("render texture main") || imgName.Contains("rendertexturemain") ||
