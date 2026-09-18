@@ -86,7 +86,8 @@ namespace UnityRemix
                     byte[] andMask = new byte[128];
                     for (int i = 0; i < 128; i++) andMask[i] = 0xFF; // Transparent
                     byte[] xorMask = new byte[128]; // 0x00
-                    blankCursorHandle = CreateCursor(IntPtr.Zero, 0, 0, 32, 32, andMask, xorMask);
+                    IntPtr hInst = GetModuleHandleW(null);
+                    blankCursorHandle = CreateCursor(hInst != IntPtr.Zero ? hInst : IntPtr.Zero, 0, 0, 32, 32, andMask, xorMask);
                 }
                 return blankCursorHandle;
             }
@@ -194,6 +195,7 @@ namespace UnityRemix
             {
                 EnforceCursorHidden();
                 UpdateCursorClipping(true);
+                SetCursor(BlankCursor);
             }
             else
             {
@@ -319,6 +321,7 @@ namespace UnityRemix
         private static extern IntPtr SetCursor(IntPtr hCursor);
 
         private const uint WM_SETCURSOR = 0x0020;
+        private const uint WM_MOUSEMOVE = 0x0200;
         private const uint WM_LBUTTONDOWN = 0x0201;
         private const uint WM_LBUTTONUP = 0x0202;
         private const uint WM_RBUTTONDOWN = 0x0204;
@@ -345,16 +348,23 @@ namespace UnityRemix
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
-            if (uMsg == WM_NCHITTEST && ShouldHideCursor && !isRemixUIOpen)
+            if (ShouldHideCursor && !isRemixUIOpen)
             {
-                IntPtr hit = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-                int hitCode = hit.ToInt32();
-                // 10=HTLEFT, 11=HTRIGHT, 12=HTTOP, 13=HTTOPLEFT, 14=HTTOPRIGHT, 15=HTBOTTOM, 16=HTBOTTOMLEFT, 17=HTBOTTOMRIGHT, 18=HTBORDER, 4=HTGROWBOX
-                if ((hitCode >= 10 && hitCode <= 18) || hitCode == 4)
+                if (uMsg == WM_MOUSEMOVE)
                 {
-                    return (IntPtr)HTCLIENT;
+                    SetCursor(BlankCursor);
                 }
-                return hit;
+                else if (uMsg == WM_NCHITTEST)
+                {
+                    IntPtr hit = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+                    int hitCode = hit.ToInt32();
+                    // 10=HTLEFT, 11=HTRIGHT, 12=HTTOP, 13=HTTOPLEFT, 14=HTTOPRIGHT, 15=HTBOTTOM, 16=HTBOTTOMLEFT, 17=HTBOTTOMRIGHT, 18=HTBORDER, 4=HTGROWBOX
+                    if ((hitCode >= 10 && hitCode <= 18) || hitCode == 4)
+                    {
+                        return (IntPtr)HTCLIENT;
+                    }
+                    return hit;
+                }
             }
 
             if (uMsg == WM_SETCURSOR)
