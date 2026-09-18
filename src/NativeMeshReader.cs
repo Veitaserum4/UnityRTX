@@ -292,7 +292,7 @@ namespace UnityRemix
 
             subMeshIndices = subList.ToArray();
 
-            logger?.LogInfo($"[NativeMeshReader] '{mesh.name}' — {vertexCount} verts, {totalIndices} indices, {mesh.subMeshCount} submeshes (D3D11 readback)");
+            logger?.LogDebug($"[NativeMeshReader] '{mesh.name}' — {vertexCount} verts, {totalIndices} indices, {mesh.subMeshCount} submeshes (D3D11 readback)");
             return positions.Length > 0 && totalIndices > 0;
         }
 

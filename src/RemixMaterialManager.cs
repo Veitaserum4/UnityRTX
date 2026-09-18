@@ -648,9 +648,12 @@ namespace UnityRemix
             // Materials are now created on-demand on the render thread during mesh creation
             // This prevents deadlocks between material thread and render thread competing for Remix device lock
             
-            string albedoPath = GetTexturePathFromHandle(matData.albedoHandle);
-            string normalPath = GetTexturePathFromHandle(matData.normalHandle);
-            logger.LogInfo($"[MatCapture] '{material.name}' shader='{material.shader?.name}' albedo={albedoPath ?? "NONE"} normal={normalPath ?? "none"}");
+            if (verboseTextureLogging != null && verboseTextureLogging.Value)
+            {
+                string albedoPath = GetTexturePathFromHandle(matData.albedoHandle);
+                string normalPath = GetTexturePathFromHandle(matData.normalHandle);
+                logger.LogInfo($"[MatCapture] '{material.name}' shader='{material.shader?.name}' albedo={albedoPath ?? "NONE"} normal={normalPath ?? "none"}");
+            }
         }
         
         /// <summary>
@@ -1388,7 +1391,11 @@ namespace UnityRemix
                 {
                     cleanMatName = cleanMatName.Replace(" (Instance)", "").Replace(" Instance", "").Replace("(Clone)", "").Trim();
                 }
-                logger.LogInfo($"[HashDebug-Material] materialId={materialId} rawName='{matData.materialName}' cleanedName='{cleanMatName}' emColor=({matData.emissiveColor.r:F3},{matData.emissiveColor.g:F3},{matData.emissiveColor.b:F3}) matHash=0x{matHash:X16}");
+
+                if (verboseTextureLogging != null && verboseTextureLogging.Value)
+                {
+                    logger.LogInfo($"[HashDebug-Material] materialId={materialId} rawName='{matData.materialName}' cleanedName='{cleanMatName}' emColor=({matData.emissiveColor.r:F3},{matData.emissiveColor.g:F3},{matData.emissiveColor.b:F3}) matHash=0x{matHash:X16}");
+                }
                 
                 // Use debug placeholder for materials with no albedo texture
                 if (albedoPath == null)

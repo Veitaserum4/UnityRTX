@@ -43,12 +43,7 @@ namespace UnityRemix
         private bool inEngineRenderingSuppressed = false;
         private int sceneRefreshCounter = 0;
 
-        // Copy mode blitter reference
         private RemixCameraBlitter currentCameraBlitter;
-        private bool lastShouldHideDiag = false;
-        private bool lastCursorVisDiag = true;
-        private CursorLockMode lastLockModeDiag = CursorLockMode.None;
-        private bool lastFocusedDiag = true;
 
         public RemixUIDetector UIDetector => uiDetector;
         public static bool IsSingleWindowUIActive { get; private set; }
@@ -150,15 +145,11 @@ namespace UnityRemix
                         SetupEmbeddedUIOverlay();
                     }
 
-                    // Check for keypress diagnostics (F8 or Escape)
+                    // Check for keypress diagnostics (F8)
                     bool escapePressed = Input.GetKeyDown(KeyCode.Escape);
                     if (Input.GetKeyDown(KeyCode.F8))
                     {
                         uiDetector.DumpUIState("F8 Key Pressed (Manual UI Diagnostic)");
-                    }
-                    else if (escapePressed)
-                    {
-                        uiDetector.DumpUIState("Escape Key Pressed (Menu/Pause Diagnostic)");
                     }
 
                     // Handle 3D in-engine camera suppression & camera detection
@@ -188,7 +179,6 @@ namespace UnityRemix
                         if (canvasCountChanged)
                         {
                             logger?.LogInfo($"[RemixFramebufferPresenter] Canvas count changed: total={lastCanvasCount}->{currentCanvasCount}, active={lastActiveCanvasCount}->{currentActiveCanvasCount}. Re-evaluating UI detection.");
-                            uiDetector.DumpUIState($"Canvas count changed: total={lastCanvasCount}->{currentCanvasCount}, active={lastActiveCanvasCount}->{currentActiveCanvasCount}");
                         }
 
                         lastCameraCount = currentCameraCount;
@@ -244,10 +234,6 @@ namespace UnityRemix
                     TearDownUIOverlay();
                 }
 
-                if (frameCount % 300 == 0 && isSingle)
-                {
-                    logger?.LogInfo($"[RemixFramebufferPresenter] Frame #{frameCount} Status: SingleWindow={isSingle}, Suppressed={inEngineRenderingSuppressed}, WorldCams={uiDetector.WorldCameras.Count}, UICams={uiDetector.UICameras.Count}, Canvases={lastCanvasCount}, OverlayActive={(uiOverlay != null)}");
-                }
             }
 
             // Handle Alt+X detection for Remix ImGui using direct hardware query so it never drops even when window focus changes
@@ -273,15 +259,6 @@ namespace UnityRemix
             bool shouldHide = Application.isFocused && !RemixWindowManager.IsRemixUIOpen && (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked);
             RemixWindowManager.UpdateCursorVisibility(shouldHide);
 
-            if (frameCount <= 60 || frameCount % 180 == 0 || shouldHide != lastShouldHideDiag || Cursor.visible != lastCursorVisDiag || Cursor.lockState != lastLockModeDiag || Application.isFocused != lastFocusedDiag)
-            {
-                lastShouldHideDiag = shouldHide;
-                lastCursorVisDiag = Cursor.visible;
-                lastLockModeDiag = Cursor.lockState;
-                lastFocusedDiag = Application.isFocused;
-                logger?.LogInfo($"[CursorDiag-Presenter #{frameCount}] shouldHide={shouldHide}, isFocused={Application.isFocused}, cursorVis={Cursor.visible}, lockState={Cursor.lockState}, remixOpen={RemixWindowManager.IsRemixUIOpen}, Win32=[{RemixWindowManager.GetCursorDiagnosticString()}]");
-            }
-
             // While Remix UI is open, guarantee cursor is unlocked and visible
             if (RemixWindowManager.IsRemixUIOpen)
             {
@@ -305,13 +282,6 @@ namespace UnityRemix
                     SetFocus(gameWnd);
                     logger?.LogInfo($"[RemixFramebufferPresenter] Enforced foreground focus on gameWindow 0x{gameWnd:X} at frame #{frameCount}");
                 }
-            }
-
-            // Input diagnostic: verify mouse clicks reach Unity
-            if (Input.GetMouseButtonDown(0))
-            {
-                var hovered = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
-                logger?.LogInfo($"[InputDiag] Mouse click at {Input.mousePosition}, isFocused={Application.isFocused}, selected='{hovered?.name ?? "none"}'");
             }
         }
 
