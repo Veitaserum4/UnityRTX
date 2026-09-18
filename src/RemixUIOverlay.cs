@@ -704,43 +704,53 @@ namespace UnityRemix
 
                                         bool isColor = (r > 0 || g > 0 || b > 0);
 
+                                        if (!isColor)
+                                        {
+                                            // If RGB is completely black (0,0,0) and alpha is 255 (opaque), this is the cleared
+                                            // background of the render target / backbuffer (e.g. in URP where alpha defaults to 1.0).
+                                            // In a transparent UI overlay, opaque black has zero color contribution and must never
+                                            // occlude the underlying 3D world with a solid black sheet.
+                                            if (a == 255 || a == 0)
+                                            {
+                                                *(uint*)d = 0;
+                                                s += 4;
+                                                d += 4;
+                                                continue;
+                                            }
+
+                                            // Semi-transparent black (e.g. drop shadow)
+                                            localNonZero++;
+                                            d[0] = 0;
+                                            d[1] = 0;
+                                            d[2] = 0;
+                                            d[3] = a;
+                                            s += 4;
+                                            d += 4;
+                                            continue;
+                                        }
+
                                         // Fallback for additive / unlit UI shaders that output color with a == 0
                                         byte effA = a;
-                                        if (effA == 0 && isColor)
+                                        if (effA == 0)
                                         {
                                             effA = (byte)Math.Max(r, Math.Max(g, b));
                                             localColorZeroA++;
                                         }
 
-                                        if (effA > 0 || isColor)
-                                        {
-                                            localNonZero++;
-                                        }
+                                        localNonZero++;
 
                                         if (effA == 255)
                                         {
                                             localOpaque++;
-                                            if (!isColor) localBlackOpaque++;
-                                            else localColorOpaque++;
-                                        }
-                                        else if (effA > 0 && isColor)
-                                        {
-                                            localColorSemi++;
-                                        }
-
-                                        if (effA == 255)
-                                        {
+                                            localColorOpaque++;
                                             d[0] = b;
                                             d[1] = g;
                                             d[2] = r;
                                             d[3] = 255;
                                         }
-                                        else if (effA == 0)
-                                        {
-                                            *(uint*)d = 0;
-                                        }
                                         else
                                         {
+                                            localColorSemi++;
                                             // Windows AC_SRC_ALPHA requires premultiplied alpha: R <= A, G <= A, B <= A.
                                             d[0] = b <= effA ? b : effA;
                                             d[1] = g <= effA ? g : effA;
@@ -799,42 +809,43 @@ namespace UnityRemix
 
                                         bool isColor = (r > 0 || g > 0 || b > 0);
 
+                                        if (!isColor)
+                                        {
+                                            if (a == 255 || a == 0)
+                                            {
+                                                *(uint*)d = 0;
+                                                continue;
+                                            }
+
+                                            localNonZero++;
+                                            d[0] = 0;
+                                            d[1] = 0;
+                                            d[2] = 0;
+                                            d[3] = a;
+                                            continue;
+                                        }
+
                                         byte effA = a;
-                                        if (effA == 0 && isColor)
+                                        if (effA == 0)
                                         {
                                             effA = (byte)Math.Max(r, Math.Max(g, b));
                                             localColorZeroA++;
                                         }
 
-                                        if (effA > 0 || isColor)
-                                        {
-                                            localNonZero++;
-                                        }
+                                        localNonZero++;
 
                                         if (effA == 255)
                                         {
                                             localOpaque++;
-                                            if (!isColor) localBlackOpaque++;
-                                            else localColorOpaque++;
-                                        }
-                                        else if (effA > 0 && isColor)
-                                        {
-                                            localColorSemi++;
-                                        }
-
-                                        if (effA == 255)
-                                        {
+                                            localColorOpaque++;
                                             d[0] = b;
                                             d[1] = g;
                                             d[2] = r;
                                             d[3] = 255;
                                         }
-                                        else if (effA == 0)
-                                        {
-                                            *(uint*)d = 0;
-                                        }
                                         else
                                         {
+                                            localColorSemi++;
                                             d[0] = b <= effA ? b : effA;
                                             d[1] = g <= effA ? g : effA;
                                             d[2] = r <= effA ? r : effA;
