@@ -45,6 +45,10 @@ namespace UnityRemix
 
         // Copy mode blitter reference
         private RemixCameraBlitter currentCameraBlitter;
+        private bool lastShouldHideDiag = false;
+        private bool lastCursorVisDiag = true;
+        private CursorLockMode lastLockModeDiag = CursorLockMode.None;
+        private bool lastFocusedDiag = true;
 
         public RemixUIDetector UIDetector => uiDetector;
         public static bool IsSingleWindowUIActive { get; private set; }
@@ -268,6 +272,15 @@ namespace UnityRemix
             // Determine whether cursor should be hidden (in-game gameplay) or visible (menus/Remix UI/tabbed out)
             bool shouldHide = Application.isFocused && !RemixWindowManager.IsRemixUIOpen && (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked);
             RemixWindowManager.UpdateCursorVisibility(shouldHide);
+
+            if (frameCount <= 60 || frameCount % 180 == 0 || shouldHide != lastShouldHideDiag || Cursor.visible != lastCursorVisDiag || Cursor.lockState != lastLockModeDiag || Application.isFocused != lastFocusedDiag)
+            {
+                lastShouldHideDiag = shouldHide;
+                lastCursorVisDiag = Cursor.visible;
+                lastLockModeDiag = Cursor.lockState;
+                lastFocusedDiag = Application.isFocused;
+                logger?.LogInfo($"[CursorDiag-Presenter #{frameCount}] shouldHide={shouldHide}, isFocused={Application.isFocused}, cursorVis={Cursor.visible}, lockState={Cursor.lockState}, remixOpen={RemixWindowManager.IsRemixUIOpen}, Win32=[{RemixWindowManager.GetCursorDiagnosticString()}]");
+            }
 
             // While Remix UI is open, guarantee cursor is unlocked and visible
             if (RemixWindowManager.IsRemixUIOpen)
