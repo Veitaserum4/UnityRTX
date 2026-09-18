@@ -188,6 +188,8 @@ namespace UnityRemix
             logger?.LogInfo($"[RemixUIDetector] ==========================================================================");
         }
 
+        private string lastDumpedScene = null;
+
         /// <summary>
         /// Scans all active cameras in the scene and categorizes them into World and UI cameras.
         /// </summary>
@@ -195,6 +197,13 @@ namespace UnityRemix
         {
             uiCameras.Clear();
             worldCameras.Clear();
+
+            string curScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            if (curScene != lastDumpedScene && !string.IsNullOrEmpty(curScene))
+            {
+                lastDumpedScene = curScene;
+                DumpUIState($"Scene Transition '{curScene}'");
+            }
 
             var allCameras = Camera.allCameras;
             if (allCameras == null || allCameras.Length == 0)
@@ -324,9 +333,14 @@ namespace UnityRemix
                 dedicatedUICamera.nearClipPlane = 0.1f;
                 dedicatedUICamera.farClipPlane = 1000f;
                 dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0)
+                ConfigureSRPRenderData(dedicatedUICamera);
                 logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for overlay canvases.");
             }
             dedicatedUICamera.enabled = true;
+            if (primaryWorld != null)
+            {
+                SyncDedicatedUICameraTransform(primaryWorld);
+            }
             if (!uiCameras.Contains(dedicatedUICamera))
             {
                 uiCameras.Add(dedicatedUICamera);
@@ -354,6 +368,105 @@ namespace UnityRemix
 
         public Camera DedicatedUICamera => dedicatedUICamera;
         private Camera dedicatedUICamera;
+
+        /// <summary>
+        /// Synchronizes the dedicated UI camera's spatial transform and projection matrix with the active
+        /// world/scene camera. This ensures ScreenSpaceCamera and WorldSpace HUD canvases project accurately
+        /// matching the player's view frustum, aspect ratio, and field of view.
+        /// </summary>
+        public void SyncDedicatedUICameraTransform(Camera sourceCam)
+        {
+            if (dedicatedUICamera == null || sourceCam == null) return;
+
+            var destT = dedicatedUICamera.transform;
+            var srcT = sourceCam.transform;
+
+            if (destT.position != srcT.position)
+                destT.position = srcT.position;
+            if (destT.rotation != srcT.rotation)
+                destT.rotation = srcT.rotation;
+
+            if (dedicatedUICamera.orthographic != sourceCam.orthographic)
+                dedicatedUICamera.orthographic = sourceCam.orthographic;
+
+            if (sourceCam.orthographic)
+            {
+                if (dedicatedUICamera.orthographicSize != sourceCam.orthographicSize)
+                    dedicatedUICamera.orthographicSize = sourceCam.orthographicSize;
+            }
+            else
+            {
+                if (dedicatedUICamera.fieldOfView != sourceCam.fieldOfView)
+                    dedicatedUICamera.fieldOfView = sourceCam.fieldOfView;
+            }
+
+            if (dedicatedUICamera.nearClipPlane != sourceCam.nearClipPlane)
+                dedicatedUICamera.nearClipPlane = sourceCam.nearClipPlane;
+            if (dedicatedUICamera.farClipPlane != sourceCam.farClipPlane)
+                dedicatedUICamera.farClipPlane = sourceCam.farClipPlane;
+            if (dedicatedUICamera.rect != sourceCam.rect)
+                dedicatedUICamera.rect = sourceCam.rect;
+
+            // Ensure dedicated UI camera depth renders on top of the world camera
+            if (dedicatedUICamera.depth <= sourceCam.depth)
+            {
+                dedicatedUICamera.depth = sourceCam.depth + 10f;
+            }
+        }
+
+        /// <summary>
+        /// Configures SRP / URP camera data via reflection so that dedicated UI camera renders cleanly
+        /// under Universal Render Pipeline without drawing shadows, post-processing, or volume overrides.
+        /// </summary>
+        public static void ConfigureSRPRenderData(Camera cam)
+        {
+            if (cam == null) return;
+            try
+            {
+                var addDataCamType = Type.GetType("UnityEngine.Rendering.Universal.UniversalAdditionalCameraData, Unity.RenderPipelines.Universal.Runtime");
+                if (addDataCamType != null)
+                {
+                    var comp = cam.GetComponent(addDataCamType) ?? cam.gameObject.AddComponent(addDataCamType);
+                    if (comp != null)
+                    {
+                        // renderType = CameraRenderType.Base (0)
+                        var renderTypeProp = addDataCamType.GetProperty("renderType");
+                        if (renderTypeProp != null)
+                        {
+                            var enumVal = Enum.ToObject(renderTypeProp.PropertyType, 0);
+                            renderTypeProp.SetValue(comp, enumVal);
+                        }
+
+                        // renderShadows = false
+                        var shadowsProp = addDataCamType.GetProperty("renderShadows");
+                        shadowsProp?.SetValue(comp, false);
+
+                        // renderPostProcessing = false
+                        var postProp = addDataCamType.GetProperty("renderPostProcessing");
+                        postProp?.SetValue(comp, false);
+
+                        // requiresDepthTexture = false
+                        var depthTexProp = addDataCamType.GetProperty("requiresDepthTexture");
+                        depthTexProp?.SetValue(comp, false);
+
+                        // requiresColorTexture = false
+                        var colorTexProp = addDataCamType.GetProperty("requiresColorTexture");
+                        colorTexProp?.SetValue(comp, false);
+
+                        // volumeLayerMask = 0 (don't evaluate world volume post-processing on UI)
+                        var volMaskProp = addDataCamType.GetProperty("volumeLayerMask");
+                        if (volMaskProp != null)
+                        {
+                            volMaskProp.SetValue(comp, (LayerMask)0);
+                        }
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Silently ignore if not running URP or if reflection fails
+            }
+        }
 
         /// <summary>
         /// Routes ScreenSpaceOverlay Canvases to render through the dedicated UI camera in ScreenSpaceCamera mode
@@ -415,10 +528,12 @@ namespace UnityRemix
                     canvas.renderMode = RenderMode.ScreenSpaceCamera;
                     canvas.worldCamera = uiCamera;
 
-                    // Ensure plane distance is at standard healthy distance (not pressed against near clip)
-                    if (canvas.planeDistance < 10.0f || canvas.planeDistance > 500.0f)
+                    // Ensure plane distance is at standard healthy distance within camera frustum
+                    float minPlane = uiCamera.nearClipPlane + 1.0f;
+                    float maxPlane = Mathf.Max(minPlane + 1.0f, uiCamera.farClipPlane - 10.0f);
+                    if (canvas.planeDistance < minPlane || canvas.planeDistance > maxPlane)
                     {
-                        canvas.planeDistance = 100.0f;
+                        canvas.planeDistance = Mathf.Clamp(100.0f, minPlane, maxPlane);
                     }
 
                     // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders

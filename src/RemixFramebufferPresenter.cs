@@ -221,6 +221,12 @@ namespace UnityRemix
                         lastScreenHeight = currentH;
                     }
 
+                    // Sync dedicated UI camera transform with active world camera every frame
+                    if (worldCam != null)
+                    {
+                        uiDetector.SyncDedicatedUICameraTransform(worldCam);
+                    }
+
                     // Sync embedded window bounds
                     if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded && windowManager != null)
                     {
