@@ -303,7 +303,6 @@ namespace UnityRemix
                 }
 
                 cam.targetTexture = uiRenderTexture;
-                cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
                 cam.clearFlags = targetClear;
                 cam.backgroundColor = targetBg;
                 cam.cullingMask &= ~threeDMask; // Ensure layers containing 3D meshes are never rendered by UI camera
@@ -383,7 +382,44 @@ namespace UnityRemix
 
             logger?.LogInfo($"[RemixUIOverlay] Created transparent UI overlay window: 0x{overlayWindow:X} ({width}x{height})");
             SyncWindowBounds();
+            SubscribeSRPEvents();
             return true;
+        }
+
+        private bool srpEventSubscribed = false;
+
+        private void SubscribeSRPEvents()
+        {
+            if (!srpEventSubscribed)
+            {
+                UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
+                srpEventSubscribed = true;
+            }
+        }
+
+        private void UnsubscribeSRPEvents()
+        {
+            if (srpEventSubscribed)
+            {
+                UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
+                srpEventSubscribed = false;
+            }
+        }
+
+        private void OnBeginCameraRendering(UnityEngine.Rendering.ScriptableRenderContext context, Camera cam)
+        {
+            if (cam != null && managedCameras.Contains(cam))
+            {
+                var hook = cam.GetComponent<RemixUICameraHook>();
+                if (hook != null)
+                {
+                    hook.EnsureConfigured("SRP_beginCameraRendering");
+                }
+                else if (uiRenderTexture != null)
+                {
+                    cam.targetTexture = uiRenderTexture;
+                }
+            }
         }
 
         /// <summary>
@@ -430,7 +466,6 @@ namespace UnityRemix
                 hook.backgroundColor = targetBg;
 
                 cam.targetTexture = uiRenderTexture;
-                cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
                 cam.clearFlags = targetClear;
                 cam.backgroundColor = targetBg;
                 isFirst = false;
@@ -494,7 +529,16 @@ namespace UnityRemix
         {
             isReadbackPending = false;
 
-            if (request.hasError || overlayWindow == IntPtr.Zero || uiRenderTexture == null || isProcessingOverlay)
+            if (request.hasError)
+            {
+                if (Time.frameCount % 180 == 0)
+                {
+                    logger?.LogWarning("[RemixUIOverlay] AsyncGPUReadback request encountered an error!");
+                }
+                return;
+            }
+
+            if (overlayWindow == IntPtr.Zero || uiRenderTexture == null || isProcessingOverlay)
                 return;
 
             int width = request.width;
@@ -844,7 +888,6 @@ namespace UnityRemix
                             hook.targetTexture = uiRenderTexture;
                         }
                         cam.targetTexture = uiRenderTexture;
-                        cam.SetTargetBuffers(uiRenderTexture.colorBuffer, uiRenderTexture.depthBuffer);
                     }
                 }
             }
@@ -925,6 +968,7 @@ namespace UnityRemix
 
         public void Destroy()
         {
+            UnsubscribeSRPEvents();
             RestoreUICameras();
             CleanupDIB();
 
@@ -978,13 +1022,12 @@ namespace UnityRemix
             EnsureConfigured("OnPreRender");
         }
 
-        private void EnsureConfigured(string stage)
+        public void EnsureConfigured(string stage)
         {
             if (cam == null) cam = GetComponent<Camera>();
             if (cam != null && targetTexture != null)
             {
                 cam.targetTexture = targetTexture;
-                cam.SetTargetBuffers(targetTexture.colorBuffer, targetTexture.depthBuffer);
 
                 // Dynamically ensure the first UI camera rendering on any given frame clears color to transparent (0,0,0,0),
                 // while any subsequent UI cameras rendering on the same frame clear only Depth to preserve previous UI elements.
