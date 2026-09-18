@@ -193,7 +193,7 @@ namespace UnityRemix
             if (shouldHide)
             {
                 EnforceCursorHidden();
-                UpdateCursorClipping(true);
+                UpdateCursorClipping(Cursor.lockState == CursorLockMode.Locked);
                 SetCursor(BlankCursor);
             }
             else

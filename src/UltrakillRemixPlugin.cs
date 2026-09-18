@@ -115,6 +115,7 @@ namespace UnityRemix
                 DynamicSpawnPatch.Apply(harmony, LogSource);
                 UltrakillPostProcessPatch.Apply(harmony, LogSource);
                 RemixGameStateHelper.Apply(harmony, LogSource);
+                RemixCameraViewportPatch.Apply(harmony, LogSource);
             }
             catch (Exception ex)
             {

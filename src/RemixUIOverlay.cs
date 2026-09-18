@@ -281,6 +281,20 @@ namespace UnityRemix
             return Instance.managedCameras.Contains(cam);
         }
 
+        public static bool TryGetOriginalCameraDimensions(Camera cam, out int width, out int height)
+        {
+            width = 0;
+            height = 0;
+            if (cam == null || Instance == null) return false;
+            if (Instance.originalCameraStates.TryGetValue(cam, out var state) && state.targetTexture != null)
+            {
+                width = state.targetTexture.width;
+                height = state.targetTexture.height;
+                return width > 0 && height > 0;
+            }
+            return false;
+        }
+
         public void RebindAllUICameras()
         {
             if (uiRenderTexture == null) return;
