@@ -25,6 +25,8 @@ namespace UnityRemix
         private readonly Dictionary<Canvas, Camera> originalCanvasCameras = new Dictionary<Canvas, Camera>();
         private readonly HashSet<int> loggedRoutedCanvases = new HashSet<int>();
         private readonly HashSet<int> loggedSanitizedCanvases = new HashSet<int>();
+        private readonly HashSet<int> loggedCompositorCanvases = new HashSet<int>();
+        private readonly HashSet<Canvas> disabledCompositorCanvases = new HashSet<Canvas>();
         private int lastLoggedWorldCamCount = -1;
         private int lastLoggedUICamCount = -1;
 
@@ -207,7 +209,8 @@ namespace UnityRemix
 
                 var activeGraphics = canvas.GetComponentsInChildren<UnityEngine.UI.Graphic>(false);
                 int totalGraphics = canvas.GetComponentsInChildren<UnityEngine.UI.Graphic>(true).Length;
-                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]: scene='{canvas.gameObject.scene.name}', layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, activeInHierarchy={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}, activeGraphics={activeGraphics.Length}/{totalGraphics}");
+                string compositorFlag = IsCompositorCanvas(canvas) ? " [COMPOSITOR/BLIT CANVAS]" : "";
+                logger?.LogInfo($"[RemixUIDetector]   Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}]: scene='{canvas.gameObject.scene.name}', layer={LayerMask.LayerToName(canvas.gameObject.layer)}({canvas.gameObject.layer}), mode={canvas.renderMode}, cam='{canvas.worldCamera?.name ?? "none"}', planeDist={canvas.planeDistance:F2}, order={canvas.sortingOrder}, activeInHierarchy={canvas.gameObject.activeInHierarchy}, enabled={canvas.enabled}, activeGraphics={activeGraphics.Length}/{totalGraphics}{compositorFlag}");
 
                 if (canvas.gameObject.activeInHierarchy && canvas.enabled)
                 {
@@ -588,6 +591,30 @@ namespace UnityRemix
                     continue;
                 }
 
+                // Skip and disable compositor canvases that blit/display world camera render targets
+                // to prevent solid black backgrounds or frozen rasterized quads from occluding the Remix viewport.
+                if (IsCompositorCanvas(canvas))
+                {
+                    if (originalCanvasRenderModes.TryGetValue(canvas, out var origMode))
+                    {
+                        canvas.renderMode = origMode;
+                        if (originalCanvasCameras.TryGetValue(canvas, out var origCam))
+                        {
+                            canvas.worldCamera = origCam;
+                        }
+                    }
+                    if (canvas.enabled)
+                    {
+                        canvas.enabled = false;
+                        disabledCompositorCanvases.Add(canvas);
+                    }
+                    if (loggedCompositorCanvases.Add(canvas.GetInstanceID()))
+                    {
+                        logger?.LogInfo($"[RemixUIDetector] Disabled compositor canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to reveal Remix raytraced viewport.");
+                    }
+                    continue;
+                }
+
                 // If this is a WorldSpace canvas attached to a camera or HUD hierarchy (e.g. ULTRAKILL's GunCanvas/StyleCanvas),
                 // sanitize its elements to UI layer so the UI camera captures it cleanly without capturing 3D viewmodels.
                 if (canvas.renderMode == RenderMode.WorldSpace)
@@ -746,12 +773,88 @@ namespace UnityRemix
                 }
             }
 
+            foreach (var canvas in disabledCompositorCanvases)
+            {
+                if (canvas != null)
+                {
+                    canvas.enabled = true;
+                }
+            }
+            disabledCompositorCanvases.Clear();
+            loggedCompositorCanvases.Clear();
+
             originalCanvasRenderModes.Clear();
             originalCanvasCameras.Clear();
             loggedSanitizedCanvases.Clear();
             loggedRoutedCanvases.Clear();
             lastLoggedWorldCamCount = -1;
             lastLoggedUICamCount = -1;
+        }
+
+        /// <summary>
+        /// Identifies whether a canvas is a software compositor or screen-quad blitter that displays
+        /// a RenderTexture output from a 3D world camera (e.g. in retro-style games like REPO).
+        /// Such canvases must not be routed or presented on the UI overlay, as Remix renders the 3D world.
+        /// </summary>
+        public bool IsCompositorCanvas(Canvas canvas)
+        {
+            if (canvas == null) return false;
+
+            // Check 1: Components indicating render target presentation
+            var allComps = canvas.GetComponentsInChildren<Component>(true);
+            if (allComps != null)
+            {
+                foreach (var comp in allComps)
+                {
+                    if (comp == null) continue;
+                    string typeName = comp.GetType().Name;
+                    if (typeName.Equals("RenderTextureMain", StringComparison.OrdinalIgnoreCase) ||
+                        typeName.Equals("RenderTextureCompositor", StringComparison.OrdinalIgnoreCase) ||
+                        typeName.Equals("ScreenQuadCompositor", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            // Check 2: Screen-space canvas containing a RawImage displaying a RenderTexture from a World Camera
+            var rawImages = canvas.GetComponentsInChildren<UnityEngine.UI.RawImage>(true);
+            if (rawImages != null && rawImages.Length > 0)
+            {
+                foreach (var rawImage in rawImages)
+                {
+                    if (rawImage == null || rawImage.texture == null) continue;
+
+                    if (rawImage.texture is RenderTexture rt)
+                    {
+                        // A: Matches the targetTexture of any World Camera
+                        foreach (var cam in Camera.allCameras)
+                        {
+                            if (cam == null) continue;
+                            if (uiCameras.Contains(cam) || cam == dedicatedUICamera) continue;
+                            if (cam.targetTexture == rt)
+                            {
+                                return true;
+                            }
+                        }
+
+                        // B: Matches naming patterns for primary render textures
+                        string imgName = (rawImage.name ?? "").ToLowerInvariant();
+                        string texName = (rt.name ?? "").ToLowerInvariant();
+                        if (imgName.Contains("render texture main") || imgName.Contains("rendertexturemain") ||
+                            texName.Contains("render texture main") || texName.Contains("rendertexturemain") ||
+                            imgName.Contains("render texture overlay") || imgName.Contains("rendertextureoverlay") ||
+                            texName.Contains("render texture overlay") || texName.Contains("rendertextureoverlay") ||
+                            imgName.Contains("screenblit") || texName.Contains("screenblit") ||
+                            imgName.Contains("screen quad") || texName.Contains("screen quad"))
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static int CountBits(uint v)
