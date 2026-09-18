@@ -55,6 +55,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configSingleWindowUIOverlay;
         private ConfigEntry<int> configUIOverlayFPS;
         private ConfigEntry<bool> configHideUIOnRemixMenu;
+        private ConfigEntry<bool> configUIOverlayClearBlack;
 
         // Performance & Throttling
         private ConfigEntry<int> configEngineFPSLimit;
@@ -235,6 +236,9 @@ namespace UnityRemix
             configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", false,
                 "Hides the game UI overlay when the Remix Alt+X menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
 
+            configUIOverlayClearBlack = Config.Bind("Window", "UIOverlayClearBlack", false,
+                "When enabled, treats pure opaque black pixels (RGB=0, A=255) as transparent. Required for games (such as URP games like PEAK) where the camera clear or render pipeline fills the alpha channel with 1.0.");
+
             // Performance & Frame Throttling
             configEngineFPSLimit = Config.Bind("Performance", "EngineFPSLimit", 60,
                 "Target frame rate for the Unity engine main loop in Single Window mode. 0 = Uncapped. Presets: 30 (heavy scenes), 60 (recommended/balanced), 90, 120, 0 (uncapped). Remix continues rendering at full speed.");
@@ -365,7 +369,8 @@ namespace UnityRemix
                 configUICameraNames,
                 configSingleWindowUIOverlay,
                 configUIOverlayFPS,
-                configHideUIOnRemixMenu
+                configHideUIOnRemixMenu,
+                configUIOverlayClearBlack
             );
             
             lightConverter = new RemixLightConverter(
@@ -714,6 +719,7 @@ namespace UnityRemix
                 case "SingleWindowUIOverlay": return configSingleWindowUIOverlay.Value;
                 case "PreventSlowMotion": return configPreventSlowMotion.Value;
                 case "HideUIOnRemixMenu": return configHideUIOnRemixMenu.Value;
+                case "UIOverlayClearBlack": return configUIOverlayClearBlack.Value;
                 default: return false;
             }
         }
@@ -788,6 +794,7 @@ namespace UnityRemix
                 case "SingleWindowUIOverlay": configSingleWindowUIOverlay.Value = value; break;
                 case "PreventSlowMotion": configPreventSlowMotion.Value = value; break;
                 case "HideUIOnRemixMenu": configHideUIOnRemixMenu.Value = value; break;
+                case "UIOverlayClearBlack": configUIOverlayClearBlack.Value = value; break;
             }
         }
 
