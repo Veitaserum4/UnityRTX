@@ -95,60 +95,110 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         public static extern int ShowCursor(bool bShow);
 
+        private static bool cursorStateInitialized = false;
+        private static RECT lastClipRect;
+        private static bool isCursorClipped = false;
+
+        public static void UpdateCursorClipping(bool shouldClip)
+        {
+            if (shouldClip)
+            {
+                IntPtr gWnd = instance != null && instance.gameWindow != IntPtr.Zero ? instance.gameWindow : FindGameWindow();
+                if (gWnd != IntPtr.Zero && GetClientRect(gWnd, out RECT rc) && rc.Width > 10 && rc.Height > 10)
+                {
+                    POINT topLeft = new POINT { x = rc.left, y = rc.top };
+                    POINT bottomRight = new POINT { x = rc.right, y = rc.bottom };
+                    ClientToScreen(gWnd, ref topLeft);
+                    ClientToScreen(gWnd, ref bottomRight);
+
+                    RECT clipRect = new RECT
+                    {
+                        left = topLeft.x + 4,
+                        top = topLeft.y + 4,
+                        right = Math.Max(topLeft.x + 5, bottomRight.x - 4),
+                        bottom = Math.Max(topLeft.y + 5, bottomRight.y - 4)
+                    };
+
+                    if (!isCursorClipped || clipRect.left != lastClipRect.left || clipRect.top != lastClipRect.top ||
+                        clipRect.right != lastClipRect.right || clipRect.bottom != lastClipRect.bottom)
+                    {
+                        ClipCursor(ref clipRect);
+                        lastClipRect = clipRect;
+                        isCursorClipped = true;
+                    }
+                    return;
+                }
+            }
+
+            if (isCursorClipped)
+            {
+                ClipCursor(IntPtr.Zero);
+                isCursorClipped = false;
+                lastClipRect = default;
+            }
+        }
+
         public static void EnforceCursorHidden()
         {
-            int c = ShowCursor(true);
-            ShowCursor(false);
-            if (c >= 0)
+            var ci = new CURSORINFO();
+            ci.cbSize = Marshal.SizeOf<CURSORINFO>();
+            if (GetCursorInfo(out ci) && (ci.flags & 1) == 0)
             {
-                int safety = 0;
-                while (ShowCursor(false) >= 0 && safety++ < 50000) { }
+                return;
             }
+
+            int safety = 0;
+            while (ShowCursor(false) >= 0 && safety++ < 1000) { }
         }
 
         public static void EnforceCursorVisible()
         {
-            int c = ShowCursor(true);
-            ShowCursor(false);
-            if (c < 0)
+            var ci = new CURSORINFO();
+            ci.cbSize = Marshal.SizeOf<CURSORINFO>();
+            if (GetCursorInfo(out ci) && (ci.flags & 1) != 0)
             {
-                int safety = 0;
-                while (ShowCursor(true) < 0 && safety++ < 50000) { }
+                return;
             }
+
+            int safety = 0;
+            while (ShowCursor(true) < 0 && safety++ < 1000) { }
         }
 
         public static void UpdateCursorVisibility(bool shouldHide)
         {
-            if (ShouldHideCursor != shouldHide)
+            if (!cursorStateInitialized || ShouldHideCursor != shouldHide)
             {
+                cursorStateInitialized = true;
+                ShouldHideCursor = shouldHide;
                 instance?.logger?.LogInfo($"[CursorDiag] UpdateCursorVisibility: shouldHide={shouldHide}, Win32=[{GetCursorDiagnosticString()}]");
+
+                IntPtr targetCursor = shouldHide ? BlankCursor : LoadCursorW(IntPtr.Zero, IDC_ARROW);
+                SetCursor(targetCursor);
+
+                IntPtr gWnd = instance != null && instance.gameWindow != IntPtr.Zero ? instance.gameWindow : FindGameWindow();
+                if (gWnd != IntPtr.Zero)
+                {
+                    SetClassLongPtr(gWnd, GCLP_HCURSOR, targetCursor);
+                }
+                if (instance != null && instance.remixWindow != IntPtr.Zero)
+                {
+                    SetClassLongPtr(instance.remixWindow, GCLP_HCURSOR, targetCursor);
+                }
+                if (RemixUIOverlay.Instance != null && RemixUIOverlay.Instance.OverlayWindow != IntPtr.Zero)
+                {
+                    SetClassLongPtr(RemixUIOverlay.Instance.OverlayWindow, GCLP_HCURSOR, targetCursor);
+                }
             }
-            ShouldHideCursor = shouldHide;
 
             if (shouldHide)
             {
                 EnforceCursorHidden();
+                UpdateCursorClipping(true);
             }
             else
             {
                 EnforceCursorVisible();
-            }
-
-            IntPtr targetCursor = shouldHide ? BlankCursor : LoadCursorW(IntPtr.Zero, IDC_ARROW);
-            SetCursor(targetCursor);
-
-            IntPtr gWnd = instance != null && instance.gameWindow != IntPtr.Zero ? instance.gameWindow : FindGameWindow();
-            if (gWnd != IntPtr.Zero)
-            {
-                SetClassLongPtr(gWnd, GCLP_HCURSOR, targetCursor);
-            }
-            if (instance != null && instance.remixWindow != IntPtr.Zero)
-            {
-                SetClassLongPtr(instance.remixWindow, GCLP_HCURSOR, targetCursor);
-            }
-            if (RemixUIOverlay.Instance != null && RemixUIOverlay.Instance.OverlayWindow != IntPtr.Zero)
-            {
-                SetClassLongPtr(RemixUIOverlay.Instance.OverlayWindow, GCLP_HCURSOR, targetCursor);
+                UpdateCursorClipping(false);
             }
         }
 
@@ -195,7 +245,7 @@ namespace UnityRemix
                 EnableWindow(instance.remixWindow, open);
                 if (open)
                 {
-                    ClipCursor(IntPtr.Zero);
+                    UpdateCursorClipping(false);
                 }
                 else if (instance.gameWindow != IntPtr.Zero)
                 {
@@ -240,7 +290,7 @@ namespace UnityRemix
                         SetFocus(gameWindow);
                     }
 
-                    ClipCursor(IntPtr.Zero);
+                    UpdateCursorClipping(false);
                     ReleaseCapture();
                 }
 
@@ -255,6 +305,9 @@ namespace UnityRemix
 
         [DllImport("user32.dll")]
         private static extern bool ClipCursor(IntPtr lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClipCursor(ref RECT lpRect);
 
         [DllImport("user32.dll")]
         private static extern bool ReleaseCapture();
@@ -292,6 +345,18 @@ namespace UnityRemix
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
+            if (uMsg == WM_NCHITTEST && ShouldHideCursor && !isRemixUIOpen)
+            {
+                IntPtr hit = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+                int hitCode = hit.ToInt32();
+                // 10=HTLEFT, 11=HTRIGHT, 12=HTTOP, 13=HTTOPLEFT, 14=HTTOPRIGHT, 15=HTBOTTOM, 16=HTBOTTOMLEFT, 17=HTBOTTOMRIGHT, 18=HTBORDER, 4=HTGROWBOX
+                if ((hitCode >= 10 && hitCode <= 18) || hitCode == 4)
+                {
+                    return (IntPtr)HTCLIENT;
+                }
+                return hit;
+            }
+
             if (uMsg == WM_SETCURSOR)
             {
                 if (gameWndMsgLogCount++ < 30 || (gameWndMsgLogCount % 120 == 0))
@@ -752,18 +817,15 @@ namespace UnityRemix
                     {
                         instance?.logger?.LogInfo($"[CursorDiag-RemixWnd #{remixWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={ShouldHideCursor}, RemixOpen={isRemixUIOpen}, Win32=[{GetCursorDiagnosticString()}]");
                     }
-                    if (isEmbeddedStatic)
+                    if (isRemixUIOpen)
                     {
-                        if (isRemixUIOpen)
-                        {
-                            SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
-                            return new IntPtr(1);
-                        }
-                        else if (ShouldHideCursor)
-                        {
-                            SetCursor(BlankCursor);
-                            return new IntPtr(1);
-                        }
+                        SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
+                        return new IntPtr(1);
+                    }
+                    else if (ShouldHideCursor)
+                    {
+                        SetCursor(BlankCursor);
+                        return new IntPtr(1);
                     }
                     return DefWindowProcW(hWnd, msg, wParam, lParam);
             }
