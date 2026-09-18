@@ -34,19 +34,49 @@ namespace UnityRemix
         private static bool isCursorHiddenViaShowCursor = false;
         private static bool isRenderThreadCursorHidden = false;
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct CURSORINFO
+        {
+            public int cbSize;
+            public int flags;
+            public IntPtr hCursor;
+            public POINT ptScreenPos;
+        }
+
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorInfo(out CURSORINFO pci);
+
+        public static string GetCursorDiagnosticString()
+        {
+            var ci = new CURSORINFO();
+            ci.cbSize = Marshal.SizeOf<CURSORINFO>();
+            if (GetCursorInfo(out ci))
+            {
+                string state = (ci.flags == 0) ? "HIDDEN(0)" : ((ci.flags == 1) ? "SHOWING(1)" : $"FLAG({ci.flags})");
+                return $"{state}, hCursor=0x{ci.hCursor:X}, pos=({ci.ptScreenPos.x},{ci.ptScreenPos.y})";
+            }
+            return "GetCursorInfo failed";
+        }
+
         [DllImport("user32.dll")]
         public static extern int ShowCursor(bool bShow);
 
         public static void UpdateCursorVisibility(bool shouldHide)
         {
+            if (ShouldHideCursor != shouldHide)
+            {
+                instance?.logger?.LogInfo($"[CursorDiag] UpdateCursorVisibility: shouldHide={shouldHide}, wasHidden={isCursorHiddenViaShowCursor}, Win32=[{GetCursorDiagnosticString()}]");
+            }
             ShouldHideCursor = shouldHide;
             if (shouldHide)
             {
                 if (!isCursorHiddenViaShowCursor)
                 {
                     int safety = 0;
-                    while (ShowCursor(false) >= 0 && safety++ < 10) { }
+                    int res = 0;
+                    while ((res = ShowCursor(false)) >= 0 && safety++ < 10) { }
                     isCursorHiddenViaShowCursor = true;
+                    instance?.logger?.LogInfo($"[CursorDiag] ShowCursor(false) executed: count={res}, Win32=[{GetCursorDiagnosticString()}]");
                 }
             }
             else
@@ -54,8 +84,10 @@ namespace UnityRemix
                 if (isCursorHiddenViaShowCursor)
                 {
                     int safety = 0;
-                    while (ShowCursor(true) < 0 && safety++ < 10) { }
+                    int res = 0;
+                    while ((res = ShowCursor(true)) < 0 && safety++ < 10) { }
                     isCursorHiddenViaShowCursor = false;
+                    instance?.logger?.LogInfo($"[CursorDiag] ShowCursor(true) executed: count={res}, Win32=[{GetCursorDiagnosticString()}]");
                 }
             }
         }
@@ -212,10 +244,17 @@ namespace UnityRemix
         private static bool gameWindowSubclassed = false;
         private const uint SUBCLASS_ID_GAME_WINDOW = 1001;
 
+        private static int gameWndMsgLogCount = 0;
+        private static int remixWndMsgLogCount = 0;
+
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
             if (uMsg == WM_SETCURSOR)
             {
+                if (gameWndMsgLogCount++ < 30 || (gameWndMsgLogCount % 120 == 0))
+                {
+                    instance?.logger?.LogInfo($"[CursorDiag-GameWnd #{gameWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={ShouldHideCursor}, RemixOpen={isRemixUIOpen}, Win32=[{GetCursorDiagnosticString()}]");
+                }
                 if (isRemixUIOpen)
                 {
                     SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
@@ -666,6 +705,10 @@ namespace UnityRemix
                     return DefWindowProcW(hWnd, msg, wParam, lParam);
 
                 case WM_SETCURSOR:
+                    if (remixWndMsgLogCount++ < 30 || (remixWndMsgLogCount % 120 == 0))
+                    {
+                        instance?.logger?.LogInfo($"[CursorDiag-RemixWnd #{remixWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={ShouldHideCursor}, RemixOpen={isRemixUIOpen}, Win32=[{GetCursorDiagnosticString()}]");
+                    }
                     if (isEmbeddedStatic)
                     {
                         if (isRemixUIOpen)

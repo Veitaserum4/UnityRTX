@@ -250,10 +250,16 @@ namespace UnityRemix
         private static bool overlayClassRegistered = false;
         private const string OVERLAY_CLASS_NAME = "UnityRemix_UIOverlay_Class";
 
+        private static int overlayWndMsgLogCount = 0;
+
         private static IntPtr OverlayWndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
         {
             if (msg == WM_SETCURSOR)
             {
+                if (overlayWndMsgLogCount++ < 30 || (overlayWndMsgLogCount % 120 == 0))
+                {
+                    Instance?.logger?.LogInfo($"[CursorDiag-OverlayWnd #{overlayWndMsgLogCount}] WM_SETCURSOR: hWnd=0x{hWnd:X}, ShouldHide={RemixWindowManager.ShouldHideCursor}, RemixOpen={RemixWindowManager.IsRemixUIOpen}, Win32=[{RemixWindowManager.GetCursorDiagnosticString()}]");
+                }
                 if (RemixWindowManager.IsRemixUIOpen)
                 {
                     SetCursor(LoadCursorW(IntPtr.Zero, 32512 /* IDC_ARROW */));
