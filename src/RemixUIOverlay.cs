@@ -393,6 +393,7 @@ namespace UnityRemix
             if (!srpEventSubscribed)
             {
                 UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
+                UnityEngine.Rendering.RenderPipelineManager.endCameraRendering += OnEndCameraRendering;
                 srpEventSubscribed = true;
             }
         }
@@ -402,6 +403,7 @@ namespace UnityRemix
             if (srpEventSubscribed)
             {
                 UnityEngine.Rendering.RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
+                UnityEngine.Rendering.RenderPipelineManager.endCameraRendering -= OnEndCameraRendering;
                 srpEventSubscribed = false;
             }
         }
@@ -424,6 +426,15 @@ namespace UnityRemix
                 {
                     cam.targetTexture = uiRenderTexture;
                 }
+            }
+        }
+
+        private void OnEndCameraRendering(UnityEngine.Rendering.ScriptableRenderContext context, Camera cam)
+        {
+            if (cam != null && managedCameras.Contains(cam))
+            {
+                // In SRP/URP, when a managed UI camera finishes rendering, trigger overlay presentation immediately
+                UpdateOverlay();
             }
         }
 
@@ -530,15 +541,20 @@ namespace UnityRemix
             }
         }
 
+        private int readbackCompletionCount = 0;
+        private int readbackErrorCount = 0;
+
         private void OnAsyncReadbackCompleted(AsyncGPUReadbackRequest request)
         {
             isReadbackPending = false;
+            readbackCompletionCount++;
 
             if (request.hasError)
             {
-                if (Time.frameCount % 180 == 0)
+                readbackErrorCount++;
+                if (readbackErrorCount <= 5 || readbackErrorCount % 180 == 0)
                 {
-                    logger?.LogWarning("[RemixUIOverlay] AsyncGPUReadback request encountered an error!");
+                    logger?.LogWarning($"[RemixUIOverlay] AsyncGPUReadback request error! (totalErrors={readbackErrorCount})");
                 }
                 return;
             }
@@ -548,7 +564,12 @@ namespace UnityRemix
 
             int width = request.width;
             int height = request.height;
+            int currentFrame = Time.frameCount;
 
+            if (readbackCompletionCount <= 5)
+            {
+                logger?.LogInfo($"[RemixUIOverlay] Readback success #{readbackCompletionCount}: res={width}x{height}, frame={currentFrame}");
+            }
             // Layered window and DIB must match physical gameWindow client area so overlay covers entire window
             int destWidth = width;
             int destHeight = height;
@@ -569,8 +590,6 @@ namespace UnityRemix
                 processPixels = new byte[rawData.Length];
             }
             rawData.CopyTo(processPixels);
-
-            int currentFrame = Time.frameCount;
 
             // Offload scanline processing and UpdateLayeredWindow to background thread pool!
             // Unity's main thread returns immediately (~0.2ms), completely eliminating slow-motion stutters!
@@ -759,7 +778,7 @@ namespace UnityRemix
                     }
                 }
 
-                if (currentFrame % 180 == 0)
+                if (readbackCompletionCount <= 5 || currentFrame % 180 == 0)
                 {
                     logger?.LogInfo($"[RemixUIOverlay] Overlay stats (frame {currentFrame}): nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, total={totalPixels}, res={destWidth}x{destHeight}");
                 }

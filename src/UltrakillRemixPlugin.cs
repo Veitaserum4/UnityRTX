@@ -611,8 +611,28 @@ namespace UnityRemix
             debugHUD?.UpdateSnapshot();
         }
 
+        void Start()
+        {
+            StartCoroutine(EndOfFrameLoop());
+            LogSource.LogInfo("UnityRemixPlugin Start: EndOfFrameLoop started");
+        }
+
+        private System.Collections.IEnumerator EndOfFrameLoop()
+        {
+            var wait = new WaitForEndOfFrame();
+            while (true)
+            {
+                yield return wait;
+                OnEndOfFrame();
+            }
+        }
+
+        private int lastEndOfFrameNumber = -1;
+
         public void OnEndOfFrame()
         {
+            if (lastEndOfFrameNumber == frameCount) return;
+            lastEndOfFrameNumber = frameCount;
             framebufferPresenter?.OnEndOfFrame();
         }
         
