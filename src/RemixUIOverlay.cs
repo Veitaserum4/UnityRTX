@@ -410,6 +410,11 @@ namespace UnityRemix
         {
             if (cam != null && managedCameras.Contains(cam))
             {
+                if (Time.frameCount % 180 == 1)
+                {
+                    logger?.LogInfo($"[RemixUIOverlay] SRP beginCameraRendering: cam='{cam.name}', depth={cam.depth}, cullingMask=0x{cam.cullingMask:X}, targetTex={(cam.targetTexture != null ? cam.targetTexture.name : "null")}");
+                }
+
                 var hook = cam.GetComponent<RemixUICameraHook>();
                 if (hook != null)
                 {
@@ -565,6 +570,8 @@ namespace UnityRemix
             }
             rawData.CopyTo(processPixels);
 
+            int currentFrame = Time.frameCount;
+
             // Offload scanline processing and UpdateLayeredWindow to background thread pool!
             // Unity's main thread returns immediately (~0.2ms), completely eliminating slow-motion stutters!
             isProcessingOverlay = true;
@@ -572,7 +579,7 @@ namespace UnityRemix
             {
                 try
                 {
-                    ProcessAndPresentOverlay(width, height, destWidth, destHeight);
+                    ProcessAndPresentOverlay(width, height, destWidth, destHeight, currentFrame);
                 }
                 catch (Exception ex)
                 {
@@ -585,7 +592,7 @@ namespace UnityRemix
             });
         }
 
-        private void ProcessAndPresentOverlay(int srcWidth, int srcHeight, int destWidth, int destHeight)
+        private void ProcessAndPresentOverlay(int srcWidth, int srcHeight, int destWidth, int destHeight, int currentFrame)
         {
             using (RemixTracy.Zone("ProcessAndPresentOverlay"))
             {
@@ -750,6 +757,11 @@ namespace UnityRemix
                             }
                         }
                     }
+                }
+
+                if (currentFrame % 180 == 0)
+                {
+                    logger?.LogInfo($"[RemixUIOverlay] Overlay stats (frame {currentFrame}): nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, total={totalPixels}, res={destWidth}x{destHeight}");
                 }
 
                 // If completely empty (no UI pixels rendered at all), present transparent once and skip redundant updates

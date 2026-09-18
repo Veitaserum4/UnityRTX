@@ -321,29 +321,46 @@ namespace UnityRemix
                 }
             }
 
-            // Ensure dedicated UI camera exists to render ScreenSpaceOverlay canvases cleanly
-            if (dedicatedUICamera == null)
+            // Check if any native UI cameras were detected (e.g. HUD Camera in ULTRAKILL, UICamera in White Knuckle)
+            bool hasNativeUICameras = uiCameras.Count > 0;
+
+            if (!hasNativeUICameras)
             {
-                var go = new GameObject("UnityRemix_DedicatedUICamera");
-                UnityEngine.Object.DontDestroyOnLoad(go);
-                dedicatedUICamera = go.AddComponent<Camera>();
-                dedicatedUICamera.depth = 100;
-                dedicatedUICamera.clearFlags = CameraClearFlags.SolidColor;
-                dedicatedUICamera.backgroundColor = new Color(0, 0, 0, 0);
-                dedicatedUICamera.nearClipPlane = 0.1f;
-                dedicatedUICamera.farClipPlane = 1000f;
-                dedicatedUICamera.cullingMask = uiLayerBit; // UI layer only! Never Default (0)
-                ConfigureSRPRenderData(dedicatedUICamera);
-                logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for overlay canvases.");
+                // Single-camera or URP game (e.g. PEAK): No native UI cameras exist.
+                // Dedicated UI camera is required to render ScreenSpaceOverlay canvases cleanly.
+                if (dedicatedUICamera == null)
+                {
+                    var go = new GameObject("UnityRemix_DedicatedUICamera");
+                    UnityEngine.Object.DontDestroyOnLoad(go);
+                    dedicatedUICamera = go.AddComponent<Camera>();
+                    dedicatedUICamera.depth = 100;
+                    dedicatedUICamera.clearFlags = CameraClearFlags.SolidColor;
+                    dedicatedUICamera.backgroundColor = new Color(0, 0, 0, 0);
+                    dedicatedUICamera.nearClipPlane = 0.1f;
+                    dedicatedUICamera.farClipPlane = 1000f;
+                    dedicatedUICamera.cullingMask = ~1 & ~nonUIThreeDMask; // Render all layers except Default (0) and 3D geometry!
+                    ConfigureSRPRenderData(dedicatedUICamera);
+                    logger?.LogInfo("[RemixUIDetector] Created dedicated UI camera for overlay canvases.");
+                }
+                dedicatedUICamera.enabled = true;
+                dedicatedUICamera.cullingMask = ~1 & ~nonUIThreeDMask;
+                if (primaryWorld != null)
+                {
+                    SyncDedicatedUICameraTransform(primaryWorld);
+                }
+                if (!uiCameras.Contains(dedicatedUICamera))
+                {
+                    uiCameras.Add(dedicatedUICamera);
+                }
             }
-            dedicatedUICamera.enabled = true;
-            if (primaryWorld != null)
+            else
             {
-                SyncDedicatedUICameraTransform(primaryWorld);
-            }
-            if (!uiCameras.Contains(dedicatedUICamera))
-            {
-                uiCameras.Add(dedicatedUICamera);
+                // Multi-camera game with native UI camera: Disable dedicated UI camera to prevent duplicate HUD/overlay rendering!
+                if (dedicatedUICamera != null)
+                {
+                    dedicatedUICamera.enabled = false;
+                    uiCameras.Remove(dedicatedUICamera);
+                }
             }
 
             // Strictly isolate UI cameras: never render layer 0 (Default 3D world scene)
@@ -366,7 +383,7 @@ namespace UnityRemix
             }
         }
 
-        public Camera DedicatedUICamera => dedicatedUICamera;
+        public Camera DedicatedUICamera => (dedicatedUICamera != null && dedicatedUICamera.enabled) ? dedicatedUICamera : null;
         private Camera dedicatedUICamera;
 
         /// <summary>
@@ -445,9 +462,9 @@ namespace UnityRemix
                         var postProp = addDataCamType.GetProperty("renderPostProcessing");
                         postProp?.SetValue(comp, false);
 
-                        // requiresDepthTexture = false
+                        // requiresDepthTexture = true (Ensure URP allocates and binds depth buffer for render target)
                         var depthTexProp = addDataCamType.GetProperty("requiresDepthTexture");
-                        depthTexProp?.SetValue(comp, false);
+                        depthTexProp?.SetValue(comp, true);
 
                         // requiresColorTexture = false
                         var colorTexProp = addDataCamType.GetProperty("requiresColorTexture");
@@ -459,6 +476,10 @@ namespace UnityRemix
                         {
                             volMaskProp.SetValue(comp, (LayerMask)0);
                         }
+
+                        // Explicitly select default renderer index 0
+                        var setRendererMethod = addDataCamType.GetMethod("SetRenderer", new Type[] { typeof(int) });
+                        setRendererMethod?.Invoke(comp, new object[] { 0 });
                     }
                 }
             }
@@ -474,7 +495,7 @@ namespace UnityRemix
         /// </summary>
         public void RouteOverlayCanvasesToCamera(Camera targetCam = null)
         {
-            Camera uiCamera = targetCam ?? dedicatedUICamera ?? (uiCameras.Count > 0 ? uiCameras[0] : null);
+            Camera uiCamera = targetCam ?? DedicatedUICamera ?? (uiCameras.Count > 0 ? uiCameras[0] : null);
             if (uiCamera == null) return;
 
             var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
@@ -495,19 +516,9 @@ namespace UnityRemix
                     continue;
                 }
 
-                // If this is a WorldSpace canvas attached to a camera or HUD hierarchy,
-                // sanitize its elements to UI layer so the UI camera captures it cleanly without capturing 3D viewmodels.
+                // WorldSpace canvases: leave them alone on their native layers and cameras (e.g. ULTRAKILL's StyleCanvas/GunCanvas on AlwaysOnTop layer 13)
                 if (canvas.renderMode == RenderMode.WorldSpace)
                 {
-                    bool isCameraAttached = canvas.GetComponentInParent<Camera>() != null || HasCameraOrHUDInParent(canvas.transform);
-                    if (isCameraAttached)
-                    {
-                        SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
-                        if (loggedSanitizedCanvases.Add(canvas.GetInstanceID()))
-                        {
-                            logger?.LogInfo($"[RemixUIDetector] Sanitized camera-attached HUD Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to UI layer");
-                        }
-                    }
                     continue;
                 }
 
@@ -529,11 +540,12 @@ namespace UnityRemix
                     canvas.worldCamera = uiCamera;
 
                     // Ensure plane distance is at standard healthy distance within camera frustum
-                    float minPlane = uiCamera.nearClipPlane + 1.0f;
-                    float maxPlane = Mathf.Max(minPlane + 1.0f, uiCamera.farClipPlane - 10.0f);
+                    // Use a close distance (e.g. 1.5f) so 3D world geometry doesn't occlude the canvas
+                    float minPlane = uiCamera.nearClipPlane + 0.1f;
+                    float maxPlane = Mathf.Max(minPlane + 0.5f, uiCamera.farClipPlane - 1.0f);
                     if (canvas.planeDistance < minPlane || canvas.planeDistance > maxPlane)
                     {
-                        canvas.planeDistance = Mathf.Clamp(100.0f, minPlane, maxPlane);
+                        canvas.planeDistance = Mathf.Clamp(1.5f, minPlane, maxPlane);
                     }
 
                     // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders
