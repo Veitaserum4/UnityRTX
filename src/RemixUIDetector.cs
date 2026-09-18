@@ -516,9 +516,19 @@ namespace UnityRemix
                     continue;
                 }
 
-                // WorldSpace canvases: leave them alone on their native layers and cameras (e.g. ULTRAKILL's StyleCanvas/GunCanvas on AlwaysOnTop layer 13)
+                // If this is a WorldSpace canvas attached to a camera or HUD hierarchy (e.g. ULTRAKILL's GunCanvas/StyleCanvas),
+                // sanitize its elements to UI layer so the UI camera captures it cleanly without capturing 3D viewmodels.
                 if (canvas.renderMode == RenderMode.WorldSpace)
                 {
+                    bool isCameraAttached = canvas.GetComponentInParent<Camera>() != null || HasCameraOrHUDInParent(canvas.transform);
+                    if (isCameraAttached)
+                    {
+                        SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
+                        if (loggedSanitizedCanvases.Add(canvas.GetInstanceID()))
+                        {
+                            logger?.LogInfo($"[RemixUIDetector] Sanitized camera-attached HUD Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to UI layer");
+                        }
+                    }
                     continue;
                 }
 
@@ -539,14 +549,11 @@ namespace UnityRemix
                     canvas.renderMode = RenderMode.ScreenSpaceCamera;
                     canvas.worldCamera = uiCamera;
 
-                    // Ensure plane distance is at standard healthy distance within camera frustum
-                    // Use a close distance (e.g. 1.5f) so 3D world geometry doesn't occlude the canvas
-                    float minPlane = uiCamera.nearClipPlane + 0.1f;
-                    float maxPlane = Mathf.Max(minPlane + 0.5f, uiCamera.farClipPlane - 1.0f);
-                    if (canvas.planeDistance < minPlane || canvas.planeDistance > maxPlane)
-                    {
-                        canvas.planeDistance = Mathf.Clamp(1.5f, minPlane, maxPlane);
-                    }
+                    // Ensure plane distance is placed closely in front of camera frustum
+                    // Use a close distance (1.5f) so 3D world geometry never occludes the canvas
+                    float minPlane = uiCamera.nearClipPlane + 0.05f;
+                    float maxPlane = Mathf.Max(minPlane + 0.5f, uiCamera.farClipPlane - 0.5f);
+                    canvas.planeDistance = Mathf.Clamp(1.5f, minPlane, maxPlane);
 
                     // Ensure GraphicRaycaster does not block clicks with 3D scene physics colliders
                     var raycaster = canvas.GetComponent<UnityEngine.UI.GraphicRaycaster>();

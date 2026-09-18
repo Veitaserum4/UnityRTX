@@ -690,8 +690,29 @@ namespace UnityRemix
             interFrameSw = System.Diagnostics.Stopwatch.StartNew();
         }
 
+        void Start()
+        {
+            StartCoroutine(EndOfFrameLoop());
+            LogSource.LogInfo("UnityRemixPlugin Start: EndOfFrameLoop started");
+        }
+
+        private System.Collections.IEnumerator EndOfFrameLoop()
+        {
+            var wait = new WaitForEndOfFrame();
+            while (true)
+            {
+                yield return wait;
+                OnEndOfFrame();
+            }
+        }
+
+        private int lastEndOfFrameNumber = -1;
+
         public void OnEndOfFrame()
         {
+            if (lastEndOfFrameNumber == frameCount) return;
+            lastEndOfFrameNumber = frameCount;
+
             var sw = System.Diagnostics.Stopwatch.StartNew();
             using (RemixTracy.Zone("OnEndOfFrame"))
             {
