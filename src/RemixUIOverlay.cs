@@ -18,6 +18,7 @@ namespace UnityRemix
         private readonly ManualLogSource logger;
         private readonly IntPtr gameWindow;
         private IntPtr overlayWindow = IntPtr.Zero;
+        public IntPtr OverlayWindow => overlayWindow;
 
         // UI rendering state
         private readonly BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS;
@@ -267,7 +268,7 @@ namespace UnityRemix
                 }
                 else if (RemixWindowManager.ShouldHideCursor)
                 {
-                    SetCursor(IntPtr.Zero);
+                    SetCursor(RemixWindowManager.BlankCursor);
                     return new IntPtr(1);
                 }
             }

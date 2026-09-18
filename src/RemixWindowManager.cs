@@ -59,6 +59,42 @@ namespace UnityRemix
         }
 
         [DllImport("user32.dll")]
+        private static extern IntPtr CreateCursor(IntPtr hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight, byte[] pvANDPlane, byte[] pvXORPlane);
+
+        [DllImport("user32.dll", EntryPoint = "SetClassLongPtrW")]
+        private static extern IntPtr SetClassLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        [DllImport("user32.dll", EntryPoint = "SetClassLongW")]
+        private static extern IntPtr SetClassLong32(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+        public static IntPtr SetClassLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong)
+        {
+            if (hWnd == IntPtr.Zero || !IsWindow(hWnd)) return IntPtr.Zero;
+            if (IntPtr.Size == 8)
+                return SetClassLongPtr64(hWnd, nIndex, dwNewLong);
+            else
+                return SetClassLong32(hWnd, nIndex, dwNewLong);
+        }
+
+        private const int GCLP_HCURSOR = -12;
+
+        private static IntPtr blankCursorHandle = IntPtr.Zero;
+        public static IntPtr BlankCursor
+        {
+            get
+            {
+                if (blankCursorHandle == IntPtr.Zero)
+                {
+                    byte[] andMask = new byte[128];
+                    for (int i = 0; i < 128; i++) andMask[i] = 0xFF; // Transparent
+                    byte[] xorMask = new byte[128]; // 0x00
+                    blankCursorHandle = CreateCursor(IntPtr.Zero, 0, 0, 32, 32, andMask, xorMask);
+                }
+                return blankCursorHandle;
+            }
+        }
+
+        [DllImport("user32.dll")]
         public static extern int ShowCursor(bool bShow);
 
         public static void UpdateCursorVisibility(bool shouldHide)
@@ -68,45 +104,28 @@ namespace UnityRemix
                 instance?.logger?.LogInfo($"[CursorDiag] UpdateCursorVisibility: shouldHide={shouldHide}, wasHidden={isCursorHiddenViaShowCursor}, Win32=[{GetCursorDiagnosticString()}]");
             }
             ShouldHideCursor = shouldHide;
-            if (shouldHide)
+
+            IntPtr targetCursor = shouldHide ? BlankCursor : LoadCursorW(IntPtr.Zero, IDC_ARROW);
+            SetCursor(targetCursor);
+
+            IntPtr gWnd = instance != null && instance.gameWindow != IntPtr.Zero ? instance.gameWindow : FindGameWindow();
+            if (gWnd != IntPtr.Zero)
             {
-                if (!isCursorHiddenViaShowCursor)
-                {
-                    int safety = 0;
-                    int res = 0;
-                    while ((res = ShowCursor(false)) >= 0 && safety++ < 10) { }
-                    isCursorHiddenViaShowCursor = true;
-                    instance?.logger?.LogInfo($"[CursorDiag] ShowCursor(false) executed: count={res}, Win32=[{GetCursorDiagnosticString()}]");
-                }
+                SetClassLongPtr(gWnd, GCLP_HCURSOR, targetCursor);
             }
-            else
+            if (instance != null && instance.remixWindow != IntPtr.Zero)
             {
-                if (isCursorHiddenViaShowCursor)
-                {
-                    int safety = 0;
-                    int res = 0;
-                    while ((res = ShowCursor(true)) < 0 && safety++ < 10) { }
-                    isCursorHiddenViaShowCursor = false;
-                    instance?.logger?.LogInfo($"[CursorDiag] ShowCursor(true) executed: count={res}, Win32=[{GetCursorDiagnosticString()}]");
-                }
+                SetClassLongPtr(instance.remixWindow, GCLP_HCURSOR, targetCursor);
+            }
+            if (RemixUIOverlay.Instance != null && RemixUIOverlay.Instance.OverlayWindow != IntPtr.Zero)
+            {
+                SetClassLongPtr(RemixUIOverlay.Instance.OverlayWindow, GCLP_HCURSOR, targetCursor);
             }
         }
 
         public static void SyncRenderThreadCursor()
         {
-            bool hide = ShouldHideCursor;
-            if (hide && !isRenderThreadCursorHidden)
-            {
-                int safety = 0;
-                while (ShowCursor(false) >= 0 && safety++ < 10) { }
-                isRenderThreadCursorHidden = true;
-            }
-            else if (!hide && isRenderThreadCursorHidden)
-            {
-                int safety = 0;
-                while (ShowCursor(true) < 0 && safety++ < 10) { }
-                isRenderThreadCursorHidden = false;
-            }
+            // Cursor is handled transparently via BlankCursor and SetClassLongPtr
         }
 
         public IntPtr RemixWindow => remixWindow;
@@ -262,7 +281,7 @@ namespace UnityRemix
                 }
                 else if (ShouldHideCursor)
                 {
-                    SetCursor(IntPtr.Zero);
+                    SetCursor(BlankCursor);
                     return new IntPtr(1);
                 }
             }
@@ -719,7 +738,7 @@ namespace UnityRemix
                         }
                         else if (ShouldHideCursor)
                         {
-                            SetCursor(IntPtr.Zero);
+                            SetCursor(BlankCursor);
                             return new IntPtr(1);
                         }
                     }

@@ -290,7 +290,7 @@ namespace UnityRemix
             }
             else if (shouldHide)
             {
-                SetCursor(IntPtr.Zero);
+                SetCursor(RemixWindowManager.BlankCursor);
             }
 
             // Ensure game window retains activation and focus during startup
