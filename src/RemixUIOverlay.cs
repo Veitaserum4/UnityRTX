@@ -23,6 +23,7 @@ namespace UnityRemix
         // UI rendering state
         private readonly BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS;
         private readonly BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu;
+        private readonly BepInEx.Configuration.ConfigEntry<bool> configUIOverlayClearBlack;
         private RenderTexture uiRenderTexture;
         private bool isReadbackPending = false;
         private bool isProcessingOverlay = false;
@@ -323,12 +324,14 @@ namespace UnityRemix
             ManualLogSource logger,
             IntPtr gameWindow,
             BepInEx.Configuration.ConfigEntry<int> configUIOverlayFPS = null,
-            BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu = null)
+            BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu = null,
+            BepInEx.Configuration.ConfigEntry<bool> configUIOverlayClearBlack = null)
         {
             this.logger = logger;
             this.gameWindow = gameWindow;
             this.configUIOverlayFPS = configUIOverlayFPS;
             this.configHideUIOnRemixMenu = configHideUIOnRemixMenu;
+            this.configUIOverlayClearBlack = configUIOverlayClearBlack;
             Instance = this;
         }
 
@@ -670,6 +673,8 @@ namespace UnityRemix
 
                         using (RemixTracy.Zone("UI_ScanlineConversion"))
                         {
+                            bool clearBlack = configUIOverlayClearBlack != null && configUIOverlayClearBlack.Value;
+
                             if (srcWidth == destWidth && srcHeight == destHeight)
                             {
                                 // Direct 1:1 fast path (no scaling required)
@@ -706,13 +711,27 @@ namespace UnityRemix
 
                                         if (!isColor)
                                         {
-                                            // If RGB is completely black (0,0,0) and alpha is 255 (opaque), this is the cleared
-                                            // background of the render target / backbuffer (e.g. in URP where alpha defaults to 1.0).
-                                            // In a transparent UI overlay, opaque black has zero color contribution and must never
-                                            // occlude the underlying 3D world with a solid black sheet.
-                                            if (a == 255 || a == 0)
+                                            // If RGB is completely black (0,0,0) and alpha is 255 (opaque):
+                                            // When UIOverlayClearBlack is enabled (e.g. in URP games like PEAK where
+                                            // render targets clear alpha to 1.0), treat opaque black as transparent.
+                                            // Otherwise (e.g. ULTRAKILL), preserve opaque black so UI boxes/panels remain solid.
+                                            if (a == 0 || (clearBlack && a == 255))
                                             {
                                                 *(uint*)d = 0;
+                                                s += 4;
+                                                d += 4;
+                                                continue;
+                                            }
+
+                                            if (a == 255)
+                                            {
+                                                localNonZero++;
+                                                localOpaque++;
+                                                localBlackOpaque++;
+                                                d[0] = 0;
+                                                d[1] = 0;
+                                                d[2] = 0;
+                                                d[3] = 255;
                                                 s += 4;
                                                 d += 4;
                                                 continue;
@@ -811,9 +830,21 @@ namespace UnityRemix
 
                                         if (!isColor)
                                         {
-                                            if (a == 255 || a == 0)
+                                            if (a == 0 || (clearBlack && a == 255))
                                             {
                                                 *(uint*)d = 0;
+                                                continue;
+                                            }
+
+                                            if (a == 255)
+                                            {
+                                                localNonZero++;
+                                                localOpaque++;
+                                                localBlackOpaque++;
+                                                d[0] = 0;
+                                                d[1] = 0;
+                                                d[2] = 0;
+                                                d[3] = 255;
                                                 continue;
                                             }
 
