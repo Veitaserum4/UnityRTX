@@ -31,8 +31,6 @@ namespace UnityRemix
         private static bool isEmbeddedStatic = false;
         private static volatile bool isRemixUIOpen = false;
         public static volatile bool ShouldHideCursor = false;
-        private static bool isCursorHiddenViaShowCursor = false;
-        private static bool isRenderThreadCursorHidden = false;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct CURSORINFO
@@ -97,13 +95,44 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         public static extern int ShowCursor(bool bShow);
 
+        public static void EnforceCursorHidden()
+        {
+            int c = ShowCursor(true);
+            ShowCursor(false);
+            if (c >= 0)
+            {
+                int safety = 0;
+                while (ShowCursor(false) >= 0 && safety++ < 50000) { }
+            }
+        }
+
+        public static void EnforceCursorVisible()
+        {
+            int c = ShowCursor(true);
+            ShowCursor(false);
+            if (c < 0)
+            {
+                int safety = 0;
+                while (ShowCursor(true) < 0 && safety++ < 50000) { }
+            }
+        }
+
         public static void UpdateCursorVisibility(bool shouldHide)
         {
             if (ShouldHideCursor != shouldHide)
             {
-                instance?.logger?.LogInfo($"[CursorDiag] UpdateCursorVisibility: shouldHide={shouldHide}, wasHidden={isCursorHiddenViaShowCursor}, Win32=[{GetCursorDiagnosticString()}]");
+                instance?.logger?.LogInfo($"[CursorDiag] UpdateCursorVisibility: shouldHide={shouldHide}, Win32=[{GetCursorDiagnosticString()}]");
             }
             ShouldHideCursor = shouldHide;
+
+            if (shouldHide)
+            {
+                EnforceCursorHidden();
+            }
+            else
+            {
+                EnforceCursorVisible();
+            }
 
             IntPtr targetCursor = shouldHide ? BlankCursor : LoadCursorW(IntPtr.Zero, IDC_ARROW);
             SetCursor(targetCursor);
@@ -121,11 +150,6 @@ namespace UnityRemix
             {
                 SetClassLongPtr(RemixUIOverlay.Instance.OverlayWindow, GCLP_HCURSOR, targetCursor);
             }
-        }
-
-        public static void SyncRenderThreadCursor()
-        {
-            // Cursor is handled transparently via BlankCursor and SetClassLongPtr
         }
 
         public IntPtr RemixWindow => remixWindow;
@@ -1017,7 +1041,11 @@ namespace UnityRemix
         /// </summary>
         public void PumpWindowsMessages()
         {
-            SyncRenderThreadCursor();
+            if (ShouldHideCursor)
+                EnforceCursorHidden();
+            else
+                EnforceCursorVisible();
+
             MSG msg;
             while (PeekMessageW(out msg, IntPtr.Zero, 0, 0, PM_REMOVE))
             {
@@ -1041,12 +1069,7 @@ namespace UnityRemix
         public void DestroyRemixWindow()
         {
             UpdateCursorVisibility(false);
-            if (isRenderThreadCursorHidden)
-            {
-                int safety = 0;
-                while (ShowCursor(true) < 0 && safety++ < 10) { }
-                isRenderThreadCursorHidden = false;
-            }
+            EnforceCursorVisible();
             CleanupCapture();
             if (remixWindow != IntPtr.Zero)
             {
