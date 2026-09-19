@@ -26,6 +26,7 @@ namespace UnityRemix
         
         // Cached delegates
         private RemixAPI.PFN_remixapi_Present presentFunc;
+        private RemixAPI.PFN_remixapi_Shutdown shutdownFunc;
         
         // Thread state
         private Thread renderThread;
@@ -79,6 +80,8 @@ namespace UnityRemix
                 presentFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_Present>(
                     remixInterface.Present);
             }
+            if (remixInterface.Shutdown != IntPtr.Zero)
+                shutdownFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_Shutdown>(remixInterface.Shutdown);
         }
         
         /// <summary>
@@ -121,19 +124,40 @@ namespace UnityRemix
         /// <summary>
         /// Stop the render thread
         /// </summary>
-        public void Stop()
+        public bool Stop()
         {
             renderThreadRunning = false;
-            if (renderThread != null && renderThread.IsAlive)
+            return renderThread == null || !renderThread.IsAlive || renderThread.Join(5000);
+        }
+
+        private void RenderThreadLoop()
+        {
+            try
             {
-                renderThread.Join(1000);
+                RunRenderLoop();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Render thread failed: {ex}");
+            }
+            finally
+            {
+                deviceReady = false;
+                if (RemixAPI.IsOpenRemix)
+                {
+                    // SDL/Vulkan shutdown must run on the Startup thread, before
+                    // its borrowed HWND is destroyed or the native DLL unloaded.
+                    var result = shutdownFunc?.Invoke();
+                    logger.LogInfo($"openremix render-thread shutdown: {result}");
+                    windowManager.DestroyRemixWindow();
+                }
             }
         }
         
         /// <summary>
         /// Main render loop
         /// </summary>
-        private void RenderThreadLoop()
+        private void RunRenderLoop()
         {
             logger.LogInfo("Render thread loop starting...");
             

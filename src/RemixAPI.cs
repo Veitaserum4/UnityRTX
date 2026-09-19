@@ -6,9 +6,9 @@ namespace UnityRemix
 {
     /// <summary>
     /// P/Invoke bindings for Remix C API.
-    /// Based on remix_c.h from dxvk-remix v0.6.2.
+    /// Supports openremix 0.1003, Remix Plus 0.1000, and UnityRTX v0.2's 0.6.1 runtime.
     /// </summary>
-    public static class RemixAPI
+    public static partial class RemixAPI
     {
         #region Version Constants
         
@@ -36,6 +36,13 @@ namespace UnityRemix
             True = 1
         }
 
+        public enum remixapi_UIState : int
+        {
+            REMIXAPI_UI_STATE_NONE = 0,
+            REMIXAPI_UI_STATE_BASIC = 1,
+            REMIXAPI_UI_STATE_ADVANCED = 2
+        }
+
         public enum remixapi_ErrorCode : int
         {
             REMIXAPI_ERROR_CODE_SUCCESS = 0,
@@ -50,6 +57,8 @@ namespace UnityRemix
             REMIXAPI_ERROR_CODE_SET_DLL_DIRECTORY_FAILURE = 9,
             REMIXAPI_ERROR_CODE_GET_FULL_PATH_NAME_FAILURE = 10,
             REMIXAPI_ERROR_CODE_NOT_INITIALIZED = 11,
+            REMIXAPI_ERROR_CODE_FEATURE_UNAVAILABLE = 12,
+            REMIXAPI_ERROR_CODE_WRONG_THREAD = 13,
             REMIXAPI_ERROR_CODE_HRESULT_NO_REQUIRED_GPU_FEATURES = unchecked((int)0x88960001),
             REMIXAPI_ERROR_CODE_HRESULT_DRIVER_VERSION_BELOW_MINIMUM = unchecked((int)0x88960002),
             REMIXAPI_ERROR_CODE_HRESULT_DXVK_INSTANCE_EXTENSION_FAIL = unchecked((int)0x88960003),
@@ -528,7 +537,7 @@ namespace UnityRemix
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate remixapi_ErrorCode PFN_remixapi_InitializeLibrary(
             ref remixapi_InitializeLibraryInfo info,
-            out remixapi_Interface out_result);
+            IntPtr out_result);
 
         // DXVK interop functions
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -637,6 +646,20 @@ namespace UnityRemix
 
         private static IntPtr _remixDll = IntPtr.Zero;
 
+        public static string LoadedApiVersion { get; private set; }
+        public static bool IsOpenRemix => LoadedApiVersion == "0.1003.0 (openremix)";
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_PumpEvents();
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_UIState PFN_remixapi_GetUIState();
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_SetUIState(remixapi_UIState state);
+
+        public static PFN_remixapi_PumpEvents NativePumpEvents { get; private set; }
+
         /// <summary>Handle to the loaded d3d9.dll (Remix runtime). Used by RemixImGui for GetProcAddress.</summary>
         public static IntPtr RemixDllHandle => _remixDll;
 
@@ -674,16 +697,8 @@ namespace UnityRemix
             // Convert to delegate
             var initFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_InitializeLibrary>(initFuncPtr);
 
-            // Create initialization info with version
-            var info = new remixapi_InitializeLibraryInfo
-            {
-                sType = remixapi_StructType.REMIXAPI_STRUCT_TYPE_INITIALIZE_LIBRARY_INFO,
-                pNext = IntPtr.Zero,
-                version = REMIXAPI_VERSION_MAKE(REMIXAPI_VERSION_MAJOR, REMIXAPI_VERSION_MINOR, REMIXAPI_VERSION_PATCH)
-            };
-
-            // Call initialization
-            var result = initFunc(ref info, out remixInterface);
+            var result = InitializeRemixInterface(initFunc,
+                name => GetProcAddress(hModule, name), out remixInterface, out string apiVersion);
             
             if (result != remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
             {
@@ -693,6 +708,10 @@ namespace UnityRemix
 
             remixDll = hModule;
             _remixDll = hModule;
+            LoadedApiVersion = apiVersion;
+            if (IsOpenRemix)
+                NativePumpEvents = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_PumpEvents>(
+                    GetProcAddress(hModule, "remixapi_PumpEvents"));
             return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS;
         }
 
@@ -812,6 +831,8 @@ namespace UnityRemix
 
             remixInterface = new remixapi_Interface();
             _remixDll = IntPtr.Zero;
+            LoadedApiVersion = null;
+            NativePumpEvents = null;
             return status;
         }
 

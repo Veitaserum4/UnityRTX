@@ -12,7 +12,14 @@ namespace UnityRemix
     {
         private readonly ManualLogSource logger;
         private RemixAPI.PFN_remixapi_dxvk_CreateD3D9 createD3D9Func;
+        private RemixAPI.PFN_remixapi_SetConfigVariable setConfigVariableFunc;
+        private readonly BepInEx.Configuration.ConfigEntry<string> configNativeBackend;
         private RemixAPI.PFN_remixapi_Startup startupFunc;
+        private RemixAPI.PFN_remixapi_GetUIState getUIStateFunc;
+        private RemixAPI.PFN_remixapi_SetUIState setUIStateFunc;
+        private readonly uint processId = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        private bool settingsKeyWasDown;
+        private int nativeSettingsToggleRequested;
         
         private IntPtr remixWindow = IntPtr.Zero;
         private int windowWidth = 1920;
@@ -41,6 +48,12 @@ namespace UnityRemix
 
         public void HandleAltX()
         {
+            if (RemixAPI.IsOpenRemix)
+            {
+                // Unity detects Alt+X on its main thread; apply it on the render thread.
+                System.Threading.Interlocked.Exchange(ref nativeSettingsToggleRequested, 1);
+                return;
+            }
             ToggleRemixUI();
             if (remixWindow != IntPtr.Zero)
             {
@@ -74,6 +87,12 @@ namespace UnityRemix
         
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int virtualKey);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
@@ -305,11 +324,20 @@ namespace UnityRemix
             ManualLogSource logger,
             RemixAPI.remixapi_Interface remixInterface,
             BepInEx.Configuration.ConfigEntry<bool> singleWindow = null,
-            BepInEx.Configuration.ConfigEntry<SingleWindowMethod> singleWindowMethod = null)
+            BepInEx.Configuration.ConfigEntry<SingleWindowMethod> singleWindowMethod = null,
+            BepInEx.Configuration.ConfigEntry<string> nativeBackend = null)
         {
             this.logger = logger;
             this.configSingleWindow = singleWindow;
             this.configSingleWindowMethod = singleWindowMethod;
+            this.configNativeBackend = nativeBackend;
+            if (remixInterface.SetConfigVariable != IntPtr.Zero)
+                setConfigVariableFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetConfigVariable>(remixInterface.SetConfigVariable);
+            if (RemixAPI.IsOpenRemix)
+            {
+                getUIStateFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_GetUIState>(remixInterface.GetUIState);
+                setUIStateFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetUIState>(remixInterface.SetUIState);
+            }
             
             // Cache delegates
             if (remixInterface.dxvk_CreateD3D9 != IntPtr.Zero)
@@ -524,7 +552,8 @@ namespace UnityRemix
             }
 
             // Create window
-            string windowTitle = $"{Application.productName} - RTX Remix - {BuildInfo.GitHash}";
+            string rendererName = RemixAPI.IsOpenRemix ? "openremix" : "RTX Remix";
+            string windowTitle = $"{Application.productName} - {rendererName} - {BuildInfo.GitHash}";
             remixWindow = CreateWindowExW(
                 dwExStyle,
                 WINDOW_CLASS_NAME,
@@ -595,6 +624,13 @@ namespace UnityRemix
             }
             
             logger.LogInfo("Remix Startup succeeded!");
+            if (RemixAPI.IsOpenRemix && setConfigVariableFunc != null)
+            {
+                string backend = configNativeBackend?.Value ?? "raster";
+                var backendResult = setConfigVariableFunc("rtx.native.backend", backend);
+                logger.LogInfo($"openremix backend '{backend}': {backendResult}");
+                logger.LogInfo("openremix settings: press F12 in the game or openremix window; choose Backend > Path trace.");
+            }
             return true;
         }
 
@@ -693,12 +729,51 @@ namespace UnityRemix
         /// </summary>
         public void PumpWindowsMessages()
         {
+            // SDL event pumping belongs to the same thread as Startup/Present.
+            RemixAPI.NativePumpEvents?.Invoke();
             MSG msg;
             while (PeekMessageW(out msg, IntPtr.Zero, 0, 0, PM_REMOVE))
             {
                 TranslateMessage(ref msg);
                 DispatchMessageW(ref msg);
             }
+            if (RemixAPI.IsOpenRemix)
+                UpdateNativeSettings();
+        }
+
+        private void UpdateNativeSettings()
+        {
+            // Poll on the render thread so either window can receive F12, even
+            // when Unity is unfocused. Use the held bit, not the shared press bit.
+            bool keyDown = (GetAsyncKeyState(0x7B /* VK_F12 */) & 0x8000) != 0;
+            bool pressed = keyDown && !settingsKeyWasDown;
+            settingsKeyWasDown = keyDown;
+            GetWindowThreadProcessId(GetForegroundWindow(), out uint foregroundProcess);
+            bool toggle = System.Threading.Interlocked.Exchange(ref nativeSettingsToggleRequested, 0) != 0;
+            toggle |= pressed && foregroundProcess == processId;
+
+            var state = getUIStateFunc();
+            if (toggle)
+            {
+                var next = state == RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE
+                    ? RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_ADVANCED
+                    : RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE;
+                var result = setUIStateFunc(next);
+                if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                {
+                    state = next;
+                    logger.LogInfo($"openremix settings {(state == RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE ? "closed" : "opened")}");
+                    if (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE)
+                    {
+                        SetForegroundWindow(remixWindow);
+                        SetFocus(remixWindow);
+                    }
+                }
+                else
+                    logger.LogWarning($"Could not toggle openremix settings: {result}");
+            }
+            // Also reflect the panel's own close button for embedded mouse routing.
+            isRemixUIOpen = state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE;
         }
         
         /// <summary>
@@ -715,6 +790,7 @@ namespace UnityRemix
         /// </summary>
         public void DestroyRemixWindow()
         {
+            isRemixUIOpen = false;
             CleanupCapture();
             if (remixWindow != IntPtr.Zero)
             {
