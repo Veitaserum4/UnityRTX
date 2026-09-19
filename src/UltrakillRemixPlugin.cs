@@ -621,25 +621,46 @@ namespace UnityRemix
                     // Capture static meshes and camera
                     using (RemixTracy.Zone("CaptureStaticMeshes"))
                     {
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        frameCapture.CaptureStaticMeshes(nextState, frameCount);
-                        staticMs = sw.Elapsed.TotalMilliseconds;
+                        try
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            frameCapture.CaptureStaticMeshes(nextState, frameCount);
+                            staticMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                        catch (Exception ex)
+                        {
+                            LogSource.LogError($"CaptureStaticMeshes exception: {ex}");
+                        }
                     }
 
                     // Capture skinned meshes
                     using (RemixTracy.Zone("CaptureSkinnedMeshes"))
                     {
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
-                        skinnedMs = sw.Elapsed.TotalMilliseconds;
+                        try
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
+                            skinnedMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                        catch (Exception ex)
+                        {
+                            LogSource.LogError($"CaptureSkinnedMeshes exception: {ex}");
+                        }
                     }
 
                     // Capture dynamic non-skinned effects (weapon screens, line/trail beams, sprites, blood decals, particles)
                     using (RemixTracy.Zone("CaptureDynamicEffects"))
                     {
-                        var sw = System.Diagnostics.Stopwatch.StartNew();
-                        frameCapture.CaptureDynamicEffects(nextState, frameCount);
-                        dynamicMs = sw.Elapsed.TotalMilliseconds;
+                        try
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            frameCapture.CaptureDynamicEffects(nextState, frameCount);
+                            dynamicMs = sw.Elapsed.TotalMilliseconds;
+                        }
+                        catch (Exception ex)
+                        {
+                            LogSource.LogError($"CaptureDynamicEffects exception: {ex}");
+                        }
                     }
 
                     // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
@@ -647,15 +668,22 @@ namespace UnityRemix
                     {
                         using (RemixTracy.Zone("SceneMeshScanner_UpdateVisibility"))
                         {
-                            var sw = System.Diagnostics.Stopwatch.StartNew();
-                            Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
-                            sceneMeshScanner.UpdateVisibility(
-                                camPos,
-                                configUseDistanceCulling.Value,
-                                configMaxRenderDistance.Value,
-                                configUseVisibilityCulling.Value
-                            );
-                            scannerMs = sw.Elapsed.TotalMilliseconds;
+                            try
+                            {
+                                var sw = System.Diagnostics.Stopwatch.StartNew();
+                                Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
+                                sceneMeshScanner.UpdateVisibility(
+                                    camPos,
+                                    configUseDistanceCulling.Value,
+                                    configMaxRenderDistance.Value,
+                                    configUseVisibilityCulling.Value
+                                );
+                                scannerMs = sw.Elapsed.TotalMilliseconds;
+                            }
+                            catch (Exception ex)
+                            {
+                                LogSource.LogError($"sceneMeshScanner UpdateVisibility exception: {ex}");
+                            }
                         }
                     }
 

@@ -72,6 +72,11 @@ namespace UnityRemix
         // Distinguished from smoothness-as-alpha (gradual values) used in Standard shader Opaque mode.
         private HashSet<int> texturesWithCutoutAlpha = new HashSet<int>();
         
+        private static readonly string[] AlbedoTextureProps = new string[]
+        {
+            "_MainTex", "_BaseMap", "_Diffuse", "_Texture", "_Albedo", "_ColorMap", "_BaseColorMap"
+        };
+
         // Cache for materials - maps Unity material instance ID to Remix material handle
         private Dictionary<int, IntPtr> materialCache = new Dictionary<int, IntPtr>();
 
@@ -308,20 +313,14 @@ namespace UnityRemix
                 {
                     matData.albedoColor = material.GetColor("_Color");
                 }
+                else if (material.HasProperty("_BaseColor"))
+                {
+                    matData.albedoColor = material.GetColor("_BaseColor");
+                }
                 else if (material.HasProperty("_TintColor"))
                 {
                     matData.albedoColor = material.GetColor("_TintColor");
                 }
-            }
-            
-            // Capture texture tiling/offset
-            if (material.HasProperty("_MainTex"))
-            {
-                matData.mainTexST = new Vector4(
-                    material.mainTextureScale.x,
-                    material.mainTextureScale.y,
-                    material.mainTextureOffset.x,
-                    material.mainTextureOffset.y);
             }
             
             // Detect alpha mode from shader keywords, _Mode property, and render queue
@@ -346,9 +345,38 @@ namespace UnityRemix
             // Upload albedo texture (or MPB texture override)
             Texture2D albedoTex = mpbMainTex;
             string shaderName = material.shader != null ? material.shader.name : "null";
-            if (captureTextures.Value && (mpbMainTex != null || material.HasProperty("_MainTex")))
+            string matchedTexProp = null;
+
+            if (captureTextures.Value)
             {
-                var tex = mpbMainTex != null ? mpbMainTex : (material.GetTexture("_MainTex") as Texture2D);
+                Texture2D tex = mpbMainTex;
+                if (tex != null)
+                {
+                    matchedTexProp = "_MainTex";
+                }
+                else if (material.mainTexture is Texture2D mainT)
+                {
+                    tex = mainT;
+                    matchedTexProp = "_MainTex";
+                }
+                else
+                {
+                    for (int p = 0; p < AlbedoTextureProps.Length; p++)
+                    {
+                        string pName = AlbedoTextureProps[p];
+                        if (material.HasProperty(pName))
+                        {
+                            var t = material.GetTexture(pName) as Texture2D;
+                            if (t != null)
+                            {
+                                tex = t;
+                                matchedTexProp = pName;
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 albedoTex = tex;
                 if (tex != null)
                 {
@@ -396,9 +424,36 @@ namespace UnityRemix
                 }
             }
             
+            // Capture texture tiling/offset
+            if (matchedTexProp != null)
+            {
+                try
+                {
+                    Vector2 scale = material.GetTextureScale(matchedTexProp);
+                    Vector2 offset = material.GetTextureOffset(matchedTexProp);
+                    matData.mainTexST = new Vector4(scale.x, scale.y, offset.x, offset.y);
+                }
+                catch
+                {
+                    matData.mainTexST = new Vector4(
+                        material.mainTextureScale.x,
+                        material.mainTextureScale.y,
+                        material.mainTextureOffset.x,
+                        material.mainTextureOffset.y);
+                }
+            }
+            else if (material.HasProperty("_MainTex"))
+            {
+                matData.mainTexST = new Vector4(
+                    material.mainTextureScale.x,
+                    material.mainTextureScale.y,
+                    material.mainTextureOffset.x,
+                    material.mainTextureOffset.y);
+            }
+
             // Fallback: no albedo texture but material has a color — create a 1x1 solid-color texture
             // so Remix renders the surface with the correct color instead of the debug checkerboard.
-            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_TintColor")))
+            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_TintColor")))
             {
                 matData.albedoHandle = GetOrCreateSolidColorTexture(matData.albedoColor);
                 if (matData.albedoHandle != IntPtr.Zero)
