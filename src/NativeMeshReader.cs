@@ -209,6 +209,9 @@ namespace UnityRemix
         private static readonly bool HasModernVertexAttributes = 
             Type.GetType("UnityEngine.Rendering.VertexAttributeFormat, UnityEngine.CoreModule") != null;
 
+        private static MethodInfo _modernLayoutMethod;
+        private static bool _modernLayoutSearched;
+
         /// <summary>
         /// Attempts to get the vertex buffer layout for a mesh across all Unity versions.
         /// Uses ModernMeshLayoutHelper (Unity 2019.3+) or LegacyMeshLayoutHelper (Unity 2018.x - 2019.2).
@@ -220,7 +223,30 @@ namespace UnityRemix
 
             if (HasModernVertexAttributes)
             {
-                return ModernMeshLayoutHelper.TryGetLayout(mesh, out layout);
+                if (!_modernLayoutSearched)
+                {
+                    _modernLayoutSearched = true;
+                    var helperType = Type.GetType("UnityRemix.ModernMeshLayoutHelper");
+                    _modernLayoutMethod = helperType?.GetMethod("TryGetLayout", BindingFlags.Public | BindingFlags.Static);
+                }
+
+                if (_modernLayoutMethod != null)
+                {
+                    try
+                    {
+                        object[] args = new object[] { mesh, null };
+                        bool res = (bool)_modernLayoutMethod.Invoke(null, args);
+                        if (res && args[1] is NativeVertexLayout modernLayout)
+                        {
+                            layout = modernLayout;
+                            return true;
+                        }
+                    }
+                    catch
+                    {
+                        // Fall back to legacy if modern fails
+                    }
+                }
             }
             return LegacyMeshLayoutHelper.TryGetLayout(mesh, out layout);
         }
@@ -514,7 +540,7 @@ namespace UnityRemix
             int normOffset = -1;
             int uvOffset = -1;
 
-            if (_hasChannelMethod != null)
+            if (_hasChannelMethod != null && (hasNorm || hasTan || hasCol || hasUV0))
             {
                 int currentOffset = 12; // after Position (Float3)
                 if (hasNorm)

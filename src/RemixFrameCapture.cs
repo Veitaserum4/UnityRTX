@@ -664,7 +664,7 @@ namespace UnityRemix
             skinnedRoundRobinIndex = 0;
             // Don't clear configuredBufferTargets — the property persists on the component
             
-            var allStatic = UnityEngine.Object.FindObjectsOfType<MeshRenderer>(true);
+            var allStatic = UnityCompat.FindObjects<MeshRenderer>(true);
             for (int i = 0; i < allStatic.Length; i++)
             {
                 var r = allStatic[i];
@@ -674,7 +674,7 @@ namespace UnityRemix
                 }
             }
 
-            var allSkinned = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>(true);
+            var allSkinned = UnityCompat.FindObjects<SkinnedMeshRenderer>(true);
             for (int i = 0; i < allSkinned.Length; i++)
             {
                 var sr = allSkinned[i];
