@@ -777,7 +777,7 @@ namespace UnityRemix
                     (unityTexture.format == TextureFormat.DXT5 || unityTexture.format == TextureFormat.DXT5Crunched);
                 
                 // Readable DXT5nm: decompress on CPU to avoid GPU stall
-                if (isDXT5nm && unityTexture.isReadable)
+                if (isDXT5nm && UnityCompat.IsReadable(unityTexture))
                 {
                     Color32[] pixels = unityTexture.GetPixels32();
                     pixelData = new byte[pixels.Length * 4];
@@ -796,7 +796,7 @@ namespace UnityRemix
                         logger.LogInfo($"Unpacked readable DXT5nm normal map '{unityTexture.name}' ({unityTexture.width}x{unityTexture.height})");
                 }
                 // Handle non-readable textures via GPU readback
-                else if (!unityTexture.isReadable)
+                else if (!UnityCompat.IsReadable(unityTexture))
                 {
                     if (verboseTextureLogging.Value)
                         logger.LogInfo($"Texture '{unityTexture.name}' is not readable - forcing GPU readback");
@@ -992,7 +992,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (tex.isReadable)
+                if (UnityCompat.IsReadable(tex))
                 {
                     pixels = tex.GetPixels32();
                 }
@@ -1112,7 +1112,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (tex.isReadable)
+                if (UnityCompat.IsReadable(tex))
                 {
                     pixels = tex.GetPixels32();
                 }

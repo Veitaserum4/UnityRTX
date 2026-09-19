@@ -133,5 +133,26 @@ namespace UnityRemix
             catch { }
             return 1;
         }
+
+        private static readonly PropertyInfo _tex2DReadableProp = typeof(Texture2D).GetProperty("isReadable");
+        private static readonly PropertyInfo _texReadableProp = typeof(Texture).GetProperty("isReadable");
+
+        /// <summary>
+        /// Returns isReadable for textures across all Unity versions.
+        /// In Unity 2018, isReadable is on Texture2D; in 2019+, it moved up to Texture.
+        /// </summary>
+        public static bool IsReadable(Texture tex)
+        {
+            if (tex == null) return false;
+            try
+            {
+                if (tex is Texture2D t2d && _tex2DReadableProp != null)
+                    return (bool)_tex2DReadableProp.GetValue(t2d, null);
+                if (_texReadableProp != null)
+                    return (bool)_texReadableProp.GetValue(tex, null);
+            }
+            catch { }
+            return false;
+        }
     }
 }
