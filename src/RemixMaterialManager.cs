@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using BepInEx.Logging;
@@ -383,21 +384,11 @@ namespace UnityRemix
                 }
             }
             
-            // Dump shader properties once per shader to discover emission/color property names
-            if (material.shader != null && !loggedShaderProperties.Contains(shaderName))
+            // Dump shader properties once per shader to discover emission/color property names (via reflection for pre-2019 compatibility)
+            if (verboseTextureLogging.Value && material.shader != null && !loggedShaderProperties.Contains(shaderName))
             {
                 loggedShaderProperties.Add(shaderName);
-                var sb = new System.Text.StringBuilder();
-                sb.Append($"[ShaderProps] '{shaderName}': ");
-                int propCount = material.shader.GetPropertyCount();
-                for (int p = 0; p < propCount; p++)
-                {
-                    var pName = material.shader.GetPropertyName(p);
-                    var pType = material.shader.GetPropertyType(p);
-                    sb.Append($"{pName}({pType}) ");
-                }
-                if (verboseTextureLogging.Value)
-                    logger.LogInfo(sb.ToString());
+                DumpShaderProperties(material.shader, shaderName);
             }
             
             // Upload emission — three shader paths:
@@ -1738,6 +1729,40 @@ namespace UnityRemix
                 return placeholderMaterialNames.Count > 0
                     ? new List<string>(placeholderMaterialNames).ToArray()
                     : Array.Empty<string>();
+        }
+
+        private static MethodInfo _getPropertyCountMethod;
+        private static MethodInfo _getPropertyNameMethod;
+        private static MethodInfo _getPropertyTypeMethod;
+        private static bool _shaderPropsReflected;
+
+        private void DumpShaderProperties(Shader shader, string shaderName)
+        {
+            try
+            {
+                if (!_shaderPropsReflected)
+                {
+                    _shaderPropsReflected = true;
+                    _getPropertyCountMethod = typeof(Shader).GetMethod("GetPropertyCount", BindingFlags.Public | BindingFlags.Instance);
+                    _getPropertyNameMethod = typeof(Shader).GetMethod("GetPropertyName", new[] { typeof(int) });
+                    _getPropertyTypeMethod = typeof(Shader).GetMethod("GetPropertyType", new[] { typeof(int) });
+                }
+
+                if (_getPropertyCountMethod != null && _getPropertyNameMethod != null)
+                {
+                    int propCount = (int)_getPropertyCountMethod.Invoke(shader, null);
+                    var sb = new System.Text.StringBuilder();
+                    sb.Append($"[ShaderProps] '{shaderName}': ");
+                    for (int p = 0; p < propCount; p++)
+                    {
+                        string pName = (string)_getPropertyNameMethod.Invoke(shader, new object[] { p });
+                        string pType = _getPropertyTypeMethod != null ? _getPropertyTypeMethod.Invoke(shader, new object[] { p })?.ToString() : "?";
+                        sb.Append($"{pName}({pType}) ");
+                    }
+                    logger.LogInfo(sb.ToString());
+                }
+            }
+            catch { }
         }
     }
 }
