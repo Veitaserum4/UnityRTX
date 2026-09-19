@@ -722,7 +722,7 @@ namespace UnityRemix
                 byte[] pixelData;
                 byte[] hashSourceData;
                 RemixAPI.remixapi_Format format;
-                uint actualMipLevels = (uint)unityTexture.mipmapCount;
+                uint actualMipLevels = (uint)UnityCompat.GetMipmapCount(unityTexture);
                 
                 // DXT5nm normal maps pack X in alpha and Y in green. Raw DXT5 upload
                 // would pass the packed channels to Remix unchanged, so we must decompress

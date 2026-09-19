@@ -112,5 +112,26 @@ namespace UnityRemix
 
             return list.ToArray();
         }
+
+        private static readonly PropertyInfo _tex2DMipmapProp = typeof(Texture2D).GetProperty("mipmapCount");
+        private static readonly PropertyInfo _texMipmapProp = typeof(Texture).GetProperty("mipmapCount");
+
+        /// <summary>
+        /// Returns mipmap count across all Unity versions.
+        /// In Unity 2018, mipmapCount is on Texture2D; in 2019+, it moved up to Texture.
+        /// </summary>
+        public static int GetMipmapCount(Texture tex)
+        {
+            if (tex == null) return 1;
+            try
+            {
+                if (tex is Texture2D t2d && _tex2DMipmapProp != null)
+                    return (int)_tex2DMipmapProp.GetValue(t2d, null);
+                if (_texMipmapProp != null)
+                    return (int)_texMipmapProp.GetValue(tex, null);
+            }
+            catch { }
+            return 1;
+        }
     }
 }
