@@ -37,6 +37,20 @@ namespace UnityRemix
                     prefix: new HarmonyMethod(typeof(MeshAccessPatch), nameof(CanAccessPrefix)));
                 _applied = true;
             }
+
+            var isReadableGetter = AccessTools.PropertyGetter(typeof(Mesh), "isReadable");
+            if (isReadableGetter == null)
+            {
+                var prop = typeof(Mesh).GetProperty("isReadable",
+                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+                isReadableGetter = prop?.GetGetMethod(true);
+            }
+
+            if (isReadableGetter != null)
+            {
+                harmony.Patch(isReadableGetter,
+                    prefix: new HarmonyMethod(typeof(MeshAccessPatch), nameof(CanAccessPrefix)));
+            }
         }
 
         /// <summary>
