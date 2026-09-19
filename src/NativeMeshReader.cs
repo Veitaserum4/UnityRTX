@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using BepInEx.Logging;
 using UnityEngine;
@@ -186,13 +187,49 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// Query the byte size of a native D3D11 buffer.
+        /// </summary>
+        public static uint GetBufferSize(IntPtr nativeBuffer)
+        {
+            if (nativeBuffer == IntPtr.Zero || SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
+                return 0;
+
+            try
+            {
+                var getDesc = VTable<BufferGetDescD>(nativeBuffer, SLOT_BufferGetDesc);
+                getDesc(nativeBuffer, out var desc);
+                return desc.ByteWidth;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private static readonly bool HasModernVertexAttributes = 
+            Type.GetType("UnityEngine.Rendering.VertexAttributeFormat, UnityEngine.CoreModule") != null;
+
+        /// <summary>
+        /// Attempts to get the vertex buffer layout for a mesh across all Unity versions.
+        /// Uses ModernMeshLayoutHelper (Unity 2019.3+) or LegacyMeshLayoutHelper (Unity 2018.x - 2019.2).
+        /// </summary>
+        public static bool TryGetVertexLayout(Mesh mesh, out NativeVertexLayout layout)
+        {
+            layout = default;
+            if (mesh == null) return false;
+
+            if (HasModernVertexAttributes)
+            {
+                return ModernMeshLayoutHelper.TryGetLayout(mesh, out layout);
+            }
+            return LegacyMeshLayoutHelper.TryGetLayout(mesh, out layout);
+        }
+
+        /// <summary>
         /// Read mesh vertex and index data via native D3D11 buffer readback.
         /// Works for non-readable meshes where mesh.vertices would throw/return empty.
         /// </summary>
-        public static bool ReadMesh(Mesh mesh, int stride,
-            int posOffset, VertexAttributeFormat posFormat,
-            int normOffset, VertexAttributeFormat normFormat,
-            int uvOffset, VertexAttributeFormat uvFormat,
+        public static bool ReadMesh(Mesh mesh, in NativeVertexLayout layout,
             out Vector3[] positions, out Vector3[] normals, out Vector2[] uvs,
             out int[][] subMeshIndices)
         {
@@ -202,6 +239,7 @@ namespace UnityRemix
             subMeshIndices = null;
 
             int vertexCount = mesh.vertexCount;
+            int stride = layout.Stride;
             if (vertexCount == 0 || stride == 0)
                 return false;
 
@@ -225,29 +263,29 @@ namespace UnityRemix
             positions = new Vector3[vertexCount];
             for (int i = 0; i < vertexCount; i++)
             {
-                int off = i * stride + posOffset;
-                positions[i] = ReadVector3(rawVerts, off, posFormat);
+                int off = i * stride + layout.PositionOffset;
+                positions[i] = ReadVector3(rawVerts, off, layout.PositionFormat);
             }
 
             // Parse normals
-            if (normOffset >= 0)
+            if (layout.NormalOffset >= 0)
             {
                 normals = new Vector3[vertexCount];
                 for (int i = 0; i < vertexCount; i++)
                 {
-                    int off = i * stride + normOffset;
-                    normals[i] = ReadVector3(rawVerts, off, normFormat);
+                    int off = i * stride + layout.NormalOffset;
+                    normals[i] = ReadVector3(rawVerts, off, layout.NormalFormat);
                 }
             }
 
             // Parse UVs
-            if (uvOffset >= 0)
+            if (layout.UVOffset >= 0)
             {
                 uvs = new Vector2[vertexCount];
                 for (int i = 0; i < vertexCount; i++)
                 {
-                    int off = i * stride + uvOffset;
-                    uvs[i] = ReadVector2(rawVerts, off, uvFormat);
+                    int off = i * stride + layout.UVOffset;
+                    uvs[i] = ReadVector2(rawVerts, off, layout.UVFormat);
                 }
             }
 
@@ -262,7 +300,7 @@ namespace UnityRemix
             bool is32Bit = mesh.indexFormat == IndexFormat.UInt32;
             int indexStride = is32Bit ? 4 : 2;
 
-            // Split into per-submesh arrays
+            // Split into per-submesh arrays using universal Mesh APIs
             int totalIndices = 0;
             var subList = new System.Collections.Generic.List<int[]>();
             for (int sub = 0; sub < mesh.subMeshCount; sub++)
@@ -273,17 +311,21 @@ namespace UnityRemix
                     continue;
                 }
 
-                var desc = mesh.GetSubMesh(sub);
-                int start = desc.indexStart;
-                int count = desc.indexCount;
+                int start = (int)mesh.GetIndexStart(sub);
+                int count = (int)mesh.GetIndexCount(sub);
+                int baseVertex = (int)mesh.GetBaseVertex(sub);
                 var tris = new int[count];
 
                 for (int i = 0; i < count; i++)
                 {
                     int byteOff = (start + i) * indexStride;
-                    tris[i] = is32Bit
-                        ? BitConverter.ToInt32(rawIdx, byteOff)
-                        : BitConverter.ToUInt16(rawIdx, byteOff);
+                    if (byteOff + indexStride <= rawIdx.Length)
+                    {
+                        int idx = is32Bit
+                            ? BitConverter.ToInt32(rawIdx, byteOff)
+                            : BitConverter.ToUInt16(rawIdx, byteOff);
+                        tris[i] = idx + baseVertex;
+                    }
                 }
 
                 subList.Add(tris);
@@ -296,16 +338,16 @@ namespace UnityRemix
             return positions.Length > 0 && totalIndices > 0;
         }
 
-        static Vector3 ReadVector3(byte[] buf, int offset, VertexAttributeFormat fmt)
+        static Vector3 ReadVector3(byte[] buf, int offset, NativeVertexFormat fmt)
         {
-            if (fmt == VertexAttributeFormat.Float32)
+            if (fmt == NativeVertexFormat.Float32)
             {
                 return new Vector3(
                     BitConverter.ToSingle(buf, offset),
                     BitConverter.ToSingle(buf, offset + 4),
                     BitConverter.ToSingle(buf, offset + 8));
             }
-            if (fmt == VertexAttributeFormat.Float16)
+            if (fmt == NativeVertexFormat.Float16)
             {
                 return new Vector3(
                     HalfToFloat(BitConverter.ToUInt16(buf, offset)),
@@ -315,15 +357,15 @@ namespace UnityRemix
             return Vector3.zero;
         }
 
-        static Vector2 ReadVector2(byte[] buf, int offset, VertexAttributeFormat fmt)
+        static Vector2 ReadVector2(byte[] buf, int offset, NativeVertexFormat fmt)
         {
-            if (fmt == VertexAttributeFormat.Float32)
+            if (fmt == NativeVertexFormat.Float32)
             {
                 return new Vector2(
                     BitConverter.ToSingle(buf, offset),
                     BitConverter.ToSingle(buf, offset + 4));
             }
-            if (fmt == VertexAttributeFormat.Float16)
+            if (fmt == NativeVertexFormat.Float16)
             {
                 return new Vector2(
                     HalfToFloat(BitConverter.ToUInt16(buf, offset)),
@@ -374,47 +416,10 @@ namespace UnityRemix
             if (vertexCount == 0)
                 return false;
 
-            // Get vertex layout
-            var attributes = mesh.GetVertexAttributes();
-            int stride = MeshCompat.GetVertexBufferStride(mesh, 0);
-
-            int posOffset = -1, posStream = -1;
-            int normOffset = -1, normStream = -1;
-            int uvOffset = -1, uvStream = -1;
-            VertexAttributeFormat posFormat = VertexAttributeFormat.Float32;
-            VertexAttributeFormat normFormat = VertexAttributeFormat.Float32;
-            VertexAttributeFormat uvFormat = VertexAttributeFormat.Float32;
-
-            foreach (var attr in attributes)
-            {
-                switch (attr.attribute)
-                {
-                    case VertexAttribute.Position:
-                        posOffset = MeshCompat.GetVertexAttributeOffset(mesh, VertexAttribute.Position);
-                        posStream = attr.stream;
-                        posFormat = attr.format;
-                        break;
-                    case VertexAttribute.Normal:
-                        normOffset = MeshCompat.GetVertexAttributeOffset(mesh, VertexAttribute.Normal);
-                        normStream = attr.stream;
-                        normFormat = attr.format;
-                        break;
-                    case VertexAttribute.TexCoord0:
-                        uvOffset = MeshCompat.GetVertexAttributeOffset(mesh, VertexAttribute.TexCoord0);
-                        uvStream = attr.stream;
-                        uvFormat = attr.format;
-                        break;
-                }
-            }
-
-            if (posOffset < 0 || posStream != 0)
+            if (!TryGetVertexLayout(mesh, out var layout))
                 return false;
 
-            // Use native D3D11 readback — works for non-readable meshes in Unity 2019
-            bool success = ReadMesh(mesh, stride,
-                posOffset, posFormat,
-                normOffset >= 0 && normStream == 0 ? normOffset : -1, normFormat,
-                uvOffset >= 0 && uvStream == 0 ? uvOffset : -1, uvFormat,
+            bool success = ReadMesh(mesh, in layout,
                 out positions, out normals, out uvs, out subMeshIndices);
 
             if (success && (normals == null || normals.Length != positions.Length))
@@ -454,6 +459,231 @@ namespace UnityRemix
                 normals[i] = len > 1e-6f ? normals[i] / len : Vector3.up;
             }
             return normals;
+        }
+    }
+
+    public enum NativeVertexFormat
+    {
+        Float32,
+        Float16,
+        SNorm8,
+        UNorm8
+    }
+
+    public struct NativeVertexLayout
+    {
+        public int Stride;
+        public int PositionOffset;
+        public NativeVertexFormat PositionFormat;
+        public int NormalOffset; // -1 if not present
+        public NativeVertexFormat NormalFormat;
+        public int UVOffset;     // -1 if not present
+        public NativeVertexFormat UVFormat;
+    }
+
+    /// <summary>
+    /// Fallback vertex layout detection for Unity 2018.x - 2019.2 where
+    /// Mesh.GetVertexAttributes() and VertexAttributeFormat do not exist.
+    /// </summary>
+    internal static class LegacyMeshLayoutHelper
+    {
+        private static MethodInfo _hasChannelMethod;
+        private static bool _hasChannelSearched;
+
+        public static bool TryGetLayout(Mesh mesh, out NativeVertexLayout layout)
+        {
+            layout = default;
+            int vertexCount = mesh.vertexCount;
+            if (vertexCount <= 0) return false;
+
+            IntPtr nativeVB = mesh.GetNativeVertexBufferPtr(0);
+            if (nativeVB == IntPtr.Zero) return false;
+
+            uint byteWidth = NativeMeshReader.GetBufferSize(nativeVB);
+            if (byteWidth == 0) return false;
+
+            int stride = (int)(byteWidth / (uint)vertexCount);
+            if (stride < 12) return false;
+
+            bool hasNorm = HasChannel(mesh, 1 /* Normal */);
+            bool hasTan  = HasChannel(mesh, 2 /* Tangent */);
+            bool hasCol  = HasChannel(mesh, 3 /* Color */);
+            bool hasUV0  = HasChannel(mesh, 4 /* TexCoord0 */);
+
+            int posOffset = 0;
+            int normOffset = -1;
+            int uvOffset = -1;
+
+            if (_hasChannelMethod != null)
+            {
+                int currentOffset = 12; // after Position (Float3)
+                if (hasNorm)
+                {
+                    normOffset = currentOffset;
+                    currentOffset += 12;
+                }
+                if (hasTan)
+                {
+                    int remaining = stride - currentOffset;
+                    int uvBytes = hasUV0 ? 8 : 0;
+                    int colBytes = hasCol ? 4 : 0;
+                    int tanBytes = remaining - uvBytes - colBytes;
+                    currentOffset += tanBytes > 0 ? tanBytes : 16;
+                }
+                if (hasCol)
+                {
+                    currentOffset += 4;
+                }
+                if (hasUV0)
+                {
+                    uvOffset = currentOffset;
+                    currentOffset += 8;
+                }
+            }
+            else
+            {
+                // Fallback layout based on standard Unity D3D11 strides
+                switch (stride)
+                {
+                    case 20: // Pos(12) + UV0(8)
+                        posOffset = 0; normOffset = -1; uvOffset = 12; break;
+                    case 24: // Pos(12) + Norm(12)
+                        posOffset = 0; normOffset = 12; uvOffset = -1; break;
+                    case 32: // Pos(12) + Norm(12) + UV0(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 24; break;
+                    case 36: // Pos(12) + Norm(12) + Col(4) + UV0(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 28; break;
+                    case 40: // Pos(12) + Norm(12) + UV0(8) + UV1(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 24; break;
+                    case 48: // Pos(12) + Norm(12) + Tan(16) + UV0(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 40; break;
+                    case 52: // Pos(12) + Norm(12) + Tan(16) + Col(4) + UV0(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 44; break;
+                    case 56: // Pos(12) + Norm(12) + Tan(16) + UV0(8) + UV1(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 40; break;
+                    case 60: // Pos(12) + Norm(12) + Tan(16) + Col(4) + UV0(8) + UV1(8)
+                        posOffset = 0; normOffset = 12; uvOffset = 44; break;
+                    default:
+                        posOffset = 0;
+                        normOffset = stride >= 24 ? 12 : -1;
+                        uvOffset = stride >= 32 ? (stride - 8) : -1;
+                        break;
+                }
+            }
+
+            layout = new NativeVertexLayout
+            {
+                Stride = stride,
+                PositionOffset = posOffset,
+                PositionFormat = NativeVertexFormat.Float32,
+                NormalOffset = normOffset >= 0 && normOffset + 12 <= stride ? normOffset : -1,
+                NormalFormat = NativeVertexFormat.Float32,
+                UVOffset = uvOffset >= 0 && uvOffset + 8 <= stride ? uvOffset : -1,
+                UVFormat = NativeVertexFormat.Float32
+            };
+            return true;
+        }
+
+        private static bool HasChannel(Mesh mesh, int channelIndex)
+        {
+            if (!_hasChannelSearched)
+            {
+                _hasChannelSearched = true;
+                _hasChannelMethod = typeof(Mesh).GetMethod("HasChannel",
+                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            }
+            if (_hasChannelMethod != null && mesh != null)
+            {
+                try
+                {
+                    var pars = _hasChannelMethod.GetParameters();
+                    if (pars.Length == 1)
+                    {
+                        object arg = Enum.ToObject(pars[0].ParameterType, channelIndex);
+                        return (bool)_hasChannelMethod.Invoke(mesh, new object[] { arg });
+                    }
+                }
+                catch { }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Modern vertex layout detection for Unity 2019.3+ where
+    /// Mesh.GetVertexAttributes() and VertexAttributeFormat exist.
+    /// Loaded dynamically ONLY if VertexAttributeFormat is present in CoreModule.
+    /// </summary>
+    internal static class ModernMeshLayoutHelper
+    {
+        public static bool TryGetLayout(Mesh mesh, out NativeVertexLayout layout)
+        {
+            layout = default;
+            try
+            {
+                var attributes = mesh.GetVertexAttributes();
+                int stride = MeshCompat.GetVertexBufferStride(mesh, 0);
+                if (stride <= 0) return false;
+
+                int posOffset = -1, posStream = -1;
+                int normOffset = -1, normStream = -1;
+                int uvOffset = -1, uvStream = -1;
+                NativeVertexFormat posFormat = NativeVertexFormat.Float32;
+                NativeVertexFormat normFormat = NativeVertexFormat.Float32;
+                NativeVertexFormat uvFormat = NativeVertexFormat.Float32;
+
+                foreach (var attr in attributes)
+                {
+                    switch (attr.attribute)
+                    {
+                        case VertexAttribute.Position:
+                            posOffset = MeshCompat.GetVertexAttributeOffset(mesh, VertexAttribute.Position);
+                            posStream = attr.stream;
+                            posFormat = ToNativeFormat(attr.format);
+                            break;
+                        case VertexAttribute.Normal:
+                            normOffset = MeshCompat.GetVertexAttributeOffset(mesh, VertexAttribute.Normal);
+                            normStream = attr.stream;
+                            normFormat = ToNativeFormat(attr.format);
+                            break;
+                        case VertexAttribute.TexCoord0:
+                            uvOffset = MeshCompat.GetVertexAttributeOffset(mesh, VertexAttribute.TexCoord0);
+                            uvStream = attr.stream;
+                            uvFormat = ToNativeFormat(attr.format);
+                            break;
+                    }
+                }
+
+                if (posOffset < 0 || posStream != 0)
+                    return false;
+
+                layout = new NativeVertexLayout
+                {
+                    Stride = stride,
+                    PositionOffset = posOffset,
+                    PositionFormat = posFormat,
+                    NormalOffset = normOffset >= 0 && normStream == 0 ? normOffset : -1,
+                    NormalFormat = normFormat,
+                    UVOffset = uvOffset >= 0 && uvStream == 0 ? uvOffset : -1,
+                    UVFormat = uvFormat
+                };
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static NativeVertexFormat ToNativeFormat(VertexAttributeFormat format)
+        {
+            switch (format)
+            {
+                case VertexAttributeFormat.Float16: return NativeVertexFormat.Float16;
+                case VertexAttributeFormat.SNorm8:  return NativeVertexFormat.SNorm8;
+                case VertexAttributeFormat.UNorm8:  return NativeVertexFormat.UNorm8;
+                default: return NativeVertexFormat.Float32;
+            }
         }
     }
 }

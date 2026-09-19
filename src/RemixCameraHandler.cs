@@ -197,8 +197,37 @@ namespace UnityRemix
                 }
                 else if (taggedCameras.Length > 0)
                 {
-                    selectedCamera = taggedCameras.OrderByDescending(c => c.depth).First();
-                    selectionReason = "fallback (no MainCamera tag found)";
+                    // Heuristic 1: Check for standard main camera names
+                    var mainNamed = taggedCameras.FirstOrDefault(c =>
+                        c.name.Equals("MainCamera", StringComparison.OrdinalIgnoreCase) ||
+                        c.name.Equals("Main Camera", StringComparison.OrdinalIgnoreCase) ||
+                        c.name.Equals("Main_Camera", StringComparison.OrdinalIgnoreCase) ||
+                        c.name.Equals("MainCam", StringComparison.OrdinalIgnoreCase));
+
+                    if (mainNamed != null)
+                    {
+                        selectedCamera = mainNamed;
+                        selectionReason = $"matched default name '{mainNamed.name}'";
+                    }
+                    else
+                    {
+                        // Heuristic 2: Camera that renders layer 0 (world/Default) with the most mask bits
+                        var worldCam = taggedCameras
+                            .Where(c => (c.cullingMask & 1) != 0)
+                            .OrderByDescending(c => CountBits((uint)c.cullingMask))
+                            .FirstOrDefault();
+
+                        if (worldCam != null)
+                        {
+                            selectedCamera = worldCam;
+                            selectionReason = $"world camera heuristic '{worldCam.name}' (culling mask 0x{worldCam.cullingMask:X})";
+                        }
+                        else
+                        {
+                            selectedCamera = taggedCameras.OrderByDescending(c => c.depth).First();
+                            selectionReason = "fallback (no MainCamera tag found)";
+                        }
+                    }
                 }
             }
             
@@ -338,6 +367,17 @@ namespace UnityRemix
             {
                 paramHandle.Free();
             }
+        }
+
+        private static int CountBits(uint v)
+        {
+            int count = 0;
+            while (v != 0)
+            {
+                count += (int)(v & 1);
+                v >>= 1;
+            }
+            return count;
         }
     }
 }

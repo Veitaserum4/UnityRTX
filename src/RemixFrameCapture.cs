@@ -2748,20 +2748,11 @@ namespace UnityRemix
                     // Mesh not readable — can't get triangles directly.
                     // Cache vertex buffer layout now; topology will be completed from first BakeMesh.
                     int posOff2 = -1, nrmOff2 = -1, stride2 = 0;
-                    if (sharedMesh.HasVertexAttribute(VertexAttribute.Position))
+                    if (NativeMeshReader.TryGetVertexLayout(sharedMesh, out var l2))
                     {
-                        int s = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Position);
-                        if (s == 0)
-                        {
-                            posOff2 = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Position);
-                            stride2 = MeshCompat.GetVertexBufferStride(sharedMesh, 0);
-                        }
-                    }
-                    if (sharedMesh.HasVertexAttribute(VertexAttribute.Normal))
-                    {
-                        int s = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Normal);
-                        if (s == 0)
-                            nrmOff2 = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Normal);
+                        posOff2 = l2.PositionOffset;
+                        nrmOff2 = l2.NormalOffset;
+                        stride2 = l2.Stride;
                     }
                     bool layoutOk = posOff2 >= 0 && stride2 > 0;
                     cachedTopology[meshId] = new CachedMeshTopology
@@ -2802,21 +2793,11 @@ namespace UnityRemix
                 int nrmOffset = -1;
                 int stride = 0;
                 
-                if (sharedMesh.HasVertexAttribute(VertexAttribute.Position))
+                if (NativeMeshReader.TryGetVertexLayout(sharedMesh, out var l1))
                 {
-                    int stream = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Position);
-                    if (stream == 0) // GPU skinned buffer is always stream 0
-                    {
-                        posOffset = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Position);
-                        stride = MeshCompat.GetVertexBufferStride(sharedMesh, 0);
-                    }
-                }
-                
-                if (sharedMesh.HasVertexAttribute(VertexAttribute.Normal))
-                {
-                    int stream = MeshCompat.GetVertexAttributeStream(sharedMesh, VertexAttribute.Normal);
-                    if (stream == 0)
-                        nrmOffset = MeshCompat.GetVertexAttributeOffset(sharedMesh, VertexAttribute.Normal);
+                    posOffset = l1.PositionOffset;
+                    nrmOffset = l1.NormalOffset;
+                    stride = l1.Stride;
                 }
                 
                 bool topoValid = posOffset >= 0 && stride > 0;
