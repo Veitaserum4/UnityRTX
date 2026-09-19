@@ -180,7 +180,7 @@ namespace UnityRemix
         // --- Diagnostic getters for debug HUD ---
         public int FailedMeshCount { get { lock (meshQueueLock) return failedMeshKeys.Count; } }
         public int PendingMeshQueueCount { get { lock (meshQueueLock) return meshesToCreate.Count + priorityMeshesToCreate.Count; } }
-        public int PersistentStaticCount => persistentStaticInstances.Count;
+        public int PersistentStaticCount { get { lock (persistentStaticLock) return persistentStaticInstances.Count; } }
         public int CachedStaticRendererCount => cachedRenderers.Count;
         public int CachedSkinnedRendererCount => cachedSkinnedRenderers.Count;
 
@@ -258,27 +258,40 @@ namespace UnityRemix
 
             if (configPersistDisabledRenderers.Value)
             {
-                foreach (var kv in persistentStaticInstances)
+                PersistentStaticInstance[] persistentCopy = null;
+                lock (persistentStaticLock)
                 {
-                    var entry = kv.Value;
-                    if (entry.renderer == null)
-                        continue;
-                    if (entry.renderer.enabled && entry.renderer.gameObject.activeInHierarchy)
-                        continue;
-                    var meshFilter = entry.renderer.GetComponent<MeshFilter>();
-                    var mesh = meshFilter != null ? meshFilter.sharedMesh : null;
-                    if (ShouldPreferSceneScan(entry.renderer, mesh))
-                        continue;
-                    if (IsLayerDisabled(entry.renderer.gameObject.layer))
-                        continue;
-                    if (!meshConverter.IsMeshCached(entry.meshKey))
-                        continue;
+                    if (persistentStaticInstances.Count > 0)
+                    {
+                        persistentCopy = new PersistentStaticInstance[persistentStaticInstances.Count];
+                        persistentStaticInstances.Values.CopyTo(persistentCopy, 0);
+                    }
+                }
 
-                    stats.RawStaticMeshes++;
-                    if (StaticGeometryDedupe.TryClaimVisibleInstance(entry.renderer.GetInstanceID(), entry.dedupeKey, claimedRendererIds, visibleKeys))
-                        stats.DedupedStaticMeshes++;
-                    else
-                        stats.SuppressedStaticMeshes++;
+                if (persistentCopy != null)
+                {
+                    for (int pIdx = 0; pIdx < persistentCopy.Length; pIdx++)
+                    {
+                        var entry = persistentCopy[pIdx];
+                        if (entry.renderer == null)
+                            continue;
+                        if (entry.renderer.enabled && entry.renderer.gameObject.activeInHierarchy)
+                            continue;
+                        var meshFilter = entry.renderer.GetComponent<MeshFilter>();
+                        var mesh = meshFilter != null ? meshFilter.sharedMesh : null;
+                        if (ShouldPreferSceneScan(entry.renderer, mesh))
+                            continue;
+                        if (IsLayerDisabled(entry.renderer.gameObject.layer))
+                            continue;
+                        if (!meshConverter.IsMeshCached(entry.meshKey))
+                            continue;
+
+                        stats.RawStaticMeshes++;
+                        if (StaticGeometryDedupe.TryClaimVisibleInstance(entry.renderer.GetInstanceID(), entry.dedupeKey, claimedRendererIds, visibleKeys))
+                            stats.DedupedStaticMeshes++;
+                        else
+                            stats.SuppressedStaticMeshes++;
+                    }
                 }
             }
 
@@ -388,27 +401,40 @@ namespace UnityRemix
             }
 
             // Persistent disabled renderers
-            foreach (var kv in persistentStaticInstances)
+            PersistentStaticInstance[] persistentCopy = null;
+            lock (persistentStaticLock)
             {
-                var p = kv.Value;
-                if (p.renderer == null) continue;
-                if (p.renderer.enabled && p.renderer.gameObject.activeInHierarchy) continue;
-
-                var entry = new DebugMeshEntry
+                if (persistentStaticInstances.Count > 0)
                 {
-                    Name = p.renderer.gameObject.name,
-                    MeshName = "",
-                    MeshId = p.meshId,
-                    LayerIndex = p.renderer.gameObject.layer,
-                    RendererInstanceId = p.renderer.GetInstanceID(),
-                    LayerName = LayerMask.LayerToName(p.renderer.gameObject.layer),
-                    Origin = "Persistent",
-                    BoundsCenter = p.renderer.bounds.center,
-                    BoundsExtents = p.renderer.bounds.extents,
-                };
+                    persistentCopy = new PersistentStaticInstance[persistentStaticInstances.Count];
+                    persistentStaticInstances.Values.CopyTo(persistentCopy, 0);
+                }
+            }
 
-                ResolveMaterialInfo(ref entry, p.renderer.sharedMaterial);
-                entries.Add(entry);
+            if (persistentCopy != null)
+            {
+                for (int pIdx = 0; pIdx < persistentCopy.Length; pIdx++)
+                {
+                    var p = persistentCopy[pIdx];
+                    if (p.renderer == null) continue;
+                    if (p.renderer.enabled && p.renderer.gameObject.activeInHierarchy) continue;
+
+                    var entry = new DebugMeshEntry
+                    {
+                        Name = p.renderer.gameObject.name,
+                        MeshName = "",
+                        MeshId = p.meshId,
+                        LayerIndex = p.renderer.gameObject.layer,
+                        RendererInstanceId = p.renderer.GetInstanceID(),
+                        LayerName = LayerMask.LayerToName(p.renderer.gameObject.layer),
+                        Origin = "Persistent",
+                        BoundsCenter = p.renderer.bounds.center,
+                        BoundsExtents = p.renderer.bounds.extents,
+                    };
+
+                    ResolveMaterialInfo(ref entry, p.renderer.sharedMaterial);
+                    entries.Add(entry);
+                }
             }
 
             return entries;
@@ -449,6 +475,7 @@ namespace UnityRemix
             public Matrix4x4 localToWorld;
             public StaticGeometryKey dedupeKey;
         }
+        private readonly object persistentStaticLock = new object();
         private Dictionary<int, PersistentStaticInstance> persistentStaticInstances = new Dictionary<int, PersistentStaticInstance>();
         private int skinnedRoundRobinIndex = 0; // rotates through cachedSkinnedRenderers each frame (BakeMesh fallback)
         
@@ -615,7 +642,10 @@ namespace UnityRemix
             loggedHashDebugMeshes.Clear();
             cachedTopology.Clear();
             cachedSkinning.Clear();
-            persistentStaticInstances.Clear();
+            lock (persistentStaticLock)
+            {
+                persistentStaticInstances.Clear();
+            }
             logger.LogInfo("Renderer caches invalidated");
         }
         
@@ -903,7 +933,10 @@ namespace UnityRemix
 
                 if (ShouldPreferSceneScan(renderer, mesh))
                 {
-                    persistentStaticInstances.Remove(rendererInstanceId);
+                    lock (persistentStaticLock)
+                    {
+                        persistentStaticInstances.Remove(rendererInstanceId);
+                    }
                     continue;
                 }
 
@@ -921,12 +954,17 @@ namespace UnityRemix
                 {
                     renderer.GetPropertyBlock(sharedStaticMpb);
                     Texture tex = sharedStaticMpb.GetTexture("_MainTex");
+                    if (tex == null) tex = sharedStaticMpb.GetTexture("_BaseMap");
+                    if (tex == null) tex = sharedStaticMpb.GetTexture("_Diffuse");
+                    if (tex == null) tex = sharedStaticMpb.GetTexture("_Texture");
                     if (tex != null)
                     {
                         mpbMainTex = tex;
                         mpbHash = HashCombine(mpbHash, tex.GetInstanceID());
                     }
                     Color col = sharedStaticMpb.GetColor("_Color");
+                    if (col.a <= 0f && col.r <= 0f && col.g <= 0f && col.b <= 0f)
+                        col = sharedStaticMpb.GetColor("_BaseColor");
                     if (col.a > 0f || col.r > 0f || col.g > 0f || col.b > 0f)
                     {
                         mpbColor = col;
@@ -1139,14 +1177,17 @@ namespace UnityRemix
                 if (!isCurrentViewModel)
                 {
                     cachedStaticInstances.Add(instanceData);
-                    persistentStaticInstances[rendererInstanceId] = new PersistentStaticInstance
+                    lock (persistentStaticLock)
                     {
-                        renderer = renderer,
-                        meshKey = meshKey,
-                        meshId = meshId,
-                        localToWorld = transform,
-                        dedupeKey = dedupeKey
-                    };
+                        persistentStaticInstances[rendererInstanceId] = new PersistentStaticInstance
+                        {
+                            renderer = renderer,
+                            meshKey = meshKey,
+                            meshId = meshId,
+                            localToWorld = transform,
+                            dedupeKey = dedupeKey
+                        };
+                    }
                 }
             }
             
@@ -1157,72 +1198,79 @@ namespace UnityRemix
             int persistentDrawn = 0;
             if (configPersistDisabledRenderers.Value)
             {
-            var keysToRemove = (List<int>)null;
-            foreach (var kv in persistentStaticInstances)
-            {
-                var entry = kv.Value;
-                // Unity null check: renderer was destroyed
-                if (entry.renderer == null)
+                var keysToRemove = (List<int>)null;
+                lock (persistentStaticLock)
                 {
-                    if (keysToRemove == null) keysToRemove = new List<int>();
-                    keysToRemove.Add(kv.Key);
-                    continue;
-                }
-                
-                // Skip if the renderer is active — it was already drawn above
-                if (entry.renderer.enabled && entry.renderer.gameObject.activeInHierarchy)
-                    continue;
+                    foreach (var kv in persistentStaticInstances)
+                    {
+                        var entry = kv.Value;
+                        // Unity null check: renderer was destroyed
+                        if (entry.renderer == null)
+                        {
+                            if (keysToRemove == null) keysToRemove = new List<int>();
+                            keysToRemove.Add(kv.Key);
+                            continue;
+                        }
+                        
+                        // Skip if the renderer is active — it was already drawn above
+                        if (entry.renderer.enabled && entry.renderer.gameObject.activeInHierarchy)
+                            continue;
 
-                var meshFilter = entry.renderer.GetComponent<MeshFilter>();
-                var mesh = meshFilter != null ? meshFilter.sharedMesh : null;
-                if (ShouldPreferSceneScan(entry.renderer, mesh))
-                {
-                    if (keysToRemove == null) keysToRemove = new List<int>();
-                    keysToRemove.Add(kv.Key);
-                    continue;
+                        var meshFilter = entry.renderer.GetComponent<MeshFilter>();
+                        var mesh = meshFilter != null ? meshFilter.sharedMesh : null;
+                        if (ShouldPreferSceneScan(entry.renderer, mesh))
+                        {
+                            if (keysToRemove == null) keysToRemove = new List<int>();
+                            keysToRemove.Add(kv.Key);
+                            continue;
+                        }
+                        
+                        // Skip if mesh isn't cached in Remix yet
+                        if (!meshConverter.IsMeshCached(entry.meshKey))
+                            continue;
+                        
+                        // Skip if layer is disabled by user
+                        if (IsLayerDisabled(entry.renderer.gameObject.layer))
+                            continue;
+                        
+                        // Distance culling using stored transform position
+                        if (configUseDistanceCulling.Value)
+                        {
+                            float maxDist = configMaxRenderDistance.Value;
+                            Vector3 objPos = new Vector3(entry.localToWorld.m03, entry.localToWorld.m13, entry.localToWorld.m23);
+                            float sqrDistance = (objPos - camPos).sqrMagnitude;
+                            if (sqrDistance > maxDist * maxDist)
+                                continue;
+                        }
+                        
+                        // Draw with last-known transform
+                        var pInstanceData = new MeshInstanceData
+                        {
+                            meshKey = entry.meshKey,
+                            meshId = entry.meshId,
+                            localToWorld = entry.localToWorld,
+                            rendererInstanceId = entry.renderer.GetInstanceID(),
+                            dedupeKey = entry.dedupeKey
+                        };
+                        state.instances.Add(pInstanceData);
+                        cachedStaticInstances.Add(pInstanceData);
+                        persistentDrawn++;
+                    }
+                    if (keysToRemove != null)
+                    {
+                        foreach (var key in keysToRemove)
+                            persistentStaticInstances.Remove(key);
+                    }
                 }
-                
-                // Skip if mesh isn't cached in Remix yet
-                if (!meshConverter.IsMeshCached(entry.meshKey))
-                    continue;
-                
-                // Skip if layer is disabled by user
-                if (IsLayerDisabled(entry.renderer.gameObject.layer))
-                    continue;
-                
-                // Distance culling using stored transform position
-                if (configUseDistanceCulling.Value)
-                {
-                    float maxDist = configMaxRenderDistance.Value;
-                    Vector3 objPos = new Vector3(entry.localToWorld.m03, entry.localToWorld.m13, entry.localToWorld.m23);
-                    float sqrDistance = (objPos - camPos).sqrMagnitude;
-                    if (sqrDistance > maxDist * maxDist)
-                        continue;
-                }
-                
-                // Draw with last-known transform
-                var pInstanceData = new MeshInstanceData
-                {
-                    meshKey = entry.meshKey,
-                    meshId = entry.meshId,
-                    localToWorld = entry.localToWorld,
-                    rendererInstanceId = entry.renderer.GetInstanceID(),
-                    dedupeKey = entry.dedupeKey
-                };
-                state.instances.Add(pInstanceData);
-                cachedStaticInstances.Add(pInstanceData);
-                persistentDrawn++;
-            }
-            if (keysToRemove != null)
-            {
-                foreach (var key in keysToRemove)
-                    persistentStaticInstances.Remove(key);
-            }
             }
             
             // Periodic tracking
             if (configDebugLogInterval.Value > 0 && staticCaptureCount % 300 == 1)
-                logger.LogInfo($"[StaticCapture] frame={frameCount} drawn={totalDrawn} persistent={persistentDrawn} total={persistentStaticInstances.Count} queued={meshesToCreate.Count} failedMeshes={failedMeshKeys.Count}");
+            {
+                int persistentCount;
+                lock (persistentStaticLock) { persistentCount = persistentStaticInstances.Count; }
+                logger.LogInfo($"[StaticCapture] frame={frameCount} drawn={totalDrawn} persistent={persistentDrawn} total={persistentCount} queued={meshesToCreate.Count} failedMeshes={failedMeshKeys.Count}");
+            }
         }
 
         /// <summary>
@@ -1611,6 +1659,7 @@ namespace UnityRemix
 
         private static readonly MethodInfo _doMeshGenerationMethod = typeof(Graphic).GetMethod("DoMeshGeneration", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         private static readonly PropertyInfo _workerMeshProperty = typeof(Graphic).GetProperty("workerMesh", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+        private static readonly MethodInfo _canvasRendererGetMesh = typeof(CanvasRenderer).GetMethod("GetMesh", Type.EmptyTypes);
         private static Type _tmpTextType;
         private static PropertyInfo _tmpMeshProperty;
         private static MethodInfo _tmpForceMeshUpdateMethod;
@@ -1734,8 +1783,10 @@ namespace UnityRemix
                 if (mesh == null || mesh.vertexCount == 0)
                 {
                     var cr = g.canvasRenderer;
-                    if (cr != null)
-                        mesh = cr.GetMesh();
+                    if (cr != null && _canvasRendererGetMesh != null)
+                    {
+                        try { mesh = (Mesh)_canvasRendererGetMesh.Invoke(cr, null); } catch { }
+                    }
                 }
 
                 Vector3[] verts = null;
@@ -1944,6 +1995,36 @@ namespace UnityRemix
         private const int MAX_REMIX_BONES = 256;
         private const int BONES_PER_VERTEX = 4; // D3D9 standard, Remix expectation
         
+        private static readonly bool _hasBoneWeight1 = Type.GetType("UnityEngine.BoneWeight1, UnityEngine.CoreModule") != null;
+
+        private static class ModernBoneWeightHelper
+        {
+            [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+            public static bool TryExtractBoneWeights(Mesh mesh, int vertexCount, float[] blendWeights, uint[] blendIndices)
+            {
+                var bonesPerVertex = mesh.GetBonesPerVertex();
+                var allBoneWeights = mesh.GetAllBoneWeights();
+
+                if (bonesPerVertex.Length == 0 || allBoneWeights.Length == 0)
+                    return false;
+
+                int weightIdx = 0;
+                for (int v = 0; v < vertexCount; v++)
+                {
+                    int count = bonesPerVertex[v];
+                    int baseIdx = v * BONES_PER_VERTEX;
+                    for (int w = 0; w < count && w < BONES_PER_VERTEX; w++)
+                    {
+                        var bw = allBoneWeights[weightIdx + w];
+                        blendWeights[baseIdx + w] = bw.weight;
+                        blendIndices[baseIdx + w] = (uint)bw.boneIndex;
+                    }
+                    weightIdx += count;
+                }
+                return true;
+            }
+        }
+
         /// <summary>
         /// Extract bind-pose geometry and bone weights from a SkinnedMeshRenderer's sharedMesh.
         /// Stores result in cachedSkinning. Called once per unique sharedMesh. Returns null on failure.
@@ -1959,6 +2040,7 @@ namespace UnityRemix
                 if (bindPoses == null || bindPoses.Length == 0 || bones == null || bones.Length == 0)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has no bones/bindposes — BakeMesh fallback");
+                    cachedSkinning[sharedMeshId] = null;
                     return;
                 }
                 
@@ -1966,6 +2048,7 @@ namespace UnityRemix
                 if (boneCount > MAX_REMIX_BONES)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has {boneCount} bones (>{MAX_REMIX_BONES}) — BakeMesh fallback");
+                    cachedSkinning[sharedMeshId] = null;
                     return;
                 }
                 
@@ -1974,29 +2057,20 @@ namespace UnityRemix
                 float[] blendWeights = new float[BONES_PER_VERTEX * vertexCount];
                 uint[] blendIndices = new uint[BONES_PER_VERTEX * vertexCount];
                 
-                try
+                bool extractedWeights = false;
+                if (_hasBoneWeight1)
                 {
-                    var bonesPerVertex = mesh.GetBonesPerVertex();
-                    var allBoneWeights = mesh.GetAllBoneWeights();
-                    
-                    if (bonesPerVertex.Length == 0 || allBoneWeights.Length == 0)
-                        throw new InvalidOperationException("Empty bone weight data");
-                    
-                    int weightIdx = 0;
-                    for (int v = 0; v < vertexCount; v++)
+                    try
                     {
-                        int count = bonesPerVertex[v];
-                        int baseIdx = v * BONES_PER_VERTEX;
-                        for (int w = 0; w < count && w < BONES_PER_VERTEX; w++)
-                        {
-                            var bw = allBoneWeights[weightIdx + w];
-                            blendWeights[baseIdx + w] = bw.weight;
-                            blendIndices[baseIdx + w] = (uint)bw.boneIndex;
-                        }
-                        weightIdx += count;
+                        extractedWeights = ModernBoneWeightHelper.TryExtractBoneWeights(mesh, vertexCount, blendWeights, blendIndices);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning($"[Skinning] Modern bone weights failed for '{mesh.name}': {ex.Message}");
                     }
                 }
-                catch
+
+                if (!extractedWeights)
                 {
                     // Legacy fallback: BoneWeight per vertex (always exactly 4)
                     try
@@ -2005,6 +2079,7 @@ namespace UnityRemix
                         if (legacyWeights == null || legacyWeights.Length == 0)
                         {
                             logger.LogInfo($"[Skinning] '{mesh.name}' bone weights not accessible — BakeMesh fallback");
+                            cachedSkinning[sharedMeshId] = null;
                             return;
                         }
                         
@@ -2025,6 +2100,7 @@ namespace UnityRemix
                     catch (Exception ex2)
                     {
                         logger.LogInfo($"[Skinning] '{mesh.name}' legacy bone weights failed: {ex2.Message} — BakeMesh fallback");
+                        cachedSkinning[sharedMeshId] = null;
                         return;
                     }
                 }
@@ -2152,6 +2228,7 @@ namespace UnityRemix
                 if (bindVerts == null || bindVerts.Length == 0 || triangles.Length == 0)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' empty geometry — BakeMesh fallback");
+                    cachedSkinning[sharedMeshId] = null;
                     return;
                 }
                 
@@ -2184,6 +2261,7 @@ namespace UnityRemix
             catch (Exception ex)
             {
                 logger.LogWarning($"[Skinning] '{mesh.name}' extraction failed: {ex.Message} — BakeMesh fallback");
+                cachedSkinning[sharedMeshId] = null;
             }
         }
         

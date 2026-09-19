@@ -21,6 +21,7 @@ namespace UnityRemix
         
         private Camera currentCamera;
         private string lastCameraName = "";
+        private string lastWarnedMissingConfigCamera = "";
         
         // Cached delegates
         private RemixAPI.PFN_remixapi_SetupCamera setupCameraFunc;
@@ -162,11 +163,12 @@ namespace UnityRemix
                 {
                     selectedCamera = namedCamera;
                     selectionReason = $"matched config name '{configCameraName.Value}'";
+                    lastWarnedMissingConfigCamera = "";
                 }
-                else if (lastCameraName != configCameraName.Value)
+                else if (lastWarnedMissingConfigCamera != configCameraName.Value)
                 {
                     logger.LogWarning($"Camera '{configCameraName.Value}' not found or inactive. Falling back to auto-detection.");
-                    lastCameraName = configCameraName.Value;
+                    lastWarnedMissingConfigCamera = configCameraName.Value;
                 }
             }
             
@@ -213,7 +215,7 @@ namespace UnityRemix
                     {
                         // Heuristic 2: Camera that renders layer 0 (world/Default) with the most mask bits
                         var worldCam = taggedCameras
-                            .Where(c => (c.cullingMask & 1) != 0)
+                            .Where(c => (c.cullingMask & 1) != 0 && !IsUiCamera(c))
                             .OrderByDescending(c => CountBits((uint)c.cullingMask))
                             .FirstOrDefault();
 
@@ -224,7 +226,8 @@ namespace UnityRemix
                         }
                         else
                         {
-                            selectedCamera = taggedCameras.OrderByDescending(c => c.depth).First();
+                            var nonUi = taggedCameras.Where(c => !IsUiCamera(c)).OrderByDescending(c => c.depth).FirstOrDefault();
+                            selectedCamera = nonUi ?? taggedCameras.OrderByDescending(c => c.depth).First();
                             selectionReason = "fallback (no MainCamera tag found)";
                         }
                     }
@@ -248,6 +251,18 @@ namespace UnityRemix
             
             return selectedCamera;
         }
+
+        private static bool IsUiCamera(Camera cam)
+        {
+            if (cam == null) return false;
+            string n = cam.name;
+            if (n.IndexOf("ui", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.IndexOf("hud", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.IndexOf("overlay", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                n.IndexOf("canvas", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            return false;
+        }
         
         /// <summary>
         /// Reset camera tracking (call on scene change)
@@ -255,6 +270,7 @@ namespace UnityRemix
         public void ResetTracking()
         {
             lastCameraName = "";
+            lastWarnedMissingConfigCamera = "";
             currentCamera = null;
         }
         

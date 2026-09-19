@@ -589,21 +589,42 @@ namespace UnityRemix
                 }
                 
                 // Capture static meshes and camera
-                frameCapture.CaptureStaticMeshes(nextState, frameCount);
+                try
+                {
+                    frameCapture.CaptureStaticMeshes(nextState, frameCount);
+                }
+                catch (Exception ex)
+                {
+                    LogSource.LogError($"CaptureStaticMeshes exception: {ex}");
+                }
                 
                 // Capture skinned meshes
-                frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
+                try
+                {
+                    frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
+                }
+                catch (Exception ex)
+                {
+                    LogSource.LogError($"CaptureSkinnedMeshes exception: {ex}");
+                }
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
                 if (sceneMeshScanner != null)
                 {
-                    Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
-                    sceneMeshScanner.UpdateVisibility(
-                        camPos,
-                        configUseDistanceCulling.Value,
-                        configMaxRenderDistance.Value,
-                        configUseVisibilityCulling.Value
-                    );
+                    try
+                    {
+                        Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
+                        sceneMeshScanner.UpdateVisibility(
+                            camPos,
+                            configUseDistanceCulling.Value,
+                            configMaxRenderDistance.Value,
+                            configUseVisibilityCulling.Value
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        LogSource.LogError($"sceneMeshScanner UpdateVisibility exception: {ex}");
+                    }
                 }
 
                 // Send to render thread (mesh creation moved to render thread to avoid deadlocks)
