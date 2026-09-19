@@ -100,9 +100,12 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         private static extern IntPtr SetCursor(IntPtr hCursor);
 
-        private const int VK_MENU = 0x12; // Alt key
-        private const int VK_X = 0x58;    // 'X' key
+        private const int VK_MENU = 0x12;   // Alt key
+        private const int VK_X = 0x58;      // 'X' key
+        private const int VK_ESCAPE = 0x1B; // Escape key
+        private const int VK_F8 = 0x77;     // F8 key
         private bool wasAltXPressed = false;
+        private bool wasF8Pressed = false;
 
         private void UpdateSingleWindowUIActive()
         {
@@ -149,11 +152,13 @@ namespace UnityRemix
                     }
 
                     // Check for keypress diagnostics (F8)
-                    bool escapePressed = Input.GetKeyDown(KeyCode.Escape);
-                    if (Input.GetKeyDown(KeyCode.F8))
+                    bool escapePressed = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+                    bool f8Pressed = (GetAsyncKeyState(VK_F8) & 0x8000) != 0;
+                    if (f8Pressed && !wasF8Pressed)
                     {
                         uiDetector.DumpUIState("F8 Key Pressed (Manual UI Diagnostic)");
                     }
+                    wasF8Pressed = f8Pressed;
 
                     // Handle 3D in-engine camera suppression & camera detection
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
@@ -246,8 +251,8 @@ namespace UnityRemix
             }
 
             // Handle Alt+X detection for Remix ImGui using direct hardware query so it never drops even when window focus changes
-            bool altHeld = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 || Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
-            bool xHeld = (GetAsyncKeyState(VK_X) & 0x8000) != 0 || Input.GetKey(KeyCode.X);
+            bool altHeld = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+            bool xHeld = (GetAsyncKeyState(VK_X) & 0x8000) != 0;
             bool altXPressed = altHeld && xHeld;
 
             if (altXPressed && !wasAltXPressed)
