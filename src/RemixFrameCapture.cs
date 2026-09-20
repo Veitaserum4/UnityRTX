@@ -52,6 +52,8 @@ namespace UnityRemix
         private readonly HashSet<string> loggedParticleSystems = new HashSet<string>();
         private static ParticleSystem.Particle[] _particleBuffer = new ParticleSystem.Particle[2048];
         private static Mesh _reusableParticleMesh = null;
+        private static Mesh _reusableParticleTrailMesh = null;
+        private static Mesh _reusableTrailRendererMesh = null;
         private int rendererCacheFrame = -1;
         
         // Cached baked meshes for skinned renderers
@@ -2838,6 +2840,16 @@ namespace UnityRemix
                 }
             }
             catch (Exception ex) { if (configDebugLogInterval.Value > 0 && frameCount % 300 == 0) logger.LogWarning($"[DynamicEffects] CaptureParticleSystems error: {ex.Message}"); }
+
+            // Capture active trail renderers (bullets, gibs, blood trails, projectiles)
+            try
+            {
+                using (RemixTracy.Zone("CaptureTrailRenderers"))
+                {
+                    CaptureTrailRenderers(state, frameCount);
+                }
+            }
+            catch (Exception ex) { if (configDebugLogInterval.Value > 0 && frameCount % 300 == 0) logger.LogWarning($"[DynamicEffects] CaptureTrailRenderers error: {ex.Message}"); }
         }
         
         /// <summary>
@@ -2936,25 +2948,95 @@ namespace UnityRemix
                 }
                 if (mat == null) continue;
 
-                int matId = mat.GetInstanceID();
-                materialManager.CaptureMaterialTextures(mat, matId);
+                // Sample color from active particles or system start color
+                Color pCol = Color.white;
+                bool foundAliveColor = false;
+                for (int pIdx = 0; pIdx < Math.Min(actualAlive, 16); pIdx++)
+                {
+                    Color32 c = _particleBuffer[pIdx].GetCurrentColor(ps);
+                    if (c.a > 10 && (c.r > 10 || c.g > 10 || c.b > 10))
+                    {
+                        pCol = (Color)c;
+                        foundAliveColor = true;
+                        break;
+                    }
+                }
+                if (!foundAliveColor)
+                {
+                    var startColor = main.startColor;
+                    if (startColor.mode == ParticleSystemGradientMode.Color)
+                        pCol = startColor.color;
+                    else if (startColor.mode == ParticleSystemGradientMode.TwoColors)
+                        pCol = (startColor.colorMin + startColor.colorMax) * 0.5f;
+                    else if (startColor.gradient != null)
+                        pCol = startColor.gradient.Evaluate(0.5f);
+                }
+
+                // Check material tint
+                Color matTint = Color.white;
+                if (mat.HasProperty("_TintColor"))
+                    matTint = mat.GetColor("_TintColor");
+                else if (mat.HasProperty("_Color"))
+                    matTint = mat.GetColor("_Color");
+                else if (mat.HasProperty("_BaseColor"))
+                    matTint = mat.GetColor("_BaseColor");
+
+                Color finalParticleColor = new Color(
+                    pCol.r * matTint.r,
+                    pCol.g * matTint.g,
+                    pCol.b * matTint.b,
+                    Mathf.Clamp01(Math.Max(pCol.a, matTint.a))
+                );
+
+                if (finalParticleColor.r < 0.01f && finalParticleColor.g < 0.01f && finalParticleColor.b < 0.01f)
+                {
+                    if (pCol.r > 0.05f || pCol.g > 0.05f || pCol.b > 0.05f)
+                        finalParticleColor = pCol;
+                    else if (matTint.r > 0.05f || matTint.g > 0.05f || matTint.b > 0.05f)
+                        finalParticleColor = matTint;
+                }
+
+                // Quantize color (0..15 per channel) to group similar tints and prevent material explosion
+                int r4 = Mathf.Clamp((int)(finalParticleColor.r * 15f + 0.5f), 0, 15);
+                int g4 = Mathf.Clamp((int)(finalParticleColor.g * 15f + 0.5f), 0, 15);
+                int b4 = Mathf.Clamp((int)(finalParticleColor.b * 15f + 0.5f), 0, 15);
+                int colorKey = (r4 << 8) | (g4 << 4) | b4;
+                Color quantizedColor = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
+
+                int tintedMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
+                float emIntensity = (r4 != g4 || g4 != b4) ? 0.8f : 0.2f;
+
+                materialManager.CaptureMaterialTextures(
+                    mat, 
+                    tintedMatId, 
+                    mpbEmissiveColor: quantizedColor, 
+                    mpbEmissiveIntensity: emIntensity, 
+                    mpbColor: quantizedColor
+                );
 
                 if (configDebugLogInterval.Value > 0)
                 {
                     if (loggedParticleSystems.Add(pr.name))
                     {
-                        logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', cullingMode={main.cullingMode})");
+                        logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', color=({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}))");
                     }
                 }
 
                 if (pr.renderMode == ParticleSystemRenderMode.Mesh)
                 {
-                    BakeMeshParticleSystem(pr, matId, state);
+                    BakeMeshParticleSystem(pr, tintedMatId, state);
                 }
                 else
                 {
                     int particlesToDraw = Math.Min(actualAlive, 4096);
-                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, matId, mainCam, camRight, camUp, camForward, state);
+                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state);
+                }
+
+                // Capture trails if enabled on this particle system
+                var trails = ps.trails;
+                if (trails.enabled)
+                {
+                    BakeParticleTrails(pr, ps, mainCam, quantizedColor, emIntensity, state);
                 }
             }
         }
@@ -3145,7 +3227,7 @@ namespace UnityRemix
                         uvs = _reusableParticleMesh.uv,
                         colors = _reusableParticleMesh.colors32,
                         triangles = _reusableParticleMesh.triangles,
-                        localToWorld = pr.transform.localToWorldMatrix,
+                        localToWorld = Matrix4x4.identity,
                         boneTransforms = null,
                         skinningData = null
                     });
@@ -3154,6 +3236,202 @@ namespace UnityRemix
             catch (Exception ex)
             {
                 logger.LogWarning($"BakeMeshParticleSystem failed on '{pr.name}': {ex.Message}");
+            }
+        }
+
+        private void BakeParticleTrails(
+            ParticleSystemRenderer pr, 
+            ParticleSystem ps, 
+            Camera cam, 
+            Color trailColor, 
+            float emIntensity, 
+            FrameState state)
+        {
+            if (_reusableParticleTrailMesh == null)
+            {
+                _reusableParticleTrailMesh = new Mesh { name = "ParticleTrailBakeMesh" };
+            }
+
+            try
+            {
+                _reusableParticleTrailMesh.Clear();
+#pragma warning disable CS0618
+                pr.BakeTrailsMesh(_reusableParticleTrailMesh, cam, true);
+#pragma warning restore CS0618
+
+                var verts = _reusableParticleTrailMesh.vertices;
+                var tris = _reusableParticleTrailMesh.triangles;
+                if (verts != null && verts.Length >= 3 && tris != null && tris.Length >= 3)
+                {
+                    Material trailMat = pr.trailMaterial;
+                    if (trailMat == null)
+                    {
+                        var mats = pr.sharedMaterials;
+                        if (mats != null && mats.Length > 1 && mats[1] != null)
+                            trailMat = mats[1];
+                        else
+                            trailMat = pr.sharedMaterial;
+                    }
+                    if (trailMat == null) return;
+
+                    int r4 = Mathf.Clamp((int)(trailColor.r * 15f + 0.5f), 0, 15);
+                    int g4 = Mathf.Clamp((int)(trailColor.g * 15f + 0.5f), 0, 15);
+                    int b4 = Mathf.Clamp((int)(trailColor.b * 15f + 0.5f), 0, 15);
+                    int colorKey = (r4 << 8) | (g4 << 4) | b4;
+                    int trailMatId = unchecked(trailMat.GetInstanceID() * 397 ^ colorKey);
+
+                    materialManager.CaptureMaterialTextures(
+                        trailMat, 
+                        trailMatId, 
+                        mpbEmissiveColor: trailColor, 
+                        mpbEmissiveIntensity: emIntensity, 
+                        mpbColor: trailColor
+                    );
+
+                    ulong trailHash = (ulong)(uint)pr.GetInstanceID() | 0x4800000000000000UL;
+
+                    state.skinned.Add(new SkinnedMeshData
+                    {
+                        meshId = pr.GetInstanceID() ^ 0x0F0F0F,
+                        remixMeshHash = trailHash,
+                        materialId = trailMatId,
+                        vertices = verts,
+                        normals = _reusableParticleTrailMesh.normals,
+                        uvs = _reusableParticleTrailMesh.uv,
+                        colors = _reusableParticleTrailMesh.colors32,
+                        triangles = tris,
+                        localToWorld = Matrix4x4.identity,
+                        boneTransforms = null,
+                        skinningData = null
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                if (configDebugLogInterval.Value > 0)
+                    logger.LogWarning($"BakeParticleTrails failed on '{pr.name}': {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Capture active TrailRenderer ribbons (bullets, gibs, blood trails, projectiles) using BakeMesh.
+        /// </summary>
+        public void CaptureTrailRenderers(FrameState state, int frameCount)
+        {
+            if (configCaptureParticles != null && !configCaptureParticles.Value)
+                return;
+
+            Camera mainCam = cameraHandler?.GetPreferredCamera() ?? Camera.main;
+            if (mainCam == null)
+                return;
+
+            var activeTrails = UnityCompat.FindObjects<TrailRenderer>(false);
+            if (activeTrails == null || activeTrails.Length == 0)
+                return;
+
+            if (_reusableTrailRendererMesh == null)
+            {
+                _reusableTrailRendererMesh = new Mesh { name = "TrailRendererBakeMesh" };
+            }
+
+            for (int i = 0; i < activeTrails.Length; i++)
+            {
+                var tr = activeTrails[i];
+                if (tr == null || !tr.enabled || !tr.gameObject.activeInHierarchy)
+                    continue;
+
+                if (tr.positionCount < 2)
+                    continue;
+
+                Material mat = tr.sharedMaterial;
+                if (mat == null)
+                {
+                    var mats = tr.sharedMaterials;
+                    if (mats != null && mats.Length > 0)
+                        mat = mats[0];
+                }
+                if (mat == null)
+                    continue;
+
+                try
+                {
+                    _reusableTrailRendererMesh.Clear();
+                    tr.BakeMesh(_reusableTrailRendererMesh, mainCam, true);
+
+                    var verts = _reusableTrailRendererMesh.vertices;
+                    var tris = _reusableTrailRendererMesh.triangles;
+                    if (verts == null || verts.Length < 3 || tris == null || tris.Length < 3)
+                        continue;
+
+                    // Resolve trail color
+                    Color trCol = (tr.startColor + tr.endColor) * 0.5f;
+                    if (trCol.a <= 0.01f)
+                        trCol = tr.startColor;
+                    if (trCol.a <= 0.01f && tr.colorGradient != null)
+                        trCol = tr.colorGradient.Evaluate(0.5f);
+
+                    Color matTint = Color.white;
+                    if (mat.HasProperty("_TintColor"))
+                        matTint = mat.GetColor("_TintColor");
+                    else if (mat.HasProperty("_Color"))
+                        matTint = mat.GetColor("_Color");
+                    else if (mat.HasProperty("_BaseColor"))
+                        matTint = mat.GetColor("_BaseColor");
+
+                    Color finalTrailCol = new Color(
+                        trCol.r * matTint.r,
+                        trCol.g * matTint.g,
+                        trCol.b * matTint.b,
+                        Mathf.Clamp01(Math.Max(trCol.a, matTint.a))
+                    );
+
+                    if (finalTrailCol.r < 0.01f && finalTrailCol.g < 0.01f && finalTrailCol.b < 0.01f)
+                    {
+                        if (trCol.r > 0.05f || trCol.g > 0.05f || trCol.b > 0.05f)
+                            finalTrailCol = trCol;
+                        else if (matTint.r > 0.05f || matTint.g > 0.05f || matTint.b > 0.05f)
+                            finalTrailCol = matTint;
+                    }
+
+                    int r4 = Mathf.Clamp((int)(finalTrailCol.r * 15f + 0.5f), 0, 15);
+                    int g4 = Mathf.Clamp((int)(finalTrailCol.g * 15f + 0.5f), 0, 15);
+                    int b4 = Mathf.Clamp((int)(finalTrailCol.b * 15f + 0.5f), 0, 15);
+                    int colorKey = (r4 << 8) | (g4 << 4) | b4;
+                    Color quantizedColor = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
+
+                    int trailMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
+                    float emIntensity = (r4 != g4 || g4 != b4) ? 0.8f : 0.2f;
+
+                    materialManager.CaptureMaterialTextures(
+                        mat,
+                        trailMatId,
+                        mpbEmissiveColor: quantizedColor,
+                        mpbEmissiveIntensity: emIntensity,
+                        mpbColor: quantizedColor
+                    );
+
+                    ulong remixMeshHash = (ulong)(uint)tr.GetInstanceID() | 0x4800000000000000UL;
+
+                    state.skinned.Add(new SkinnedMeshData
+                    {
+                        meshId = tr.GetInstanceID(),
+                        remixMeshHash = remixMeshHash,
+                        materialId = trailMatId,
+                        vertices = verts,
+                        normals = _reusableTrailRendererMesh.normals,
+                        uvs = _reusableTrailRendererMesh.uv,
+                        colors = _reusableTrailRendererMesh.colors32,
+                        triangles = tris,
+                        localToWorld = Matrix4x4.identity,
+                        boneTransforms = null,
+                        skinningData = null
+                    });
+                }
+                catch (Exception ex)
+                {
+                    if (configDebugLogInterval.Value > 0)
+                        logger.LogWarning($"CaptureTrailRenderers failed on '{tr.name}': {ex.Message}");
+                }
             }
         }
         
