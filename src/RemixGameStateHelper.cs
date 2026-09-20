@@ -150,6 +150,7 @@ namespace UnityRemix
                 ReleaseCapture();
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
+                RemixWindowManager.ResetUnityInputAxes();
 
                 if (!isStateRegistered && gsmType != null && gameStateType != null && gameStateCtor != null)
                 {
@@ -253,6 +254,7 @@ namespace UnityRemix
                     ClipCursor(IntPtr.Zero);
                 }
                 ReleaseCapture();
+                RemixWindowManager.ResetUnityInputAxes();
             }
         }
     }
