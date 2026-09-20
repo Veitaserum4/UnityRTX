@@ -2353,23 +2353,30 @@ namespace UnityRemix
             try
             {
                 _reusableParticleTrailMesh.Clear();
+                // useTransform=false keeps vertices in the ParticleSystem's local space so we
+                // can apply the full TRS via localToWorld below. This correctly handles both
+                // world-space and local-space simulated particles (e.g. blood gibs attached to
+                // a moving transform). With useTransform=true Unity only applies R+S without
+                // the translation, which misplaces local-space particles.
 #pragma warning disable CS0618
-                pr.BakeTrailsMesh(_reusableParticleTrailMesh, cam, true);
+                pr.BakeTrailsMesh(_reusableParticleTrailMesh, cam, false);
 #pragma warning restore CS0618
 
                 var verts = _reusableParticleTrailMesh.vertices;
                 var tris = _reusableParticleTrailMesh.triangles;
                 if (verts != null && verts.Length >= 3 && tris != null && tris.Length >= 3)
                 {
+                    // Only use a dedicated trail material. Falling back to the particle's own
+                    // billboard material (pr.sharedMaterial) causes opaque sprite quads to be
+                    // rendered over the ribbon geometry, appearing as flat "squares".
                     Material trailMat = pr.trailMaterial;
                     if (trailMat == null)
                     {
                         var mats = pr.sharedMaterials;
                         if (mats != null && mats.Length > 1 && mats[1] != null)
                             trailMat = mats[1];
-                        else
-                            trailMat = pr.sharedMaterial;
                     }
+                    // No dedicated trail material → skip rather than using the wrong one.
                     if (trailMat == null) return;
 
                     int r4 = Mathf.Clamp((int)(trailColor.r * 15f + 0.5f), 0, 15);
@@ -2388,6 +2395,12 @@ namespace UnityRemix
 
                     ulong trailHash = (ulong)(uint)pr.GetInstanceID() | 0x4800000000000000UL;
 
+                    // Use the full local-to-world matrix so position is correctly applied.
+                    // For world-space simulated particles the transform is usually identity/origin
+                    // and this is still correct. For local-space (e.g. attached-gib) particles
+                    // this is essential so the trails follow the gib in world space.
+                    Matrix4x4 trailLocalToWorld = pr.transform.localToWorldMatrix;
+
                     state.skinned.Add(new SkinnedMeshData
                     {
                         meshId = pr.GetInstanceID() ^ 0x0F0F0F,
@@ -2398,7 +2411,7 @@ namespace UnityRemix
                         uvs = _reusableParticleTrailMesh.uv,
                         colors = _reusableParticleTrailMesh.colors32,
                         triangles = tris,
-                        localToWorld = Matrix4x4.identity,
+                        localToWorld = trailLocalToWorld,
                         boneTransforms = null,
                         skinningData = null
                     });
