@@ -80,9 +80,14 @@ namespace UnityRemix
         // Cache for skinned mesh Remix handles - keyed by Remix mesh hash
         private Dictionary<ulong, IntPtr> skinnedMeshHandles = new Dictionary<ulong, IntPtr>();
         
-        // Deferred destruction queue to prevent flickering (destroy handles after they're no longer in use)
-        private Queue<IntPtr> deferredDestroyQueue = new Queue<IntPtr>();
-        private const int DEFERRED_DESTROY_FRAMES = 3; // Keep handles alive for 3 frames
+        // Deferred destruction queue with frame tracking to prevent GPU device loss
+        private struct DeferredMeshDestruction
+        {
+            public IntPtr handle;
+            public int frameSubmitted;
+        }
+        private Queue<DeferredMeshDestruction> deferredDestructionQueue = new Queue<DeferredMeshDestruction>();
+        private const int SAFE_GPU_INFLIGHT_FRAMES = 8; // Keep handles alive for at least 8 frames
         
         // Track which material each mesh uses (composite mesh key -> material ID)
         private Dictionary<ulong, int> meshToMaterialMap = new Dictionary<ulong, int>();
@@ -616,11 +621,15 @@ namespace UnityRemix
             
             try
             {
+                // Generate a frame-unique hash so RTX Remix treats dynamic geometry as fresh data each frame
+                ulong dynamicMeshHash = meshHash ^ ((ulong)(uint)frameHash * 1099511628211UL);
+                if (dynamicMeshHash == 0) dynamicMeshHash = 1;
+
                 var meshInfo = new RemixAPI.remixapi_MeshInfo
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_INFO,
                     pNext = IntPtr.Zero,
-                    hash = meshHash,
+                    hash = dynamicMeshHash,
                     surfaces_values = surfaceHandle.AddrOfPinnedObject(),
                     surfaces_count = 1
                 };
@@ -917,59 +926,89 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Manage skinned mesh handle lifecycle
+        /// Manage skinned mesh handle lifecycle with frame-delayed GPU-safe retirement
         /// </summary>
-        public void UpdateSkinnedMeshHandle(ulong meshHash, IntPtr newHandle)
+        public void UpdateSkinnedMeshHandle(ulong meshHash, IntPtr newHandle, int currentFrame = 0)
         {
-            // Queue old handle for deferred destruction (prevents flickering)
             if (skinnedMeshHandles.TryGetValue(meshHash, out IntPtr oldHandle) && oldHandle != IntPtr.Zero)
             {
-                // Don't destroy immediately - queue it for later
-                deferredDestroyQueue.Enqueue(oldHandle);
-                
-                // Process deferred destruction queue (destroy oldest handles)
-                while (deferredDestroyQueue.Count > DEFERRED_DESTROY_FRAMES && destroyMeshFunc != null)
+                if (oldHandle != newHandle)
                 {
-                    IntPtr handleToDestroy = deferredDestroyQueue.Dequeue();
-                    try
+                    deferredDestructionQueue.Enqueue(new DeferredMeshDestruction
                     {
-                        destroyMeshFunc(handleToDestroy);
-                    }
-                    catch { }
+                        handle = oldHandle,
+                        frameSubmitted = currentFrame
+                    });
                 }
             }
             
             skinnedMeshHandles[meshHash] = newHandle;
             skinnedRenderCount++;
+            
+            ProcessDeferredDestruction(currentFrame);
+        }
+
+        /// <summary>
+        /// Safely process deferred mesh destructions after GPU is guaranteed finished with them.
+        /// </summary>
+        public void ProcessDeferredDestruction(int currentFrame)
+        {
+            if (destroyMeshFunc == null) return;
+
+            while (deferredDestructionQueue.Count > 0)
+            {
+                var oldest = deferredDestructionQueue.Peek();
+                // Wait at least SAFE_GPU_INFLIGHT_FRAMES before destroying old mesh handle to guarantee GPU has finished drawing it
+                if (currentFrame >= oldest.frameSubmitted && (currentFrame - oldest.frameSubmitted < SAFE_GPU_INFLIGHT_FRAMES))
+                    break;
+
+                deferredDestructionQueue.Dequeue();
+                try
+                {
+                    destroyMeshFunc(oldest.handle);
+                }
+                catch { }
+            }
         }
         
         /// <summary>
-        /// Clean up stale skinned mesh handles
+        /// Clean up stale skinned mesh handles with frame-delayed GPU-safe retirement
         /// </summary>
-        public void CleanupStaleSkinnedMeshes(HashSet<ulong> activeMeshHashes)
+        public void CleanupStaleSkinnedMeshes(HashSet<ulong> activeMeshHashes, int currentFrame = 0)
         {
-            if (destroyMeshFunc == null)
-                return;
-            
-            List<ulong> toRemove = new List<ulong>();
+            List<ulong> toRemove = null;
             foreach (var kvp in skinnedMeshHandles)
             {
                 if (!activeMeshHashes.Contains(kvp.Key))
                 {
-                    destroyMeshFunc(kvp.Value);
+                    if (toRemove == null) toRemove = new List<ulong>();
                     toRemove.Add(kvp.Key);
+                    if (kvp.Value != IntPtr.Zero)
+                    {
+                        deferredDestructionQueue.Enqueue(new DeferredMeshDestruction
+                        {
+                            handle = kvp.Value,
+                            frameSubmitted = currentFrame
+                        });
+                    }
                 }
             }
             
-            foreach (ulong id in toRemove)
+            if (toRemove != null)
             {
-                skinnedMeshHandles.Remove(id);
-                if (pinnedMeshPool.TryGetValue(id, out var poolData))
+                for (int i = 0; i < toRemove.Count; i++)
                 {
-                    poolData.Dispose();
-                    pinnedMeshPool.Remove(id);
+                    ulong key = toRemove[i];
+                    skinnedMeshHandles.Remove(key);
+                    if (pinnedMeshPool.TryGetValue(key, out var poolData))
+                    {
+                        poolData.Dispose();
+                        pinnedMeshPool.Remove(key);
+                    }
                 }
             }
+
+            ProcessDeferredDestruction(currentFrame);
         }
         
         /// <summary>
@@ -1144,14 +1183,22 @@ namespace UnityRemix
             // Destroy any remaining deferred handles
             if (destroyMeshFunc != null)
             {
-                while (deferredDestroyQueue.Count > 0)
+                while (deferredDestructionQueue.Count > 0)
                 {
-                    IntPtr handle = deferredDestroyQueue.Dequeue();
+                    IntPtr handle = deferredDestructionQueue.Dequeue().handle;
                     try
                     {
                         destroyMeshFunc(handle);
                     }
                     catch { }
+                }
+
+                foreach (var handle in skinnedMeshHandles.Values)
+                {
+                    if (handle != IntPtr.Zero)
+                    {
+                        try { destroyMeshFunc(handle); } catch { }
+                    }
                 }
             }
             

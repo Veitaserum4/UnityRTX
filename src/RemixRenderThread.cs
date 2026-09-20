@@ -412,7 +412,7 @@ namespace UnityRemix
                             if (meshHandle == IntPtr.Zero)
                                 continue;
                             
-                            meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle);
+                            meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount);
                             skinned.skinningData.meshCreated = true;
                         }
                         
@@ -437,7 +437,7 @@ namespace UnityRemix
                         if (meshHandle == IntPtr.Zero)
                             continue;
                         
-                        meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle);
+                        meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount);
                         updatedMeshes.Add(skinned.remixMeshHash);
                         meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue);
                         objectPickingValue++;
@@ -449,7 +449,7 @@ namespace UnityRemix
             // Cleanup stale meshes periodically
             if (state.frameCount % 60 == 0)
             {
-                meshConverter.CleanupStaleSkinnedMeshes(updatedMeshes);
+                meshConverter.CleanupStaleSkinnedMeshes(updatedMeshes, state.frameCount);
             }
 
             return objectPickingValue;
