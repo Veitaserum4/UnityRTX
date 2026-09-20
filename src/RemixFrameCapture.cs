@@ -2020,10 +2020,10 @@ namespace UnityRemix
                     main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
                 }
 
-                // If playing but not yet simulated (e.g. triggered on this frame in Update), simulate 1 step immediately
-                if (ps.isPlaying && ps.particleCount == 0)
+                // If a system was paused (e.g. from prior Simulate calls or pooled state), ensure it plays
+                if (ps.isPaused && Time.timeScale > 0f)
                 {
-                    ps.Simulate(Time.deltaTime, false, false);
+                    ps.Play();
                 }
 
                 int numAlive = ps.particleCount;
@@ -2191,48 +2191,53 @@ namespace UnityRemix
                 float cosR = Mathf.Cos(rot);
                 float sinR = Mathf.Sin(rot);
 
-                Vector3 rAxis, uAxis;
+                Vector3 hR, hU;
                 if (isHorizontal)
                 {
-                    rAxis = Vector3.right * cosR + Vector3.forward * sinR;
-                    uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
+                    Vector3 rAxis = Vector3.right * cosR + Vector3.forward * sinR;
+                    Vector3 uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
                 }
                 else if (isVertical)
                 {
                     Vector3 facing = Vector3.ProjectOnPlane(camForward, Vector3.up).normalized;
                     if (facing.sqrMagnitude < 0.001f) facing = Vector3.forward;
                     Vector3 side = Vector3.Cross(Vector3.up, facing).normalized;
-                    rAxis = side * cosR + Vector3.up * sinR;
-                    uAxis = -side * sinR + Vector3.up * cosR;
+                    Vector3 rAxis = side * cosR + Vector3.up * sinR;
+                    Vector3 uAxis = -side * sinR + Vector3.up * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
                 }
                 else if (isStretch)
                 {
-                    Vector3 vel = p.velocity;
-                    float speed = vel.magnitude;
+                    Vector3 worldVel = isWorldSpace ? p.velocity : sysTransform.MultiplyVector(p.velocity);
+                    float speed = worldVel.magnitude;
                     if (speed > 0.001f)
                     {
-                        Vector3 velDir = vel / speed;
+                        Vector3 velDir = worldVel / speed;
                         Vector3 cross = Vector3.Cross(velDir, camForward).normalized;
                         if (cross.sqrMagnitude < 0.001f) cross = camRight;
-                        rAxis = cross;
-                        float stretchLen = (size.y + speed * pr.velocityScale) * pr.lengthScale;
-                        uAxis = velDir * (stretchLen / Math.Max(0.0001f, size.y));
+                        float stretchLen = Mathf.Clamp(size.y * Mathf.Abs(pr.lengthScale) + speed * pr.velocityScale, size.y, 20f);
+                        hR = cross * (size.x * 0.5f);
+                        hU = velDir * (stretchLen * 0.5f);
                     }
                     else
                     {
-                        rAxis = camRight * cosR + camUp * sinR;
-                        uAxis = -camRight * sinR + camUp * cosR;
+                        Vector3 rAxis = camRight * cosR + camUp * sinR;
+                        Vector3 uAxis = -camRight * sinR + camUp * cosR;
+                        hR = rAxis * (size.x * 0.5f);
+                        hU = uAxis * (size.y * 0.5f);
                     }
                 }
                 else
                 {
                     // Standard Billboard
-                    rAxis = camRight * cosR + camUp * sinR;
-                    uAxis = -camRight * sinR + camUp * cosR;
+                    Vector3 rAxis = camRight * cosR + camUp * sinR;
+                    Vector3 uAxis = -camRight * sinR + camUp * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
                 }
-
-                Vector3 hR = rAxis * (size.x * 0.5f);
-                Vector3 hU = uAxis * (size.y * 0.5f);
 
                 int vi = i * 4;
                 verts[vi + 0] = pos - hR - hU;
