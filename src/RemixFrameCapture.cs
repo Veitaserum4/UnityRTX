@@ -741,7 +741,7 @@ namespace UnityRemix
                 }
             }
 
-            var allParticles = UnityCompat.FindObjects<ParticleSystemRenderer>(true);
+            var allParticles = UnityCompat.FindObjects<ParticleSystemRenderer>(false);
             for (int i = 0; i < allParticles.Length; i++)
             {
                 var pr = allParticles[i];
@@ -2861,7 +2861,7 @@ namespace UnityRemix
                 return;
 
             Camera mainCam = cameraHandler?.GetPreferredCamera() ?? Camera.main;
-            if (mainCam == null)
+            if (mainCam == null || !mainCam.gameObject.activeInHierarchy || !mainCam.enabled || Time.frameCount < 10)
                 return;
 
             Vector3 camRight = mainCam.transform.right;
@@ -2892,13 +2892,13 @@ namespace UnityRemix
                 }
             }
 
-            // Periodically prune dead/destroyed particle systems to prevent list growth
-            if (frameCount % 300 == 0)
+            // Periodically prune dead or deactivated particle systems to keep tracking lean
+            if (frameCount % 180 == 0)
             {
                 for (int d = trackedParticleSystems.Count - 1; d >= 0; d--)
                 {
                     var t = trackedParticleSystems[d];
-                    if (t.renderer == null || t.system == null)
+                    if (t.renderer == null || t.system == null || !t.renderer.gameObject.activeInHierarchy)
                     {
                         trackedParticleSystemIds.Remove(t.id);
                         trackedParticleSystems.RemoveAt(d);
@@ -2919,12 +2919,6 @@ namespace UnityRemix
                 if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
                 {
                     main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
-                }
-
-                // If a system was paused (e.g. from prior Simulate calls or pooled state), ensure it plays
-                if (ps.isPaused && Time.timeScale > 0f)
-                {
-                    ps.Play();
                 }
 
                 int numAlive = ps.particleCount;
@@ -3327,7 +3321,7 @@ namespace UnityRemix
                 return;
 
             Camera mainCam = cameraHandler?.GetPreferredCamera() ?? Camera.main;
-            if (mainCam == null)
+            if (mainCam == null || !mainCam.gameObject.activeInHierarchy || !mainCam.enabled || Time.frameCount < 10)
                 return;
 
             var activeTrails = UnityCompat.FindObjects<TrailRenderer>(false);
