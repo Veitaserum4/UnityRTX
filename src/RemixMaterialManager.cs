@@ -430,7 +430,7 @@ namespace UnityRemix
 
             // Fallback: no albedo texture but material has a color — create a 1x1 solid-color texture
             // so Remix renders the surface with the correct color instead of the debug checkerboard.
-            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor")))
+            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_TintColor")))
             {
                 matData.albedoHandle = GetOrCreateSolidColorTexture(matData.albedoColor);
                 if (matData.albedoHandle != IntPtr.Zero)
