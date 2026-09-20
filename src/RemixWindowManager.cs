@@ -417,13 +417,20 @@ namespace UnityRemix
                     return IntPtr.Zero;
                 }
 
-                // Suppress mouse click & wheel messages from reaching Unity to prevent firing/weapon-switching
-                if ((uMsg >= WM_LBUTTONDOWN && uMsg <= WM_MBUTTONUP) || uMsg == WM_MOUSEWHEEL)
+                // Suppress mouse click & wheel messages from reaching Unity to prevent firing/weapon-switching.
+                // NOTE: Do NOT re-post WM_MOUSEWHEEL to remixWindow! DefWindowProc in a child window automatically
+                // forwards unhandled WM_MOUSEWHEEL to its parent (gameWindow). Re-posting it back creates an
+                // infinite recursive loop between the child and parent, causing a stack overflow crash!
+                if (uMsg == WM_MOUSEWHEEL)
+                {
+                    return IntPtr.Zero;
+                }
+
+                if (uMsg >= WM_LBUTTONDOWN && uMsg <= WM_MBUTTONUP)
                 {
                     if (instance != null && instance.remixWindow != IntPtr.Zero)
                     {
                         SetFocus(instance.remixWindow);
-                        PostMessage(instance.remixWindow, uMsg, wParam, lParam);
                     }
                     return IntPtr.Zero;
                 }
@@ -893,6 +900,14 @@ namespace UnityRemix
                 case WM_LBUTTONUP:
                 case WM_RBUTTONUP:
                 case WM_MBUTTONUP:
+                    break;
+
+                case WM_MOUSEWHEEL:
+                    if (isEmbeddedStatic && isRemixUIOpen)
+                    {
+                        // Consume mouse wheel on child window so DefWindowProc does not forward to parent
+                        return IntPtr.Zero;
+                    }
                     break;
 
                 case WM_MOUSEACTIVATE:

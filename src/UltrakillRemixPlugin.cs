@@ -94,11 +94,10 @@ namespace UnityRemix
             LogSource = Logger;
             LogSource.LogInfo($"Plugin {PluginName} v{PluginVersion} is loading!");
 
-            // Suppress conflicting Vulkan implicit layers (Steam overlay, OBS capture) for DXVK/Remix
+            // Suppress conflicting Vulkan implicit layer (Steam overlay) for DXVK/Remix
             try
             {
                 Environment.SetEnvironmentVariable("DISABLE_VK_LAYER_VALVE_steam_overlay_1", "1");
-                Environment.SetEnvironmentVariable("DISABLE_VULKAN_OBS_CAPTURE", "1");
             }
             catch { }
 
