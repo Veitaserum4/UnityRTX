@@ -629,6 +629,16 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureParticleSystems exception: {ex}");
                 }
+
+                // Capture trail renderers
+                try
+                {
+                    frameCapture.CaptureTrailRenderers(nextState, frameCount);
+                }
+                catch (Exception ex)
+                {
+                    LogSource.LogError($"CaptureTrailRenderers exception: {ex}");
+                }
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
                 if (sceneMeshScanner != null)
