@@ -49,6 +49,7 @@ namespace UnityRemix
         }
         private readonly List<TrackedParticleSystem> trackedParticleSystems = new List<TrackedParticleSystem>();
         private readonly HashSet<int> trackedParticleSystemIds = new HashSet<int>();
+        private readonly HashSet<string> loggedParticleSystems = new HashSet<string>();
         private static ParticleSystem.Particle[] _particleBuffer = new ParticleSystem.Particle[2048];
         private static Mesh _reusableParticleMesh = null;
         private int rendererCacheFrame = -1;
@@ -747,6 +748,10 @@ namespace UnityRemix
                     var ps = pr.GetComponent<ParticleSystem>();
                     if (ps != null)
                     {
+                        var main = ps.main;
+                        if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                            main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+
                         trackedParticleSystems.Add(new TrackedParticleSystem
                         {
                             renderer = pr,
@@ -2851,25 +2856,40 @@ namespace UnityRemix
             Vector3 camUp = mainCam.transform.up;
             Vector3 camForward = mainCam.transform.forward;
 
-            // Periodic sweep for runtime newly instantiated particle systems
-            if (frameCount % 30 == 0)
+            // Check active particle renderers every frame to capture transient particles immediately (bullet impacts, sparks, newly spawned systems)
+            var activeRenderers = UnityCompat.FindObjects<ParticleSystemRenderer>(false);
+            for (int a = 0; a < activeRenderers.Length; a++)
             {
-                var activeRenderers = UnityCompat.FindObjects<ParticleSystemRenderer>(false);
-                for (int a = 0; a < activeRenderers.Length; a++)
+                var ar = activeRenderers[a];
+                if (ar != null && trackedParticleSystemIds.Add(ar.GetInstanceID()))
                 {
-                    var ar = activeRenderers[a];
-                    if (ar != null && trackedParticleSystemIds.Add(ar.GetInstanceID()))
+                    var aps = ar.GetComponent<ParticleSystem>();
+                    if (aps != null)
                     {
-                        var aps = ar.GetComponent<ParticleSystem>();
-                        if (aps != null)
+                        var main = aps.main;
+                        if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                            main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+
+                        trackedParticleSystems.Add(new TrackedParticleSystem
                         {
-                            trackedParticleSystems.Add(new TrackedParticleSystem
-                            {
-                                renderer = ar,
-                                system = aps,
-                                id = ar.GetInstanceID()
-                            });
-                        }
+                            renderer = ar,
+                            system = aps,
+                            id = ar.GetInstanceID()
+                        });
+                    }
+                }
+            }
+
+            // Periodically prune dead/destroyed particle systems to prevent list growth
+            if (frameCount % 300 == 0)
+            {
+                for (int d = trackedParticleSystems.Count - 1; d >= 0; d--)
+                {
+                    var t = trackedParticleSystems[d];
+                    if (t.renderer == null || t.system == null)
+                    {
+                        trackedParticleSystemIds.Remove(t.id);
+                        trackedParticleSystems.RemoveAt(d);
                     }
                 }
             }
@@ -2882,6 +2902,18 @@ namespace UnityRemix
 
                 if (pr == null || ps == null) continue;
                 if (!pr.enabled || !pr.gameObject.activeInHierarchy) continue;
+
+                var main = ps.main;
+                if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                {
+                    main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+                }
+
+                // If playing but not yet simulated (e.g. triggered on this frame in Update), simulate 1 step immediately
+                if (ps.isPlaying && ps.particleCount == 0)
+                {
+                    ps.Simulate(Time.deltaTime, false, false);
+                }
 
                 int numAlive = ps.particleCount;
                 if (numAlive <= 0) continue;
@@ -2906,6 +2938,14 @@ namespace UnityRemix
 
                 int matId = mat.GetInstanceID();
                 materialManager.CaptureMaterialTextures(mat, matId);
+
+                if (configDebugLogInterval.Value > 0)
+                {
+                    if (loggedParticleSystems.Add(pr.name))
+                    {
+                        logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', cullingMode={main.cullingMode})");
+                    }
+                }
 
                 if (pr.renderMode == ParticleSystemRenderMode.Mesh)
                 {
@@ -3105,7 +3145,7 @@ namespace UnityRemix
                         uvs = _reusableParticleMesh.uv,
                         colors = _reusableParticleMesh.colors32,
                         triangles = _reusableParticleMesh.triangles,
-                        localToWorld = Matrix4x4.identity,
+                        localToWorld = pr.transform.localToWorldMatrix,
                         boneTransforms = null,
                         skinningData = null
                     });
