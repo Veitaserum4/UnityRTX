@@ -24,6 +24,7 @@ namespace UnityRemix
         private bool _enableLights;
         private bool _captureStaticMeshes;
         private bool _captureSkinnedMeshes;
+        private bool _captureParticles;
         private bool _hardwareSkinning;
         private bool _captureTextures;
         private bool _captureMaterials;
@@ -416,6 +417,8 @@ namespace UnityRemix
                 _plugin.SetConfig("CaptureStaticMeshes", _captureStaticMeshes);
             if (RemixImGui.Checkbox("Skinned Meshes", ref _captureSkinnedMeshes))
                 _plugin.SetConfig("CaptureSkinnedMeshes", _captureSkinnedMeshes);
+            if (RemixImGui.Checkbox("Particle Systems", ref _captureParticles))
+                _plugin.SetConfig("CaptureParticles", _captureParticles);
             if (RemixImGui.Checkbox("Textures", ref _captureTextures))
                 _plugin.SetConfig("CaptureTextures", _captureTextures);
             if (RemixImGui.Checkbox("Materials", ref _captureMaterials))
@@ -436,6 +439,7 @@ namespace UnityRemix
             _targetFPS = _plugin.GetConfigInt("TargetFPS");
             _captureStaticMeshes = _plugin.GetConfigBool("CaptureStaticMeshes");
             _captureSkinnedMeshes = _plugin.GetConfigBool("CaptureSkinnedMeshes");
+            _captureParticles = _plugin.GetConfigBool("CaptureParticles");
             _hardwareSkinning = _plugin.GetConfigBool("HardwareSkinning");
             _captureTextures = _plugin.GetConfigBool("CaptureTextures");
             _captureMaterials = _plugin.GetConfigBool("CaptureMaterials");
