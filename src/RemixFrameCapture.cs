@@ -2509,7 +2509,7 @@ namespace UnityRemix
                         mpbColor: quantizedColor
                     );
 
-                    ulong remixMeshHash = (ulong)(uint)tr.GetInstanceID() | 0x4800000000000000UL;
+                    ulong remixMeshHash = (ulong)(uint)tr.GetInstanceID() | 0x4C00000000000000UL;
 
                     state.skinned.Add(new SkinnedMeshData
                     {
