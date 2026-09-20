@@ -88,7 +88,7 @@ namespace UnityRemix
         private Dictionary<ulong, int> meshToMaterialMap = new Dictionary<ulong, int>();
         
         // GCHandle pooling for skinned meshes to reduce allocations
-        private struct PinnedMeshData
+        private class PinnedMeshData
         {
             public RemixAPI.remixapi_HardcodedVertex[] vertices;
             public uint[] indices;
@@ -97,6 +97,57 @@ namespace UnityRemix
             public bool isPinned;
             public int vertexCapacity;
             public int indexCapacity;
+
+            public void EnsureCapacity(int reqVerts, int reqIndices)
+            {
+                bool resizeVerts = vertices == null || vertexCapacity < reqVerts;
+                bool resizeIndices = indices == null || indexCapacity < reqIndices;
+
+                if (resizeVerts || resizeIndices)
+                {
+                    if (isPinned)
+                    {
+                        if (vertexHandle.IsAllocated) vertexHandle.Free();
+                        if (indexHandle.IsAllocated) indexHandle.Free();
+                        isPinned = false;
+                    }
+
+                    if (resizeVerts)
+                    {
+                        int newVertCap = Math.Max(reqVerts * 2, 64);
+                        vertices = new RemixAPI.remixapi_HardcodedVertex[newVertCap];
+                        vertexCapacity = newVertCap;
+                    }
+
+                    if (resizeIndices)
+                    {
+                        int newIndexCap = Math.Max(reqIndices * 2, 128);
+                        indices = new uint[newIndexCap];
+                        indexCapacity = newIndexCap;
+                    }
+                }
+
+                if (!isPinned)
+                {
+                    vertexHandle = GCHandle.Alloc(vertices, GCHandleType.Pinned);
+                    indexHandle = GCHandle.Alloc(indices, GCHandleType.Pinned);
+                    isPinned = true;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (isPinned)
+                {
+                    if (vertexHandle.IsAllocated) vertexHandle.Free();
+                    if (indexHandle.IsAllocated) indexHandle.Free();
+                    isPinned = false;
+                }
+                vertices = null;
+                indices = null;
+                vertexCapacity = 0;
+                indexCapacity = 0;
+            }
         }
         private Dictionary<ulong, PinnedMeshData> pinnedMeshPool = new Dictionary<ulong, PinnedMeshData>();
         
@@ -506,7 +557,6 @@ namespace UnityRemix
             if (normals == null || normals.Length != vertices.Length)
             {
                 normals = ComputeFaceNormals(vertices, triangles);
-                logger.LogDebug($"Skinned mesh {meshHash}: normals missing, computed from face geometry");
             }
             
             // Ensure UVs
@@ -518,42 +568,11 @@ namespace UnityRemix
             // Use pooled GCHandles
             if (!pinnedMeshPool.TryGetValue(poolKey, out PinnedMeshData poolData))
             {
-                poolData = new PinnedMeshData
-                {
-                    vertices = new RemixAPI.remixapi_HardcodedVertex[vertices.Length],
-                    indices = new uint[triangles.Length],
-                    isPinned = false,
-                    vertexCapacity = vertices.Length,
-                    indexCapacity = triangles.Length
-                };
+                poolData = new PinnedMeshData();
+                pinnedMeshPool[poolKey] = poolData;
             }
             
-            // Resize if needed
-            if (poolData.vertexCapacity < vertices.Length || poolData.indexCapacity < triangles.Length)
-            {
-                if (poolData.isPinned)
-                {
-                    if (poolData.vertexHandle.IsAllocated)
-                        poolData.vertexHandle.Free();
-                    if (poolData.indexHandle.IsAllocated)
-                        poolData.indexHandle.Free();
-                    poolData.isPinned = false;
-                }
-                
-                if (poolData.vertexCapacity < vertices.Length)
-                {
-                    int newCap = Math.Max(vertices.Length, poolData.vertexCapacity * 2);
-                    poolData.vertices = new RemixAPI.remixapi_HardcodedVertex[newCap];
-                    poolData.vertexCapacity = newCap;
-                }
-                
-                if (poolData.indexCapacity < triangles.Length)
-                {
-                    int newCap = Math.Max(triangles.Length, poolData.indexCapacity * 2);
-                    poolData.indices = new uint[newCap];
-                    poolData.indexCapacity = newCap;
-                }
-            }
+            poolData.EnsureCapacity(vertices.Length, triangles.Length);
             
             // Fill data (Y-up to Z-up conversion), applying _MainTex_ST tiling/offset
             Vector4 st = materialManager.GetMainTexST(materialId);
@@ -573,16 +592,6 @@ namespace UnityRemix
             
             for (int i = 0; i < triangles.Length; i++)
                 poolData.indices[i] = (uint)triangles[i];
-            
-            // Pin once if not already pinned
-            if (!poolData.isPinned)
-            {
-                poolData.vertexHandle = GCHandle.Alloc(poolData.vertices, GCHandleType.Pinned);
-                poolData.indexHandle = GCHandle.Alloc(poolData.indices, GCHandleType.Pinned);
-                poolData.isPinned = true;
-                pinnedMeshPool[poolKey] = poolData;
-            }
-            
             // Get or create material handle for skinned mesh (on render thread)
             IntPtr materialHandle = IntPtr.Zero;
             if (materialId != 0)
@@ -961,12 +970,7 @@ namespace UnityRemix
                 skinnedMeshHandles.Remove(id);
                 if (pinnedMeshPool.TryGetValue(id, out var poolData))
                 {
-                    if (poolData.isPinned)
-                    {
-                        if (poolData.vertexHandle.IsAllocated) poolData.vertexHandle.Free();
-                        if (poolData.indexHandle.IsAllocated) poolData.indexHandle.Free();
-                        poolData.isPinned = false;
-                    }
+                    poolData.Dispose();
                     pinnedMeshPool.Remove(id);
                 }
             }
@@ -1136,12 +1140,7 @@ namespace UnityRemix
             // Free pinned handles
             foreach (var poolData in pinnedMeshPool.Values)
             {
-                if (poolData.isPinned)
-                {
-                    poolData.vertexHandle.Free();
-                    if (poolData.indexCapacity > 0)
-                        poolData.indexHandle.Free();
-                }
+                poolData.Dispose();
             }
             pinnedMeshPool.Clear();
             loggedMaterialWarnings.Clear();
