@@ -35,6 +35,7 @@ namespace UnityRemix
         // Debug Toggles
         private ConfigEntry<bool> configCaptureStaticMeshes;
         private ConfigEntry<bool> configCaptureSkinnedMeshes;
+        private ConfigEntry<bool> configCaptureParticles;
         private ConfigEntry<bool> configHardwareSkinning;
         private ConfigEntry<bool> configCaptureTextures;
         private ConfigEntry<bool> configCaptureMaterials;
@@ -192,6 +193,9 @@ namespace UnityRemix
             
             configCaptureSkinnedMeshes = Config.Bind("Debug", "CaptureSkinnedMeshes", true,
                 "Enable capturing and rendering of skinned meshes.");
+            
+            configCaptureParticles = Config.Bind("Debug", "CaptureParticles", true,
+                "Enable capturing and rendering of particle systems.");
             
             configHardwareSkinning = Config.Bind("Performance", "HardwareSkinning", false,
                 "Use GPU hardware skinning for animated meshes. When off, uses CPU BakeMesh fallback.");
@@ -422,7 +426,8 @@ namespace UnityRemix
                 configCaptureSkinnedMeshes,
                 configHardwareSkinning,
                 configPersistDisabledRenderers,
-                configStaticMeshFrameSkip
+                configStaticMeshFrameSkip,
+                configCaptureParticles
             );
             frameCapture.LoadDisabledLayersString(configDisabledLayers.Value);
             
@@ -614,6 +619,16 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureSkinnedMeshes exception: {ex}");
                 }
+
+                // Capture particle systems
+                try
+                {
+                    frameCapture.CaptureParticleSystems(nextState, frameCount);
+                }
+                catch (Exception ex)
+                {
+                    LogSource.LogError($"CaptureParticleSystems exception: {ex}");
+                }
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
                 if (sceneMeshScanner != null)
@@ -736,6 +751,7 @@ namespace UnityRemix
                 case "EnableLights": return configEnableLights.Value;
                 case "CaptureStaticMeshes": return configCaptureStaticMeshes.Value;
                 case "CaptureSkinnedMeshes": return configCaptureSkinnedMeshes.Value;
+                case "CaptureParticles": return configCaptureParticles.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
                 case "CaptureTextures": return configCaptureTextures.Value;
                 case "CaptureMaterials": return configCaptureMaterials.Value;
@@ -811,6 +827,7 @@ namespace UnityRemix
                 case "EnableLights": configEnableLights.Value = value; break;
                 case "CaptureStaticMeshes": configCaptureStaticMeshes.Value = value; break;
                 case "CaptureSkinnedMeshes": configCaptureSkinnedMeshes.Value = value; break;
+                case "CaptureParticles": configCaptureParticles.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;
                 case "CaptureTextures": configCaptureTextures.Value = value; break;
                 case "CaptureMaterials": configCaptureMaterials.Value = value; break;

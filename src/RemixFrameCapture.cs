@@ -28,6 +28,7 @@ namespace UnityRemix
         private readonly ConfigEntry<int> configDebugLogInterval;
         private readonly ConfigEntry<bool> configCaptureStaticMeshes;
         private readonly ConfigEntry<bool> configCaptureSkinnedMeshes;
+        private readonly ConfigEntry<bool> configCaptureParticles;
         private readonly ConfigEntry<bool> configHardwareSkinning;
         private readonly ConfigEntry<bool> configPersistDisabledRenderers;
         private readonly ConfigEntry<int> configStaticMeshFrameSkip;
@@ -38,6 +39,18 @@ namespace UnityRemix
         private readonly HashSet<int> cachedRendererIds = new HashSet<int>();
         private readonly HashSet<int> cachedSkinnedRendererIds = new HashSet<int>();
         private readonly List<MeshInstanceData> cachedStaticInstances = new List<MeshInstanceData>();
+
+        // Particle system caching
+        private struct TrackedParticleSystem
+        {
+            public ParticleSystemRenderer renderer;
+            public ParticleSystem system;
+            public int id;
+        }
+        private readonly List<TrackedParticleSystem> trackedParticleSystems = new List<TrackedParticleSystem>();
+        private readonly HashSet<int> trackedParticleSystemIds = new HashSet<int>();
+        private static ParticleSystem.Particle[] _particleBuffer = new ParticleSystem.Particle[2048];
+        private static Mesh _reusableParticleMesh = null;
         private int rendererCacheFrame = -1;
         
         // Cached baked meshes for skinned renderers
@@ -597,7 +610,8 @@ namespace UnityRemix
             ConfigEntry<bool> captureSkinnedMeshes,
             ConfigEntry<bool> hardwareSkinning,
             ConfigEntry<bool> persistDisabledRenderers,
-            ConfigEntry<int> staticMeshFrameSkip = null)
+            ConfigEntry<int> staticMeshFrameSkip = null,
+            ConfigEntry<bool> captureParticles = null)
         {
             this.logger = logger;
             this.cameraHandler = cameraHandler;
@@ -610,6 +624,7 @@ namespace UnityRemix
             this.configDebugLogInterval = debugLogInterval;
             this.configCaptureStaticMeshes = captureStaticMeshes;
             this.configCaptureSkinnedMeshes = captureSkinnedMeshes;
+            this.configCaptureParticles = captureParticles;
             this.configHardwareSkinning = hardwareSkinning;
             this.configPersistDisabledRenderers = persistDisabledRenderers;
             this.configStaticMeshFrameSkip = staticMeshFrameSkip;
@@ -625,6 +640,8 @@ namespace UnityRemix
             cachedSkinnedRenderers.Clear();
             cachedRendererIds.Clear();
             cachedSkinnedRendererIds.Clear();
+            trackedParticleSystems.Clear();
+            trackedParticleSystemIds.Clear();
             lastSkinnedTransforms.Clear();
             cachedStaticInstances.Clear();
             lock (meshQueueLock)
@@ -658,6 +675,8 @@ namespace UnityRemix
             cachedSkinnedRenderers.Clear();
             cachedRendererIds.Clear();
             cachedSkinnedRendererIds.Clear();
+            trackedParticleSystems.Clear();
+            trackedParticleSystemIds.Clear();
             skinnedRoundRobinIndex = 0;
             // Don't clear configuredBufferTargets — the property persists on the component
             
@@ -686,6 +705,25 @@ namespace UnityRemix
                 }
             }
 
+            var allParticles = UnityCompat.FindObjects<ParticleSystemRenderer>(true);
+            for (int i = 0; i < allParticles.Length; i++)
+            {
+                var pr = allParticles[i];
+                if (pr != null && trackedParticleSystemIds.Add(pr.GetInstanceID()))
+                {
+                    var ps = pr.GetComponent<ParticleSystem>();
+                    if (ps != null)
+                    {
+                        trackedParticleSystems.Add(new TrackedParticleSystem
+                        {
+                            renderer = pr,
+                            system = ps,
+                            id = pr.GetInstanceID()
+                        });
+                    }
+                }
+            }
+
             // Ensure all scene Animators continue ticking when cameras have cullingMask = 0
             var allAnimators = UnityEngine.Object.FindObjectsOfType<Animator>();
             for (int i = 0; i < allAnimators.Length; i++)
@@ -697,7 +735,7 @@ namespace UnityRemix
             
             rendererCacheFrame = frameCount;
             
-            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static, {cachedSkinnedRenderers.Count} skinned");
+            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static, {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles");
             
             if (configDebugLogInterval.Value > 0)
             {
@@ -1903,6 +1941,288 @@ namespace UnityRemix
                     boneTransforms = null,
                     skinningData = null
                 });
+            }
+        }
+        
+        /// <summary>
+        /// Capture active particle systems (both pooled and dynamic) using zero-allocation billboard extraction.
+        /// </summary>
+        public void CaptureParticleSystems(FrameState state, int frameCount)
+        {
+            if (configCaptureParticles != null && !configCaptureParticles.Value)
+                return;
+
+            Camera mainCam = cameraHandler?.GetPreferredCamera() ?? Camera.main;
+            if (mainCam == null)
+                return;
+
+            Vector3 camRight = mainCam.transform.right;
+            Vector3 camUp = mainCam.transform.up;
+            Vector3 camForward = mainCam.transform.forward;
+
+            // Periodic sweep for runtime newly instantiated particle systems
+            if (frameCount % 30 == 0)
+            {
+                var activeRenderers = UnityCompat.FindObjects<ParticleSystemRenderer>(false);
+                for (int a = 0; a < activeRenderers.Length; a++)
+                {
+                    var ar = activeRenderers[a];
+                    if (ar != null && trackedParticleSystemIds.Add(ar.GetInstanceID()))
+                    {
+                        var aps = ar.GetComponent<ParticleSystem>();
+                        if (aps != null)
+                        {
+                            trackedParticleSystems.Add(new TrackedParticleSystem
+                            {
+                                renderer = ar,
+                                system = aps,
+                                id = ar.GetInstanceID()
+                            });
+                        }
+                    }
+                }
+            }
+
+            for (int i = 0; i < trackedParticleSystems.Count; i++)
+            {
+                var tracked = trackedParticleSystems[i];
+                var pr = tracked.renderer;
+                var ps = tracked.system;
+
+                if (pr == null || ps == null) continue;
+                if (!pr.enabled || !pr.gameObject.activeInHierarchy) continue;
+
+                int numAlive = ps.particleCount;
+                if (numAlive <= 0) continue;
+
+                // Expand buffer if needed
+                if (_particleBuffer.Length < numAlive)
+                {
+                    _particleBuffer = new ParticleSystem.Particle[Mathf.NextPowerOfTwo(numAlive)];
+                }
+
+                int actualAlive = ps.GetParticles(_particleBuffer);
+                if (actualAlive <= 0) continue;
+
+                Material mat = pr.sharedMaterial;
+                if (mat == null)
+                {
+                    var mats = pr.sharedMaterials;
+                    if (mats != null && mats.Length > 0)
+                        mat = mats[0];
+                }
+                if (mat == null) continue;
+
+                int matId = mat.GetInstanceID();
+                materialManager.CaptureMaterialTextures(mat, matId);
+
+                if (pr.renderMode == ParticleSystemRenderMode.Mesh)
+                {
+                    BakeMeshParticleSystem(pr, matId, state);
+                }
+                else
+                {
+                    int particlesToDraw = Math.Min(actualAlive, 4096);
+                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, matId, mainCam, camRight, camUp, camForward, state);
+                }
+            }
+        }
+
+        private void GenerateBillboardParticleSystem(
+            ParticleSystemRenderer pr,
+            ParticleSystem ps,
+            int numParticlesAlive,
+            int matId,
+            Camera cam,
+            Vector3 camRight,
+            Vector3 camUp,
+            Vector3 camForward,
+            FrameState state)
+        {
+            int vertCount = numParticlesAlive * 4;
+            int triCount = numParticlesAlive * 6;
+
+            Vector3[] verts = new Vector3[vertCount];
+            Vector3[] normals = new Vector3[vertCount];
+            Vector2[] uvs = new Vector2[vertCount];
+            Color32[] colors = new Color32[vertCount];
+            int[] tris = new int[triCount];
+
+            bool isWorldSpace = ps.main.simulationSpace == ParticleSystemSimulationSpace.World;
+            bool isCustomSpace = ps.main.simulationSpace == ParticleSystemSimulationSpace.Custom && ps.main.customSimulationSpace != null;
+            Matrix4x4 sysTransform = isWorldSpace ? Matrix4x4.identity 
+                : (isCustomSpace ? ps.main.customSimulationSpace.localToWorldMatrix : ps.transform.localToWorldMatrix);
+
+            var texModule = ps.textureSheetAnimation;
+            bool useTexSheet = texModule.enabled;
+            int tilesX = useTexSheet ? Math.Max(1, texModule.numTilesX) : 1;
+            int tilesY = useTexSheet ? Math.Max(1, texModule.numTilesY) : 1;
+            float uvWidth = 1f / tilesX;
+            float uvHeight = 1f / tilesY;
+
+            var renderMode = pr.renderMode;
+            bool isHorizontal = renderMode == ParticleSystemRenderMode.HorizontalBillboard;
+            bool isVertical = renderMode == ParticleSystemRenderMode.VerticalBillboard;
+            bool isStretch = renderMode == ParticleSystemRenderMode.Stretch;
+
+            Vector3 defaultNormal = -camForward;
+            if (isHorizontal) defaultNormal = Vector3.up;
+
+            for (int i = 0; i < numParticlesAlive; i++)
+            {
+                var p = _particleBuffer[i];
+                Vector3 pos = isWorldSpace ? p.position : sysTransform.MultiplyPoint3x4(p.position);
+                Vector3 size = ps.main.startSize3D ? p.GetCurrentSize3D(ps) : (Vector3.one * p.GetCurrentSize(ps));
+                Color32 col = p.GetCurrentColor(ps);
+
+                float rot = p.rotation * Mathf.Deg2Rad;
+                float cosR = Mathf.Cos(rot);
+                float sinR = Mathf.Sin(rot);
+
+                Vector3 rAxis, uAxis;
+                if (isHorizontal)
+                {
+                    rAxis = Vector3.right * cosR + Vector3.forward * sinR;
+                    uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
+                }
+                else if (isVertical)
+                {
+                    Vector3 facing = Vector3.ProjectOnPlane(camForward, Vector3.up).normalized;
+                    if (facing.sqrMagnitude < 0.001f) facing = Vector3.forward;
+                    Vector3 side = Vector3.Cross(Vector3.up, facing).normalized;
+                    rAxis = side * cosR + Vector3.up * sinR;
+                    uAxis = -side * sinR + Vector3.up * cosR;
+                }
+                else if (isStretch)
+                {
+                    Vector3 vel = p.velocity;
+                    float speed = vel.magnitude;
+                    if (speed > 0.001f)
+                    {
+                        Vector3 velDir = vel / speed;
+                        Vector3 cross = Vector3.Cross(velDir, camForward).normalized;
+                        if (cross.sqrMagnitude < 0.001f) cross = camRight;
+                        rAxis = cross;
+                        float stretchLen = (size.y + speed * pr.velocityScale) * pr.lengthScale;
+                        uAxis = velDir * (stretchLen / Math.Max(0.0001f, size.y));
+                    }
+                    else
+                    {
+                        rAxis = camRight * cosR + camUp * sinR;
+                        uAxis = -camRight * sinR + camUp * cosR;
+                    }
+                }
+                else
+                {
+                    // Standard Billboard
+                    rAxis = camRight * cosR + camUp * sinR;
+                    uAxis = -camRight * sinR + camUp * cosR;
+                }
+
+                Vector3 hR = rAxis * (size.x * 0.5f);
+                Vector3 hU = uAxis * (size.y * 0.5f);
+
+                int vi = i * 4;
+                verts[vi + 0] = pos - hR - hU;
+                verts[vi + 1] = pos + hR - hU;
+                verts[vi + 2] = pos + hR + hU;
+                verts[vi + 3] = pos - hR + hU;
+
+                normals[vi + 0] = defaultNormal;
+                normals[vi + 1] = defaultNormal;
+                normals[vi + 2] = defaultNormal;
+                normals[vi + 3] = defaultNormal;
+
+                float uvX0 = 0f, uvX1 = 1f, uvY0 = 0f, uvY1 = 1f;
+                if (useTexSheet)
+                {
+                    float progress = p.startLifetime > 0.0001f ? (1f - (p.remainingLifetime / p.startLifetime)) : 0f;
+                    int totalFrames = tilesX * tilesY;
+                    int frameIdx = Mathf.Clamp(Mathf.FloorToInt(progress * totalFrames), 0, totalFrames - 1);
+                    int tx = frameIdx % tilesX;
+                    int ty = tilesY - 1 - (frameIdx / tilesX);
+                    uvX0 = tx * uvWidth;
+                    uvX1 = (tx + 1) * uvWidth;
+                    uvY0 = ty * uvHeight;
+                    uvY1 = (ty + 1) * uvHeight;
+                }
+
+                uvs[vi + 0] = new Vector2(uvX0, uvY0);
+                uvs[vi + 1] = new Vector2(uvX1, uvY0);
+                uvs[vi + 2] = new Vector2(uvX1, uvY1);
+                uvs[vi + 3] = new Vector2(uvX0, uvY1);
+
+                colors[vi + 0] = col;
+                colors[vi + 1] = col;
+                colors[vi + 2] = col;
+                colors[vi + 3] = col;
+
+                int ti = i * 6;
+                tris[ti + 0] = vi + 0;
+                tris[ti + 1] = vi + 2;
+                tris[ti + 2] = vi + 1;
+                tris[ti + 3] = vi + 0;
+                tris[ti + 4] = vi + 3;
+                tris[ti + 5] = vi + 2;
+            }
+
+            ulong remixMeshHash = (ulong)(uint)pr.GetInstanceID() | 0x4000000000000000UL;
+
+            state.skinned.Add(new SkinnedMeshData
+            {
+                meshId = pr.GetInstanceID(),
+                remixMeshHash = remixMeshHash,
+                materialId = matId,
+                vertices = verts,
+                normals = normals,
+                uvs = uvs,
+                colors = colors,
+                triangles = tris,
+                localToWorld = Matrix4x4.identity,
+                boneTransforms = null,
+                skinningData = null
+            });
+        }
+
+        private void BakeMeshParticleSystem(ParticleSystemRenderer pr, int matId, FrameState state)
+        {
+            if (_reusableParticleMesh == null)
+            {
+                _reusableParticleMesh = new Mesh();
+                _reusableParticleMesh.name = "ReusableParticleBakeMesh";
+            }
+
+            try
+            {
+                _reusableParticleMesh.Clear();
+#pragma warning disable CS0618
+                pr.BakeMesh(_reusableParticleMesh, true);
+#pragma warning restore CS0618
+
+                var verts = _reusableParticleMesh.vertices;
+                if (verts != null && verts.Length > 0 && _reusableParticleMesh.triangles.Length > 0)
+                {
+                    ulong remixMeshHash = (ulong)(uint)pr.GetInstanceID() | 0x4000000000000000UL;
+
+                    state.skinned.Add(new SkinnedMeshData
+                    {
+                        meshId = pr.GetInstanceID(),
+                        remixMeshHash = remixMeshHash,
+                        materialId = matId,
+                        vertices = verts,
+                        normals = _reusableParticleMesh.normals,
+                        uvs = _reusableParticleMesh.uv,
+                        colors = _reusableParticleMesh.colors32,
+                        triangles = _reusableParticleMesh.triangles,
+                        localToWorld = Matrix4x4.identity,
+                        boneTransforms = null,
+                        skinningData = null
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"BakeMeshParticleSystem failed on '{pr.name}': {ex.Message}");
             }
         }
         

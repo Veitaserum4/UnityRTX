@@ -300,6 +300,8 @@ namespace UnityRemix
                     matData.albedoColor = material.GetColor("_Color");
                 else if (material.HasProperty("_BaseColor"))
                     matData.albedoColor = material.GetColor("_BaseColor");
+                else if (material.HasProperty("_TintColor"))
+                    matData.albedoColor = material.GetColor("_TintColor");
             }
             
             // Detect alpha mode from shader keywords, _Mode property, and render queue
