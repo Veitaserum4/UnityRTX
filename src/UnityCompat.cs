@@ -1,158 +1,37 @@
-using System;
-using System.Collections.Generic;
-using System.Reflection;
 using UnityEngine;
 
 namespace UnityRemix
 {
     /// <summary>
-    /// Universal engine compatibility helpers across Unity 2018.x - Unity 6+.
+    /// Thin wrappers around Unity APIs that all current targets (Unity 2020+) support directly.
+    /// Previously contained reflection-based fallbacks for Unity 2018/2019 that are no longer needed.
     /// </summary>
     internal static class UnityCompat
     {
-        private static readonly MethodInfo _findObjectsOfTypeWithInactive;
-        private static readonly bool _hasFindObjectsWithInactive;
-
-        static UnityCompat()
-        {
-            try
-            {
-                // FindObjectsOfType(Type, bool) was introduced in Unity 2020.1
-                _findObjectsOfTypeWithInactive = typeof(UnityEngine.Object).GetMethod(
-                    "FindObjectsOfType",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null,
-                    new Type[] { typeof(Type), typeof(bool) },
-                    null);
-
-                _hasFindObjectsWithInactive = _findObjectsOfTypeWithInactive != null;
-            }
-            catch
-            {
-                _hasFindObjectsWithInactive = false;
-            }
-        }
-
         /// <summary>
-        /// Finds all objects of type T. Safely handles includeInactive across all Unity versions:
-        /// - If includeInactive is false: uses standard FindObjectsOfType&lt;T&gt;() (all Unity versions).
-        /// - If includeInactive is true on Unity 2020.1+: uses FindObjectsOfType(Type, bool).
-        /// - If includeInactive is true on pre-2020.1 (Unity 2018/2019): uses Resources.FindObjectsOfTypeAll&lt;T&gt;()
-        ///   filtered to valid, loaded scene objects only (excluding prefabs and assets).
+        /// Finds all objects of type T, optionally including inactive ones.
+        /// Uses FindObjectsOfType&lt;T&gt;(bool) available in Unity 2020.1+.
         /// </summary>
-        public static T[] FindObjects<T>(bool includeInactive = false) where T : UnityEngine.Object
+        public static T[] FindObjects<T>(bool includeInactive = false) where T : Object
         {
-            if (!includeInactive)
-            {
-                return UnityEngine.Object.FindObjectsOfType<T>();
-            }
-
-            if (_hasFindObjectsWithInactive)
-            {
-                try
-                {
-                    var raw = (UnityEngine.Object[])_findObjectsOfTypeWithInactive.Invoke(
-                        null, new object[] { typeof(T), true });
-
-                    if (raw == null || raw.Length == 0)
-                        return Array.Empty<T>();
-
-                    var typed = new T[raw.Length];
-                    for (int i = 0; i < raw.Length; i++)
-                        typed[i] = (T)raw[i];
-
-                    return typed;
-                }
-                catch
-                {
-                    // Fall back to Resources.FindObjectsOfTypeAll
-                }
-            }
-
-            // Fallback for Unity 2018.x - 2019.x
-            var all = Resources.FindObjectsOfTypeAll<T>();
-            if (all == null || all.Length == 0)
-                return Array.Empty<T>();
-
-            bool isComponent = typeof(Component).IsAssignableFrom(typeof(T));
-            bool isGameObject = typeof(GameObject).IsAssignableFrom(typeof(T));
-
-            if (!isComponent && !isGameObject)
-                return all;
-
-            var list = new List<T>(all.Length);
-            for (int i = 0; i < all.Length; i++)
-            {
-                var obj = all[i];
-                if (obj == null) continue;
-
-                if (isComponent)
-                {
-                    var comp = (Component)(object)obj;
-                    try
-                    {
-                        var sc = comp.gameObject.scene;
-                        if (sc.IsValid() && sc.isLoaded)
-                            list.Add(obj);
-                    }
-                    catch { }
-                }
-                else if (isGameObject)
-                {
-                    var go = (GameObject)(object)obj;
-                    try
-                    {
-                        var sc = go.scene;
-                        if (sc.IsValid() && sc.isLoaded)
-                            list.Add(obj);
-                    }
-                    catch { }
-                }
-            }
-
-            return list.ToArray();
+            return Object.FindObjectsOfType<T>(includeInactive);
         }
 
-        private static readonly PropertyInfo _tex2DMipmapProp = typeof(Texture2D).GetProperty("mipmapCount");
-        private static readonly PropertyInfo _texMipmapProp = typeof(Texture).GetProperty("mipmapCount");
-
         /// <summary>
-        /// Returns mipmap count across all Unity versions.
-        /// In Unity 2018, mipmapCount is on Texture2D; in 2019+, it moved up to Texture.
+        /// Returns mipmap count for a texture. Available directly on Texture since Unity 2019.1.
         /// </summary>
         public static int GetMipmapCount(Texture tex)
         {
-            if (tex == null) return 1;
-            try
-            {
-                if (tex is Texture2D t2d && _tex2DMipmapProp != null)
-                    return (int)_tex2DMipmapProp.GetValue(t2d, null);
-                if (_texMipmapProp != null)
-                    return (int)_texMipmapProp.GetValue(tex, null);
-            }
-            catch { }
-            return 1;
+            return tex != null ? tex.mipmapCount : 1;
         }
 
-        private static readonly PropertyInfo _tex2DReadableProp = typeof(Texture2D).GetProperty("isReadable");
-        private static readonly PropertyInfo _texReadableProp = typeof(Texture).GetProperty("isReadable");
-
         /// <summary>
-        /// Returns isReadable for textures across all Unity versions.
-        /// In Unity 2018, isReadable is on Texture2D; in 2019+, it moved up to Texture.
+        /// Returns whether the texture's pixel data is readable on the CPU.
+        /// Available directly on Texture since Unity 2019.1.
         /// </summary>
         public static bool IsReadable(Texture tex)
         {
-            if (tex == null) return false;
-            try
-            {
-                if (tex is Texture2D t2d && _tex2DReadableProp != null)
-                    return (bool)_tex2DReadableProp.GetValue(t2d, null);
-                if (_texReadableProp != null)
-                    return (bool)_texReadableProp.GetValue(tex, null);
-            }
-            catch { }
-            return false;
+            return tex != null && tex.isReadable;
         }
     }
 }
