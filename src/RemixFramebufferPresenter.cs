@@ -164,7 +164,7 @@ namespace UnityRemix
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
 
                     int currentCameraCount = Camera.allCamerasCount;
-                    var allCanvases = UnityCompat.FindObjects<Canvas>(true);
+                    var allCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
                     int currentCanvasCount = allCanvases.Length;
                     int currentActiveCanvasCount = 0;
                     for (int i = 0; i < allCanvases.Length; i++)
@@ -380,7 +380,7 @@ namespace UnityRemix
                 var targetCam = uiDetector.DedicatedUICamera ?? uiDetector.UICameras[0];
                 uiDetector.RouteOverlayCanvasesToCamera(targetCam);
                 uiDetector.RouteVideoPlayersToCamera(targetCam);
-                lastCanvasCount = UnityCompat.FindObjects<Canvas>(true).Length;
+                lastCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>(true).Length;
             }
         }
 

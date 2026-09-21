@@ -778,7 +778,7 @@ namespace UnityRemix
                 byte[] pixelData;
                 byte[] hashSourceData;
                 RemixAPI.remixapi_Format format;
-                uint actualMipLevels = (uint)UnityCompat.GetMipmapCount(unityTexture);
+                uint actualMipLevels = (uint)unityTexture.mipmapCount;
                 
                 // DXT5nm normal maps pack X in alpha and Y in green. Raw DXT5 upload
                 // would pass the packed channels to Remix unchanged, so we must decompress
@@ -787,7 +787,7 @@ namespace UnityRemix
                     (unityTexture.format == TextureFormat.DXT5 || unityTexture.format == TextureFormat.DXT5Crunched);
                 
                 // Readable DXT5nm: decompress on CPU to avoid GPU stall
-                if (isDXT5nm && UnityCompat.IsReadable(unityTexture))
+                if (isDXT5nm && unityTexture.isReadable)
                 {
                     Color32[] pixels = unityTexture.GetPixels32();
                     pixelData = new byte[pixels.Length * 4];
@@ -806,7 +806,7 @@ namespace UnityRemix
                         logger.LogInfo($"Unpacked readable DXT5nm normal map '{unityTexture.name}' ({unityTexture.width}x{unityTexture.height})");
                 }
                 // Handle non-readable textures via GPU readback
-                else if (!UnityCompat.IsReadable(unityTexture))
+                else if (!unityTexture.isReadable)
                 {
                     if (verboseTextureLogging.Value)
                         logger.LogInfo($"Texture '{unityTexture.name}' is not readable - forcing GPU readback");
@@ -1002,7 +1002,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (UnityCompat.IsReadable(tex))
+                if (tex.isReadable)
                 {
                     pixels = tex.GetPixels32();
                 }
@@ -1097,7 +1097,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (UnityCompat.IsReadable(tex))
+                if (tex.isReadable)
                 {
                     pixels = tex.GetPixels32();
                 }
