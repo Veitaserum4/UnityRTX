@@ -716,7 +716,7 @@ namespace UnityRemix
             skinnedRoundRobinIndex = 0;
             // Don't clear configuredBufferTargets — the property persists on the component
             
-            var allStatic = UnityCompat.FindObjects<MeshRenderer>(true);
+            var allStatic = UnityEngine.Object.FindObjectsOfType<MeshRenderer>(true);
             for (int i = 0; i < allStatic.Length; i++)
             {
                 var r = allStatic[i];
@@ -726,7 +726,7 @@ namespace UnityRemix
                 }
             }
 
-            var allSkinned = UnityCompat.FindObjects<SkinnedMeshRenderer>(true);
+            var allSkinned = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>(true);
             for (int i = 0; i < allSkinned.Length; i++)
             {
                 var sr = allSkinned[i];
@@ -741,7 +741,7 @@ namespace UnityRemix
                 }
             }
 
-            var allParticles = UnityCompat.FindObjects<ParticleSystemRenderer>(false);
+            var allParticles = UnityEngine.Object.FindObjectsOfType<ParticleSystemRenderer>(false);
             for (int i = 0; i < allParticles.Length; i++)
             {
                 var pr = allParticles[i];
@@ -2869,7 +2869,7 @@ namespace UnityRemix
             Vector3 camForward = mainCam.transform.forward;
 
             // Check active particle renderers every frame to capture transient particles immediately (bullet impacts, sparks, newly spawned systems)
-            var activeRenderers = UnityCompat.FindObjects<ParticleSystemRenderer>(false);
+            var activeRenderers = UnityEngine.Object.FindObjectsOfType<ParticleSystemRenderer>(false);
             for (int a = 0; a < activeRenderers.Length; a++)
             {
                 var ar = activeRenderers[a];
@@ -3337,7 +3337,7 @@ namespace UnityRemix
             if (mainCam == null || !mainCam.gameObject.activeInHierarchy || !mainCam.enabled || Time.frameCount < 10)
                 return;
 
-            var activeTrails = UnityCompat.FindObjects<TrailRenderer>(false);
+            var activeTrails = UnityEngine.Object.FindObjectsOfType<TrailRenderer>(false);
             if (activeTrails == null || activeTrails.Length == 0)
                 return;
 
