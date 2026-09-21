@@ -1131,8 +1131,11 @@ namespace UnityRemix
                     vertexHandles.Add(sharedVertexHandle);
                 }
 
-                // Build one surface per submesh, each with its own material (skipping non-triangle or empty surfaces)
+                // Build one surface per submesh, each with its own material (skipping non-triangle or empty surfaces).
+                // Track whether any surface with a valid materialId couldn't get a material handle yet —
+                // if so we re-enqueue the whole mesh for retry rather than creating it permanently without textures.
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
+                bool anyMissingMaterial = false;
                 for (int s = 0; s < data.Surfaces.Length; s++)
                 {
                     var surf = data.Surfaces[s];
@@ -1148,7 +1151,14 @@ namespace UnityRemix
 
                     IntPtr materialHandle = IntPtr.Zero;
                     if (surf.MaterialId != 0)
+                    {
                         materialHandle = materialManager.GetOrCreateMaterial(surf.MaterialId);
+                        if (materialHandle == IntPtr.Zero)
+                        {
+                            anyMissingMaterial = true;
+                            break; // Don't build any more surfaces — will retry whole mesh
+                        }
+                    }
 
                     IntPtr vertsPtr;
                     ulong vertsCount;
@@ -1193,8 +1203,21 @@ namespace UnityRemix
                     });
                 }
 
+                // If a material wasn't ready yet, re-enqueue for retry on the next drain cycle.
+                // This prevents permanently caching an untextured mesh handle.
+                if (anyMissingMaterial)
+                {
+                    lock (streamLock)
+                    {
+                        streamingQueue.Enqueue(data);
+                        streamingActive = true;
+                    }
+                    return IntPtr.Zero;
+                }
+
                 if (surfaces.Count == 0)
                     return IntPtr.Zero;
+
 
                 var surfacesArray = surfaces.ToArray();
                 GCHandle surfaceArrayHandle = GCHandle.Alloc(surfacesArray, GCHandleType.Pinned);
