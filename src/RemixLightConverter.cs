@@ -107,7 +107,7 @@ namespace UnityRemix
             for (int i = 0; i < allLights.Length; i++)
             {
                 Light l = allLights[i];
-                if (l == null || !l.enabled || !l.gameObject.activeInHierarchy || l.intensity <= 0.001f || l.range <= 0.001f)
+                if (l == null || !l.enabled || !l.gameObject.activeInHierarchy || l.intensity <= 0.001f || (l.type != LightType.Directional && l.range <= 0.001f))
                     continue;
 
                 Transform t = l.transform;
@@ -296,10 +296,7 @@ namespace UnityRemix
                         break;
                     
                     case LightType.Directional:
-                        if (configDebugLogInterval.Value > 0 && frameCount % configDebugLogInterval.Value == 0)
-                        {
-                            logger.LogInfo($"Directional light '{light.name}' not yet supported");
-                        }
+                        lightHandle = CreateDirectionalLight(ref light, lightInfo);
                         break;
                     
                     default:
@@ -415,6 +412,49 @@ namespace UnityRemix
             }
         }
         
+        private IntPtr CreateDirectionalLight(ref UnityLightData light, RemixAPI.remixapi_LightInfo baseInfo)
+        {
+            var direction = light.forward.normalized;
+            if (direction.sqrMagnitude < 0.0001f)
+                direction = Vector3.forward;
+
+            var distantExt = new RemixAPI.remixapi_LightInfoDistantEXT
+            {
+                sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT,
+                pNext = IntPtr.Zero,
+                // Convert Unity Y-up to Remix Z-up: (x, y, z) -> (x, z, y)
+                direction = new RemixAPI.remixapi_Float3D(direction.x, direction.z, direction.y),
+                angularDiameterDegrees = 0.5f,
+                volumetricRadianceScale = 1.0f
+            };
+
+            GCHandle distantHandle = GCHandle.Alloc(distantExt, GCHandleType.Pinned);
+
+            try
+            {
+                baseInfo.pNext = distantHandle.AddrOfPinnedObject();
+
+                IntPtr handle;
+                RemixAPI.remixapi_ErrorCode result;
+                lock (apiLock)
+                {
+                    result = createLightFunc(ref baseInfo, out handle);
+                }
+
+                if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                {
+                    logger.LogWarning($"Failed to create distant light '{light.name}': {result}");
+                    return IntPtr.Zero;
+                }
+
+                return handle;
+            }
+            finally
+            {
+                distantHandle.Free();
+            }
+        }
+
         /// <summary>
         /// Create a test light for debugging
         /// </summary>
