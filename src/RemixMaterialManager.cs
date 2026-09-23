@@ -1362,6 +1362,9 @@ namespace UnityRemix
             hash *= 1099511628211UL;
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveColor.b);
             hash *= 1099511628211UL;
+            // Incorporate alpha mode so cutout materials never collide with opaque materials
+            hash ^= (ulong)matData.alphaMode;
+            hash *= 1099511628211UL;
             
             // Factor in metallic and roughness so distinct PBR variants have distinct hashes
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.metallic);
@@ -1631,7 +1634,7 @@ namespace UnityRemix
                     albedoConstant_y = matData.albedoColor.g,
                     albedoConstant_z = matData.albedoColor.b,
                     opacityConstant = matData.alphaMode == AlphaMode.Opaque ? 1.0f : matData.albedoColor.a,
-                    roughnessConstant = matData.roughness,
+                    roughnessConstant = (!string.IsNullOrEmpty(matData.materialName) && matData.materialName.IndexOf("blood", StringComparison.OrdinalIgnoreCase) >= 0) ? 0.15f : matData.roughness,
                     metallicConstant = matData.metallic,
                     thinFilmThickness_hasvalue = 0,
                     thinFilmThickness_value = 0.0f,
