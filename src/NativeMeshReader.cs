@@ -187,6 +187,117 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// Reads vertex buffer bytes from GPU memory across any graphics backend.
+        /// First attempts Unity's cross-platform GraphicsBuffer API (works on Vulkan, D3D11, D3D12 for non-readable meshes in Unity 2019.3+, 2020+, Unity 6).
+        /// Falls back to native D3D11 COM staging buffer copy for pre-2019.3 or older Unity runtimes.
+        /// </summary>
+        public static bool ReadVertexBuffer(Mesh mesh, int stream, out byte[] rawVerts)
+        {
+            rawVerts = null;
+            if (mesh == null) return false;
+
+            // Attempt 1: Unity's cross-platform GraphicsBuffer API
+            try
+            {
+                var vb = mesh.GetVertexBuffer(stream);
+                if (vb != null)
+                {
+                    try
+                    {
+                        int byteLength = vb.count * vb.stride;
+                        if (byteLength > 0)
+                        {
+                            rawVerts = new byte[byteLength];
+                            vb.GetData(rawVerts);
+                            return true;
+                        }
+                    }
+                    finally
+                    {
+                        vb.Dispose();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug($"[NativeMeshReader] GetVertexBuffer({stream}) unavailable/failed: {ex.Message}");
+            }
+
+            // Attempt 2: Native D3D11 buffer pointer via COM staging buffer (Unity 2018 / 2019 D3D11 fallback)
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D11)
+            {
+                try
+                {
+                    IntPtr nativeVB = mesh.GetNativeVertexBufferPtr(stream);
+                    if (nativeVB != IntPtr.Zero && ReadBuffer(nativeVB, out rawVerts))
+                        return true;
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogDebug($"[NativeMeshReader] GetNativeVertexBufferPtr fallback: {ex.Message}");
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Reads index buffer bytes from GPU memory across any graphics backend.
+        /// First attempts Unity's cross-platform GraphicsBuffer API (works on Vulkan, D3D11, D3D12 for non-readable meshes in Unity 2019.3+, 2020+, Unity 6).
+        /// Falls back to native D3D11 COM staging buffer copy for pre-2019.3 or older Unity runtimes.
+        /// </summary>
+        public static bool ReadIndexBuffer(Mesh mesh, out byte[] rawIdx)
+        {
+            rawIdx = null;
+            if (mesh == null) return false;
+
+            // Attempt 1: Unity's cross-platform GraphicsBuffer API
+            try
+            {
+                var ib = mesh.GetIndexBuffer();
+                if (ib != null)
+                {
+                    try
+                    {
+                        int byteLength = ib.count * ib.stride;
+                        if (byteLength > 0)
+                        {
+                            rawIdx = new byte[byteLength];
+                            ib.GetData(rawIdx);
+                            return true;
+                        }
+                    }
+                    finally
+                    {
+                        ib.Dispose();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug($"[NativeMeshReader] GetIndexBuffer unavailable/failed: {ex.Message}");
+            }
+
+            // Attempt 2: Native D3D11 buffer pointer via COM staging buffer (Unity 2018 / 2019 D3D11 fallback)
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D11)
+            {
+                try
+                {
+                    IntPtr nativeIB = mesh.GetNativeIndexBufferPtr();
+                    if (nativeIB != IntPtr.Zero && ReadBuffer(nativeIB, out rawIdx))
+                        return true;
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogDebug($"[NativeMeshReader] GetNativeIndexBufferPtr fallback: {ex.Message}");
+                }
+            }
+
+            return false;
+        }
+
+
+        /// <summary>
         /// Query the byte size of a native D3D11 buffer.
         /// </summary>
         public static uint GetBufferSize(IntPtr nativeBuffer)
@@ -269,9 +380,8 @@ namespace UnityRemix
             if (vertexCount == 0 || stride == 0)
                 return false;
 
-            // Read vertex buffer via native pointer
-            IntPtr nativeVB = mesh.GetNativeVertexBufferPtr(0);
-            if (!ReadBuffer(nativeVB, out byte[] rawVerts))
+            // Read vertex buffer via GraphicsBuffer or native D3D11 staging buffer
+            if (!ReadVertexBuffer(mesh, 0, out byte[] rawVerts))
             {
                 logger?.LogWarning($"[NativeMeshReader] Failed to read vertex buffer for '{mesh.name}'");
                 return false;
@@ -315,9 +425,8 @@ namespace UnityRemix
                 }
             }
 
-            // Read index buffer
-            IntPtr nativeIB = mesh.GetNativeIndexBufferPtr();
-            if (!ReadBuffer(nativeIB, out byte[] rawIdx))
+            // Read index buffer via GraphicsBuffer or native D3D11 staging buffer
+            if (!ReadIndexBuffer(mesh, out byte[] rawIdx))
             {
                 logger?.LogWarning($"[NativeMeshReader] Failed to read index buffer for '{mesh.name}'");
                 return false;
@@ -360,7 +469,7 @@ namespace UnityRemix
 
             subMeshIndices = subList.ToArray();
 
-            logger?.LogDebug($"[NativeMeshReader] '{mesh.name}' — {vertexCount} verts, {totalIndices} indices, {mesh.subMeshCount} submeshes (D3D11 readback)");
+            logger?.LogDebug($"[NativeMeshReader] '{mesh.name}' — {vertexCount} verts, {totalIndices} indices, {mesh.subMeshCount} submeshes");
             return positions.Length > 0 && totalIndices > 0;
         }
 
@@ -380,6 +489,34 @@ namespace UnityRemix
                     HalfToFloat(BitConverter.ToUInt16(buf, offset + 2)),
                     HalfToFloat(BitConverter.ToUInt16(buf, offset + 4)));
             }
+            if (fmt == NativeVertexFormat.SNorm8)
+            {
+                return new Vector3(
+                    (sbyte)buf[offset] / 127f,
+                    (sbyte)buf[offset + 1] / 127f,
+                    (sbyte)buf[offset + 2] / 127f);
+            }
+            if (fmt == NativeVertexFormat.UNorm8)
+            {
+                return new Vector3(
+                    buf[offset] / 255f * 2f - 1f,
+                    buf[offset + 1] / 255f * 2f - 1f,
+                    buf[offset + 2] / 255f * 2f - 1f);
+            }
+            if (fmt == NativeVertexFormat.SNorm16)
+            {
+                return new Vector3(
+                    BitConverter.ToInt16(buf, offset) / 32767f,
+                    BitConverter.ToInt16(buf, offset + 2) / 32767f,
+                    BitConverter.ToInt16(buf, offset + 4) / 32767f);
+            }
+            if (fmt == NativeVertexFormat.UNorm16)
+            {
+                return new Vector3(
+                    BitConverter.ToUInt16(buf, offset) / 65535f * 2f - 1f,
+                    BitConverter.ToUInt16(buf, offset + 2) / 65535f * 2f - 1f,
+                    BitConverter.ToUInt16(buf, offset + 4) / 65535f * 2f - 1f);
+            }
             return Vector3.zero;
         }
 
@@ -396,6 +533,30 @@ namespace UnityRemix
                 return new Vector2(
                     HalfToFloat(BitConverter.ToUInt16(buf, offset)),
                     HalfToFloat(BitConverter.ToUInt16(buf, offset + 2)));
+            }
+            if (fmt == NativeVertexFormat.SNorm8)
+            {
+                return new Vector2(
+                    (sbyte)buf[offset] / 127f,
+                    (sbyte)buf[offset + 1] / 127f);
+            }
+            if (fmt == NativeVertexFormat.UNorm8)
+            {
+                return new Vector2(
+                    buf[offset] / 255f,
+                    buf[offset + 1] / 255f);
+            }
+            if (fmt == NativeVertexFormat.SNorm16)
+            {
+                return new Vector2(
+                    BitConverter.ToInt16(buf, offset) / 32767f,
+                    BitConverter.ToInt16(buf, offset + 2) / 32767f);
+            }
+            if (fmt == NativeVertexFormat.UNorm16)
+            {
+                return new Vector2(
+                    BitConverter.ToUInt16(buf, offset) / 65535f,
+                    BitConverter.ToUInt16(buf, offset + 2) / 65535f);
             }
             return Vector2.zero;
         }
@@ -435,7 +596,7 @@ namespace UnityRemix
             uvs = null;
             subMeshIndices = null;
 
-            if (mesh == null || SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
+            if (mesh == null)
                 return false;
 
             int vertexCount = mesh.vertexCount;
@@ -448,7 +609,7 @@ namespace UnityRemix
             bool success = ReadMesh(mesh, in layout,
                 out positions, out normals, out uvs, out subMeshIndices);
 
-            if (success && (normals == null || normals.Length != positions.Length))
+            if (success && (normals == null || normals.Length != positions.Length || (normals.Length > 0 && normals[0].sqrMagnitude < 0.0001f)))
             {
                 normals = ComputeFaceNormals(positions, subMeshIndices);
             }
@@ -493,7 +654,9 @@ namespace UnityRemix
         Float32,
         Float16,
         SNorm8,
-        UNorm8
+        UNorm8,
+        SNorm16,
+        UNorm16
     }
 
     public struct NativeVertexLayout
@@ -708,6 +871,8 @@ namespace UnityRemix
                 case VertexAttributeFormat.Float16: return NativeVertexFormat.Float16;
                 case VertexAttributeFormat.SNorm8:  return NativeVertexFormat.SNorm8;
                 case VertexAttributeFormat.UNorm8:  return NativeVertexFormat.UNorm8;
+                case VertexAttributeFormat.SNorm16: return NativeVertexFormat.SNorm16;
+                case VertexAttributeFormat.UNorm16: return NativeVertexFormat.UNorm16;
                 default: return NativeVertexFormat.Float32;
             }
         }
