@@ -3205,7 +3205,7 @@ namespace UnityRemix
             if (materials == null || materials.Length == 0)
                 return 0;
             
-            string[] textureProps = { "_MainTex", "_BaseMap", "_BaseColorMap", "_AlbedoTex" };
+            string[] textureProps = { "_MainTex", "_BaseMap", "_BaseTexture", "_Texture1", "_Texture", "_BaseColorMap", "_AlbedoTex", "_Albedo", "_Diffuse", "_TopTex" };
             
             foreach (var mat in materials)
             {

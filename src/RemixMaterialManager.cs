@@ -69,7 +69,14 @@ namespace UnityRemix
         
         private static readonly string[] AlbedoTextureProps = new string[]
         {
-            "_MainTex", "_BaseMap", "_Diffuse", "_Texture", "_Albedo", "_ColorMap", "_BaseColorMap"
+            "_MainTex", "_BaseMap", "_BaseTexture", "_Texture1", "_Texture", "_Albedo",
+            "_Diffuse", "_ColorMap", "_BaseColorMap", "_TopTex", "_TextureSample0",
+            "_TextureSample1", "_Texture2", "_Texture3", "_TextureSample2", "_TextureSample3", "_Tex"
+        };
+
+        private static readonly string[] NormalTextureProps = new string[]
+        {
+            "_BumpMap", "_Normal", "_NormalMap", "_DetailNormalMap", "_BumpOutline", "_BumpFace"
         };
 
         // Cache for materials - maps Unity material instance ID to Remix material handle
@@ -129,6 +136,8 @@ namespace UnityRemix
             public Color emissiveColor;    // HDR emission color (can exceed 1.0)
             public float emissiveIntensity;
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
+            public float metallic;         // PBR metallic (0.0 to 1.0)
+            public float roughness;        // PBR roughness (0.04 to 1.0)
         }
         private System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData> materialTextureData = new System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData>();
         private HashSet<string> loggedShaderProperties = new HashSet<string>();
@@ -290,19 +299,75 @@ namespace UnityRemix
                 emissiveHandle = IntPtr.Zero,
                 emissiveTextureHash = 0,
                 emissiveColor = Color.black,
-                emissiveIntensity = 0f
+                emissiveIntensity = 0f,
+                metallic = 0.0f,
+                roughness = 0.7f
             };
             
-            // Get albedo color if not overridden by MPB
+            // Get albedo color if not overridden by MPB (prioritize _BaseColor for URP/ShaderGraph)
             if (!mpbColor.HasValue)
             {
-                if (material.HasProperty("_Color"))
-                    matData.albedoColor = material.GetColor("_Color");
-                else if (material.HasProperty("_BaseColor"))
+                if (material.HasProperty("_BaseColor"))
                     matData.albedoColor = material.GetColor("_BaseColor");
+                else if (material.HasProperty("_Color"))
+                    matData.albedoColor = material.GetColor("_Color");
+                else if (material.HasProperty("_Tint"))
+                    matData.albedoColor = material.GetColor("_Tint");
+                else if (material.HasProperty("_Color1"))
+                    matData.albedoColor = material.GetColor("_Color1");
                 else if (material.HasProperty("_TintColor"))
                     matData.albedoColor = material.GetColor("_TintColor");
             }
+
+            // Extract PBR metallic and roughness
+            float metallic = 0.0f;
+            if (material.HasProperty("_Metallic"))
+                metallic = material.GetFloat("_Metallic");
+            else if (material.HasProperty("_BaseMetallic"))
+                metallic = material.GetFloat("_BaseMetallic");
+            else if (material.HasProperty("_Metalic"))
+                metallic = material.GetFloat("_Metalic");
+
+            float smoothness = 0.5f;
+            bool hasSmoothness = false;
+            if (material.HasProperty("_Smoothness"))
+            {
+                smoothness = material.GetFloat("_Smoothness");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_BaseSmooth"))
+            {
+                smoothness = material.GetFloat("_BaseSmooth");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_Smooth"))
+            {
+                smoothness = material.GetFloat("_Smooth");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_Glossiness"))
+            {
+                smoothness = material.GetFloat("_Glossiness");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_GlossMapScale"))
+            {
+                smoothness = material.GetFloat("_GlossMapScale");
+                hasSmoothness = true;
+            }
+
+            float roughness;
+            if (material.HasProperty("_Roughness"))
+                roughness = material.GetFloat("_Roughness");
+            else if (material.HasProperty("_Rough"))
+                roughness = material.GetFloat("_Rough");
+            else if (hasSmoothness)
+                roughness = 1.0f - Mathf.Clamp01(smoothness);
+            else
+                roughness = 0.7f;
+
+            matData.metallic = Mathf.Clamp01(metallic);
+            matData.roughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
             
             // Detect alpha mode from shader keywords, _Mode property, and render queue
             var (detectedMode, detectionReason) = DetectAlphaModeWithReason(material);
@@ -317,7 +382,7 @@ namespace UnityRemix
                 logger.LogInfo($"[MaterialDiag] '{material.name}' shader='{material.shader?.name}' queue={material.renderQueue} " +
                     $"alphaMode={matData.alphaMode} reason={detectionReason} " +
                     $"color=({matData.albedoColor.r:F3},{matData.albedoColor.g:F3},{matData.albedoColor.b:F3},{matData.albedoColor.a:F3}) " +
-                    $"cutoff={matData.alphaCutoff:F3}");
+                    $"metallic={matData.metallic:F2} roughness={matData.roughness:F2} cutoff={matData.alphaCutoff:F3}");
             
             // Upload albedo texture (or MPB texture override)
             Texture2D albedoTex = mpbMainTex;
@@ -329,11 +394,6 @@ namespace UnityRemix
                 Texture2D tex = mpbMainTex;
                 if (tex != null)
                 {
-                    matchedTexProp = "_MainTex";
-                }
-                else if (material.mainTexture is Texture2D mainT)
-                {
-                    tex = mainT;
                     matchedTexProp = "_MainTex";
                 }
                 else
@@ -352,11 +412,60 @@ namespace UnityRemix
                             }
                         }
                     }
+
+                    // Only query material.mainTexture if _MainTex exists (prevents Unity engine warning spam)
+                    if (tex == null && material.HasProperty("_MainTex") && material.mainTexture is Texture2D mainT)
+                    {
+                        tex = mainT;
+                        matchedTexProp = "_MainTex";
+                    }
+
+                    // Dynamic fallback: inspect all texture property names on the material
+                    if (tex == null)
+                    {
+                        try
+                        {
+                            string[] propNames = material.GetTexturePropertyNames();
+                            if (propNames != null)
+                            {
+                                for (int i = 0; i < propNames.Length; i++)
+                                {
+                                    string p = propNames[i];
+                                    if (string.IsNullOrEmpty(p)) continue;
+                                    string lower = p.ToLowerInvariant();
+                                    if (lower.Contains("bump") || lower.Contains("normal") ||
+                                        lower.Contains("lightmap") || lower.Contains("shadow") ||
+                                        lower.Contains("mask") || lower.Contains("noise") ||
+                                        lower.Contains("emission") || lower.Contains("emissive") ||
+                                        lower.Contains("sparkle") || lower.Contains("wind") ||
+                                        lower.Contains("distortion") || lower.Contains("dissolve"))
+                                    {
+                                        continue;
+                                    }
+                                    var t = material.GetTexture(p) as Texture2D;
+                                    if (t != null)
+                                    {
+                                        tex = t;
+                                        matchedTexProp = p;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }
                 }
 
                 albedoTex = tex;
                 if (tex != null)
                 {
+                    // If a valid diffuse texture exists but captured color is pure black (0,0,0)
+                    // due to an uninitialized/unused property in ShaderGraph, default to white so the texture isn't crushed
+                    if (matData.albedoColor.r == 0f && matData.albedoColor.g == 0f && matData.albedoColor.b == 0f)
+                    {
+                        matData.albedoColor = Color.white;
+                    }
+
                     // Read Unity wrap/filter modes from texture and convert to MDL values
                     matData.wrapModeU = UnityWrapToMdl(tex.wrapModeU);
                     matData.wrapModeV = UnityWrapToMdl(tex.wrapModeV);
@@ -401,7 +510,7 @@ namespace UnityRemix
                 }
             }
             
-            // Capture texture tiling/offset
+            // Capture texture tiling/offset safely without throwing on missing _MainTex
             if (matchedTexProp != null)
             {
                 try
@@ -412,25 +521,36 @@ namespace UnityRemix
                 }
                 catch
                 {
+                    if (material.HasProperty("_MainTex"))
+                    {
+                        try
+                        {
+                            matData.mainTexST = new Vector4(
+                                material.mainTextureScale.x,
+                                material.mainTextureScale.y,
+                                material.mainTextureOffset.x,
+                                material.mainTextureOffset.y);
+                        }
+                        catch { }
+                    }
+                }
+            }
+            else if (material.HasProperty("_MainTex"))
+            {
+                try
+                {
                     matData.mainTexST = new Vector4(
                         material.mainTextureScale.x,
                         material.mainTextureScale.y,
                         material.mainTextureOffset.x,
                         material.mainTextureOffset.y);
                 }
-            }
-            else if (material.HasProperty("_MainTex"))
-            {
-                matData.mainTexST = new Vector4(
-                    material.mainTextureScale.x,
-                    material.mainTextureScale.y,
-                    material.mainTextureOffset.x,
-                    material.mainTextureOffset.y);
+                catch { }
             }
 
             // Fallback: no albedo texture but material has a color — create a 1x1 solid-color texture
             // so Remix renders the surface with the correct color instead of the debug checkerboard.
-            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_TintColor")))
+            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_Tint") || material.HasProperty("_TintColor") || material.HasProperty("_Color1")))
             {
                 matData.albedoHandle = GetOrCreateSolidColorTexture(matData.albedoColor);
                 if (matData.albedoHandle != IntPtr.Zero)
@@ -669,21 +789,29 @@ namespace UnityRemix
             }
             
             // Upload normal map
-            if (captureTextures.Value && material.HasProperty("_BumpMap"))
+            if (captureTextures.Value)
             {
-                var tex = material.GetTexture("_BumpMap") as Texture2D;
-                if (tex != null)
+                for (int p = 0; p < NormalTextureProps.Length; p++)
                 {
-                    matData.normalHandle = UploadUnityTexture(tex, isNormalMap: true);
-                    if (matData.normalHandle != IntPtr.Zero)
+                    string prop = NormalTextureProps[p];
+                    if (material.HasProperty(prop))
                     {
-                        int texId = tex.GetInstanceID();
-                        if (textureHashCache.TryGetValue(texId, out ulong hash))
+                        var tex = material.GetTexture(prop) as Texture2D;
+                        if (tex != null)
                         {
-                            matData.normalTextureHash = hash;
+                            matData.normalHandle = UploadUnityTexture(tex, isNormalMap: true);
+                            if (matData.normalHandle != IntPtr.Zero)
+                            {
+                                int texId = tex.GetInstanceID();
+                                if (textureHashCache.TryGetValue(texId, out ulong hash))
+                                {
+                                    matData.normalTextureHash = hash;
+                                }
+                                if (verboseTextureLogging.Value)
+                                    logger.LogInfo($"Captured normal texture for material '{material.name}' using '{prop}' (hash: 0x{matData.normalTextureHash:X16})");
+                            }
+                            break;
                         }
-                        if (verboseTextureLogging.Value)
-                            logger.LogInfo($"Captured normal texture for material '{material.name}' (hash: 0x{matData.normalTextureHash:X16})");
                     }
                 }
             }
@@ -886,9 +1014,34 @@ namespace UnityRemix
                         case TextureFormat.DXT5:
                             format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_BC3_UNORM;
                             break;
+                        case TextureFormat.BC7:
+                            format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_BC7_UNORM;
+                            break;
+                        case TextureFormat.BC5:
+                            format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_BC5_UNORM;
+                            break;
                         default:
-                            logger.LogWarning($"Unsupported texture format: {unityTexture.format}");
-                            return IntPtr.Zero;
+                            // Fallback to GPU readback to blit any unsupported format into standard RGBA32
+                            if (verboseTextureLogging.Value)
+                                logger.LogInfo($"Format {unityTexture.format} for '{unityTexture.name}' not directly supported, using GPU readback fallback");
+                            
+                            RenderTexture tmpGpu = RenderTexture.GetTemporary(
+                                unityTexture.width, unityTexture.height, 0,
+                                RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+                            RenderTexture prevActive = RenderTexture.active;
+                            Graphics.Blit(unityTexture, tmpGpu);
+                            RenderTexture.active = tmpGpu;
+                            Texture2D convTex = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, true);
+                            convTex.ReadPixels(new Rect(0, 0, tmpGpu.width, tmpGpu.height), 0, 0);
+                            convTex.Apply();
+                            RenderTexture.active = prevActive;
+                            RenderTexture.ReleaseTemporary(tmpGpu);
+                            pixelData = convTex.GetRawTextureData();
+                            hashSourceData = pixelData;
+                            format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM;
+                            actualMipLevels = 1;
+                            UnityEngine.Object.Destroy(convTex);
+                            break;
                     }
                 }
                 
@@ -1210,6 +1363,12 @@ namespace UnityRemix
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveColor.b);
             hash *= 1099511628211UL;
             
+            // Factor in metallic and roughness so distinct PBR variants have distinct hashes
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.metallic);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.roughness);
+            hash *= 1099511628211UL;
+            
             if (hash == 0) hash = 1;
             return hash;
         }
@@ -1471,9 +1630,9 @@ namespace UnityRemix
                     albedoConstant_x = matData.albedoColor.r,
                     albedoConstant_y = matData.albedoColor.g,
                     albedoConstant_z = matData.albedoColor.b,
-                    opacityConstant = matData.albedoColor.a,
-                    roughnessConstant = 0.5f,
-                    metallicConstant = 0.0f,
+                    opacityConstant = matData.alphaMode == AlphaMode.Opaque ? 1.0f : matData.albedoColor.a,
+                    roughnessConstant = matData.roughness,
+                    metallicConstant = matData.metallic,
                     thinFilmThickness_hasvalue = 0,
                     thinFilmThickness_value = 0.0f,
                     alphaIsThinFilmThickness = 0,
