@@ -315,6 +315,16 @@ namespace UnityRemix
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_LightInfoDistantEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public remixapi_Float3D direction;
+            public float angularDiameterDegrees;
+            public float volumetricRadianceScale;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_LightInfoLightShaping
         {
             public remixapi_Float3D direction;
