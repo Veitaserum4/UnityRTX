@@ -3016,9 +3016,16 @@ namespace UnityRemix
                     }
                 }
 
-                if (pr.renderMode == ParticleSystemRenderMode.Mesh)
+                if (pr.renderMode == ParticleSystemRenderMode.None)
+                    continue;
+
+                if (pr.renderMode != ParticleSystemRenderMode.Billboard || pr.alignment != ParticleSystemRenderSpace.View)
                 {
-                    BakeMeshParticleSystem(pr, tintedMatId, state);
+                    if (!BakeMeshParticleSystem(pr, mainCam, tintedMatId, state))
+                    {
+                        int particlesToDraw = Math.Min(actualAlive, 4096);
+                        GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state);
+                    }
                 }
                 else
                 {
@@ -3068,12 +3075,14 @@ namespace UnityRemix
             float uvHeight = 1f / tilesY;
 
             var renderMode = pr.renderMode;
+            var alignment = pr.alignment;
             bool isHorizontal = renderMode == ParticleSystemRenderMode.HorizontalBillboard;
             bool isVertical = renderMode == ParticleSystemRenderMode.VerticalBillboard;
             bool isStretch = renderMode == ParticleSystemRenderMode.Stretch;
 
             Vector3 defaultNormal = -camForward;
-            if (isHorizontal) defaultNormal = Vector3.up;
+            if (isHorizontal || alignment == ParticleSystemRenderSpace.World) defaultNormal = Vector3.up;
+            else if (alignment == ParticleSystemRenderSpace.Local) defaultNormal = pr.transform.forward;
 
             for (int i = 0; i < numParticlesAlive; i++)
             {
@@ -3087,10 +3096,11 @@ namespace UnityRemix
                 float sinR = Mathf.Sin(rot);
 
                 Vector3 hR, hU;
+                Vector3 rAxis, uAxis;
                 if (isHorizontal)
                 {
-                    Vector3 rAxis = Vector3.right * cosR + Vector3.forward * sinR;
-                    Vector3 uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
+                    rAxis = Vector3.right * cosR + Vector3.forward * sinR;
+                    uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
                     hR = rAxis * (size.x * 0.5f);
                     hU = uAxis * (size.y * 0.5f);
                 }
@@ -3099,8 +3109,8 @@ namespace UnityRemix
                     Vector3 facing = Vector3.ProjectOnPlane(camForward, Vector3.up).normalized;
                     if (facing.sqrMagnitude < 0.001f) facing = Vector3.forward;
                     Vector3 side = Vector3.Cross(Vector3.up, facing).normalized;
-                    Vector3 rAxis = side * cosR + Vector3.up * sinR;
-                    Vector3 uAxis = -side * sinR + Vector3.up * cosR;
+                    rAxis = side * cosR + Vector3.up * sinR;
+                    uAxis = -side * sinR + Vector3.up * cosR;
                     hR = rAxis * (size.x * 0.5f);
                     hU = uAxis * (size.y * 0.5f);
                 }
@@ -3116,23 +3126,70 @@ namespace UnityRemix
                         float stretchLen = Mathf.Clamp(size.y * Mathf.Abs(pr.lengthScale) + speed * pr.velocityScale, size.y, 20f);
                         hR = cross * (size.x * 0.5f);
                         hU = velDir * (stretchLen * 0.5f);
+                        rAxis = cross;
+                        uAxis = velDir;
                     }
                     else
                     {
-                        Vector3 rAxis = camRight * cosR + camUp * sinR;
-                        Vector3 uAxis = -camRight * sinR + camUp * cosR;
+                        rAxis = camRight * cosR + camUp * sinR;
+                        uAxis = -camRight * sinR + camUp * cosR;
                         hR = rAxis * (size.x * 0.5f);
                         hU = uAxis * (size.y * 0.5f);
                     }
                 }
-                else
+                else if (alignment == ParticleSystemRenderSpace.Local)
                 {
-                    // Standard Billboard
-                    Vector3 rAxis = camRight * cosR + camUp * sinR;
-                    Vector3 uAxis = -camRight * sinR + camUp * cosR;
+                    // Aligned with the ParticleSystem transform (e.g. jump pads, surface rings)
+                    rAxis = pr.transform.right * cosR + pr.transform.up * sinR;
+                    uAxis = -pr.transform.right * sinR + pr.transform.up * cosR;
                     hR = rAxis * (size.x * 0.5f);
                     hU = uAxis * (size.y * 0.5f);
                 }
+                else if (alignment == ParticleSystemRenderSpace.World)
+                {
+                    // Aligned with world axes (horizontal plane)
+                    rAxis = Vector3.right * cosR + Vector3.forward * sinR;
+                    uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
+                }
+                else if (alignment == ParticleSystemRenderSpace.Facing)
+                {
+                    // Faces camera position directly
+                    Vector3 toCam = (cam.transform.position - pos).normalized;
+                    if (toCam.sqrMagnitude < 0.001f) toCam = -camForward;
+                    Vector3 right = Vector3.Cross(camUp, toCam).normalized;
+                    if (right.sqrMagnitude < 0.001f) right = camRight;
+                    Vector3 up = Vector3.Cross(toCam, right).normalized;
+                    rAxis = right * cosR + up * sinR;
+                    uAxis = -right * sinR + up * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
+                }
+                else if (alignment == ParticleSystemRenderSpace.Velocity)
+                {
+                    Vector3 worldVel = isWorldSpace ? p.velocity : sysTransform.MultiplyVector(p.velocity);
+                    Vector3 velDir = worldVel.normalized;
+                    if (velDir.sqrMagnitude < 0.001f) velDir = pr.transform.forward;
+                    Vector3 side = Vector3.Cross(velDir, camForward).normalized;
+                    if (side.sqrMagnitude < 0.001f) side = Vector3.Cross(velDir, Vector3.up).normalized;
+                    if (side.sqrMagnitude < 0.001f) side = camRight;
+                    rAxis = side * cosR + velDir * sinR;
+                    uAxis = -side * sinR + velDir * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
+                }
+                else
+                {
+                    // Standard View Billboard (faces camera plane)
+                    rAxis = camRight * cosR + camUp * sinR;
+                    uAxis = -camRight * sinR + camUp * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
+                }
+
+                Vector3 norm = Vector3.Cross(uAxis, rAxis).normalized;
+                if (norm.sqrMagnitude < 0.001f) norm = defaultNormal;
 
                 int vi = i * 4;
                 verts[vi + 0] = pos - hR - hU;
@@ -3140,10 +3197,10 @@ namespace UnityRemix
                 verts[vi + 2] = pos + hR + hU;
                 verts[vi + 3] = pos - hR + hU;
 
-                normals[vi + 0] = defaultNormal;
-                normals[vi + 1] = defaultNormal;
-                normals[vi + 2] = defaultNormal;
-                normals[vi + 3] = defaultNormal;
+                normals[vi + 0] = norm;
+                normals[vi + 1] = norm;
+                normals[vi + 2] = norm;
+                normals[vi + 3] = norm;
 
                 float uvX0 = 0f, uvX1 = 1f, uvY0 = 0f, uvY1 = 1f;
                 if (useTexSheet)
@@ -3196,7 +3253,7 @@ namespace UnityRemix
             });
         }
 
-        private void BakeMeshParticleSystem(ParticleSystemRenderer pr, int matId, FrameState state)
+        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, Camera cam, int matId, FrameState state)
         {
             if (_reusableParticleMesh == null)
             {
@@ -3208,7 +3265,14 @@ namespace UnityRemix
             {
                 _reusableParticleMesh.Clear();
 #pragma warning disable CS0618
-                pr.BakeMesh(_reusableParticleMesh, true);
+                if (cam != null)
+                {
+                    pr.BakeMesh(_reusableParticleMesh, cam, true);
+                }
+                else
+                {
+                    pr.BakeMesh(_reusableParticleMesh, true);
+                }
 #pragma warning restore CS0618
 
                 var verts = _reusableParticleMesh.vertices;
@@ -3230,12 +3294,14 @@ namespace UnityRemix
                         boneTransforms = null,
                         skinningData = null
                     });
+                    return true;
                 }
             }
             catch (Exception ex)
             {
                 logger.LogWarning($"BakeMeshParticleSystem failed on '{pr.name}': {ex.Message}");
             }
+            return false;
         }
 
         private void BakeParticleTrails(
