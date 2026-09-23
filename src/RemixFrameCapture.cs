@@ -2118,18 +2118,30 @@ namespace UnityRemix
                 if (pr.renderMode == ParticleSystemRenderMode.None)
                     continue;
 
-                if (pr.renderMode != ParticleSystemRenderMode.Billboard || pr.alignment != ParticleSystemRenderSpace.View)
+                bool isFlatShape = ps.shape.enabled && (
+                    ps.shape.shapeType == ParticleSystemShapeType.Circle || 
+                    ps.shape.shapeType == ParticleSystemShapeType.Donut ||
+                    ps.shape.shapeType == ParticleSystemShapeType.Rectangle
+                );
+                bool isShapeAligned = isFlatShape && ps.shape.alignToDirection;
+                bool isJumpPad = pr.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0 
+                    || (pr.transform.parent != null && pr.transform.parent.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0);
+                bool isJumpPadRing = isJumpPad && (isShapeAligned || isFlatShape || ps.main.startSizeMultiplier >= 1.0f);
+
+                bool isSurfaceAligned = isShapeAligned || isJumpPadRing;
+
+                if (!isSurfaceAligned && (pr.renderMode != ParticleSystemRenderMode.Billboard || pr.alignment != ParticleSystemRenderSpace.View))
                 {
                     if (!BakeMeshParticleSystem(pr, mainCam, tintedMatId, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
-                        GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state);
+                        GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned);
                     }
                 }
                 else
                 {
                     int particlesToDraw = Math.Min(actualAlive, 4096);
-                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state);
+                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned);
                 }
 
                 // Capture trails if enabled on this particle system
@@ -2150,7 +2162,8 @@ namespace UnityRemix
             Vector3 camRight,
             Vector3 camUp,
             Vector3 camForward,
-            FrameState state)
+            FrameState state,
+            bool isSurfaceAligned = false)
         {
             int vertCount = numParticlesAlive * 4;
             int triCount = numParticlesAlive * 6;
@@ -2179,8 +2192,12 @@ namespace UnityRemix
             bool isVertical = renderMode == ParticleSystemRenderMode.VerticalBillboard;
             bool isStretch = renderMode == ParticleSystemRenderMode.Stretch;
 
+            Vector3 upDir = pr.transform.up;
+            if (upDir.sqrMagnitude < 0.001f) upDir = Vector3.up;
+
             Vector3 defaultNormal = -camForward;
-            if (isHorizontal || alignment == ParticleSystemRenderSpace.World) defaultNormal = Vector3.up;
+            if (isSurfaceAligned) defaultNormal = upDir;
+            else if (isHorizontal || alignment == ParticleSystemRenderSpace.World) defaultNormal = Vector3.up;
             else if (alignment == ParticleSystemRenderSpace.Local) defaultNormal = pr.transform.forward;
 
             for (int i = 0; i < numParticlesAlive; i++)
@@ -2196,7 +2213,20 @@ namespace UnityRemix
 
                 Vector3 hR, hU;
                 Vector3 rAxis, uAxis;
-                if (isHorizontal)
+                if (isSurfaceAligned)
+                {
+                    Vector3 rightDir = pr.transform.right;
+                    Vector3 fwdDir = pr.transform.forward;
+                    if (rightDir.sqrMagnitude < 0.001f) rightDir = Vector3.right;
+                    if (fwdDir.sqrMagnitude < 0.001f) fwdDir = Vector3.forward;
+
+                    rAxis = rightDir * cosR + fwdDir * sinR;
+                    uAxis = -rightDir * sinR + fwdDir * cosR;
+                    hR = rAxis * (size.x * 0.5f);
+                    hU = uAxis * (size.y * 0.5f);
+                    pos += upDir * 0.02f;
+                }
+                else if (isHorizontal)
                 {
                     rAxis = Vector3.right * cosR + Vector3.forward * sinR;
                     uAxis = -Vector3.right * sinR + Vector3.forward * cosR;
@@ -2287,7 +2317,7 @@ namespace UnityRemix
                     hU = uAxis * (size.y * 0.5f);
                 }
 
-                Vector3 norm = Vector3.Cross(uAxis, rAxis).normalized;
+                Vector3 norm = isSurfaceAligned ? upDir : Vector3.Cross(uAxis, rAxis).normalized;
                 if (norm.sqrMagnitude < 0.001f) norm = defaultNormal;
 
                 int vi = i * 4;
