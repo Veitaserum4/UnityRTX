@@ -252,7 +252,62 @@ namespace UnityRemix
                 logger.LogError($"Failed to register texture to category: {result}");
             }
         }
-        
+
+        /// <summary>
+        /// Check if a color has perceptible chromatic saturation (distinguishing tinted colors from neutral white/grey/black).
+        /// </summary>
+        private static bool IsSaturatedColor(Color c)
+        {
+            float max = Mathf.Max(c.r, Mathf.Max(c.g, c.b));
+            if (max < 0.01f) return false;
+            float min = Mathf.Min(c.r, Mathf.Min(c.g, c.b));
+            return ((max - min) / max) > 0.08f;
+        }
+
+        /// <summary>
+        /// Intelligently resolve the intended albedo/tint color of a material.
+        /// Prioritizes chromatic (saturated) colors over default neutral white/grey fallbacks,
+        /// and aligns candidate property order with the matched texture channel (_Color1 for _Texture1, _Tint for base textures, etc.).
+        /// </summary>
+        private static Color ResolveMaterialAlbedoColor(Material material, string matchedTexProp)
+        {
+            string[] candidates;
+            if (matchedTexProp == "_Texture1" || matchedTexProp == "_TextureSample1")
+                candidates = new string[] { "_Color1", "_BaseColor", "_Tint", "_Color", "_TintColor" };
+            else if (matchedTexProp == "_Texture2" || matchedTexProp == "_TextureSample2")
+                candidates = new string[] { "_Color2", "_Color1", "_BaseColor", "_Tint", "_Color" };
+            else if (matchedTexProp == "_Texture3" || matchedTexProp == "_TextureSample3")
+                candidates = new string[] { "_Color3", "_Color1", "_BaseColor", "_Tint", "_Color" };
+            else
+                candidates = new string[] { "_Tint", "_BaseColor", "_Color", "_Color1", "_TintColor" };
+
+            // Pass 1: find first saturated / non-neutral color
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                string p = candidates[i];
+                if (material.HasProperty(p))
+                {
+                    Color c = material.GetColor(p);
+                    if (IsSaturatedColor(c))
+                        return c;
+                }
+            }
+
+            // Pass 2: fallback to first non-black candidate property
+            for (int i = 0; i < candidates.Length; i++)
+            {
+                string p = candidates[i];
+                if (material.HasProperty(p))
+                {
+                    Color c = material.GetColor(p);
+                    if (c.r > 0.01f || c.g > 0.01f || c.b > 0.01f)
+                        return c;
+                }
+            }
+
+            return Color.white;
+        }
+
         /// <summary>
         /// Capture textures from a Unity material, with optional per-renderer property overrides
         /// </summary>
@@ -304,94 +359,14 @@ namespace UnityRemix
                 roughness = 0.7f
             };
             
-            // Get albedo color if not overridden by MPB (prioritize _BaseColor for URP/ShaderGraph)
-            if (!mpbColor.HasValue)
-            {
-                if (material.HasProperty("_BaseColor"))
-                    matData.albedoColor = material.GetColor("_BaseColor");
-                else if (material.HasProperty("_Color"))
-                    matData.albedoColor = material.GetColor("_Color");
-                else if (material.HasProperty("_Tint"))
-                    matData.albedoColor = material.GetColor("_Tint");
-                else if (material.HasProperty("_Color1"))
-                    matData.albedoColor = material.GetColor("_Color1");
-                else if (material.HasProperty("_TintColor"))
-                    matData.albedoColor = material.GetColor("_TintColor");
-            }
-
-            // Extract PBR metallic and roughness
-            float metallic = 0.0f;
-            if (material.HasProperty("_Metallic"))
-                metallic = material.GetFloat("_Metallic");
-            else if (material.HasProperty("_BaseMetallic"))
-                metallic = material.GetFloat("_BaseMetallic");
-            else if (material.HasProperty("_Metalic"))
-                metallic = material.GetFloat("_Metalic");
-
-            float smoothness = 0.5f;
-            bool hasSmoothness = false;
-            if (material.HasProperty("_Smoothness"))
-            {
-                smoothness = material.GetFloat("_Smoothness");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_BaseSmooth"))
-            {
-                smoothness = material.GetFloat("_BaseSmooth");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_Smooth"))
-            {
-                smoothness = material.GetFloat("_Smooth");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_Glossiness"))
-            {
-                smoothness = material.GetFloat("_Glossiness");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_GlossMapScale"))
-            {
-                smoothness = material.GetFloat("_GlossMapScale");
-                hasSmoothness = true;
-            }
-
-            float roughness;
-            if (material.HasProperty("_Roughness"))
-                roughness = material.GetFloat("_Roughness");
-            else if (material.HasProperty("_Rough"))
-                roughness = material.GetFloat("_Rough");
-            else if (hasSmoothness)
-                roughness = 1.0f - Mathf.Clamp01(smoothness);
-            else
-                roughness = 0.7f;
-
-            matData.metallic = Mathf.Clamp01(metallic);
-            matData.roughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
-            
-            // Detect alpha mode from shader keywords, _Mode property, and render queue
-            var (detectedMode, detectionReason) = DetectAlphaModeWithReason(material);
-            matData.alphaMode = detectedMode;
-            if (material.HasProperty("_Cutoff"))
-            {
-                matData.alphaCutoff = material.GetFloat("_Cutoff");
-            }
-            
-            // Detailed diagnostic log for every material
-            if (verboseTextureLogging.Value)
-                logger.LogInfo($"[MaterialDiag] '{material.name}' shader='{material.shader?.name}' queue={material.renderQueue} " +
-                    $"alphaMode={matData.alphaMode} reason={detectionReason} " +
-                    $"color=({matData.albedoColor.r:F3},{matData.albedoColor.g:F3},{matData.albedoColor.b:F3},{matData.albedoColor.a:F3}) " +
-                    $"metallic={matData.metallic:F2} roughness={matData.roughness:F2} cutoff={matData.alphaCutoff:F3}");
-            
-            // Upload albedo texture (or MPB texture override)
+            // Match albedo texture first so color resolution can be aligned to the matched texture channel
             Texture2D albedoTex = mpbMainTex;
+            Texture2D tex = mpbMainTex;
             string shaderName = material.shader != null ? material.shader.name : "null";
             string matchedTexProp = null;
 
             if (captureTextures.Value)
             {
-                Texture2D tex = mpbMainTex;
                 if (tex != null)
                 {
                     matchedTexProp = "_MainTex";
@@ -455,57 +430,152 @@ namespace UnityRemix
                         catch { }
                     }
                 }
+            }
 
-                albedoTex = tex;
-                if (tex != null)
+            // Get albedo color if not overridden by MPB (smart priority aligned with matched texture)
+            if (!mpbColor.HasValue)
+            {
+                matData.albedoColor = ResolveMaterialAlbedoColor(material, matchedTexProp);
+            }
+
+            // Extract PBR metallic: prioritize _BaseMetallic if > 0 (designer value in stylized shaders like PEAK)
+            float metallic = 0.0f;
+            if (material.HasProperty("_BaseMetallic") && material.GetFloat("_BaseMetallic") > 0f)
+                metallic = material.GetFloat("_BaseMetallic");
+            else if (material.HasProperty("_Metallic"))
+                metallic = material.GetFloat("_Metallic");
+            else if (material.HasProperty("_BaseMetallic"))
+                metallic = material.GetFloat("_BaseMetallic");
+            else if (material.HasProperty("_Metalic"))
+                metallic = material.GetFloat("_Metalic");
+
+            float smoothness = 0.5f;
+            bool hasSmoothness = false;
+            if (material.HasProperty("_BaseSmooth"))
+            {
+                smoothness = material.GetFloat("_BaseSmooth");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_Smoothness"))
+            {
+                smoothness = material.GetFloat("_Smoothness");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_Smooth"))
+            {
+                smoothness = material.GetFloat("_Smooth");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_Glossiness"))
+            {
+                smoothness = material.GetFloat("_Glossiness");
+                hasSmoothness = true;
+            }
+            else if (material.HasProperty("_GlossMapScale"))
+            {
+                smoothness = material.GetFloat("_GlossMapScale");
+                hasSmoothness = true;
+            }
+
+            float roughness;
+            if (material.HasProperty("_Roughness"))
+                roughness = material.GetFloat("_Roughness");
+            else if (material.HasProperty("_Rough"))
+                roughness = material.GetFloat("_Rough");
+            else if (hasSmoothness)
+                roughness = 1.0f - Mathf.Clamp01(smoothness);
+            else
+                roughness = 0.7f;
+
+            matData.metallic = Mathf.Clamp01(metallic);
+            matData.roughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
+            
+            // Detect alpha mode from shader keywords, _Mode property, and render queue
+            var (detectedMode, detectionReason) = DetectAlphaModeWithReason(material);
+            matData.alphaMode = detectedMode;
+            if (material.HasProperty("_Cutoff"))
+            {
+                matData.alphaCutoff = material.GetFloat("_Cutoff");
+            }
+            
+            // Detailed diagnostic log for every material
+            if (verboseTextureLogging.Value)
+                logger.LogInfo($"[MaterialDiag] '{material.name}' shader='{material.shader?.name}' queue={material.renderQueue} " +
+                    $"alphaMode={matData.alphaMode} reason={detectionReason} " +
+                    $"color=({matData.albedoColor.r:F3},{matData.albedoColor.g:F3},{matData.albedoColor.b:F3},{matData.albedoColor.a:F3}) " +
+                    $"metallic={matData.metallic:F2} roughness={matData.roughness:F2} cutoff={matData.alphaCutoff:F3}");
+
+            // Upload albedo texture (with pre-tinting and remapping)
+            albedoTex = tex;
+            if (captureTextures.Value && tex != null)
+            {
+                // If a valid diffuse texture exists but captured color is pure black (0,0,0)
+                // due to an uninitialized/unused property in ShaderGraph, default to white so the texture isn't crushed
+                if (matData.albedoColor.r == 0f && matData.albedoColor.g == 0f && matData.albedoColor.b == 0f)
                 {
-                    // If a valid diffuse texture exists but captured color is pure black (0,0,0)
-                    // due to an uninitialized/unused property in ShaderGraph, default to white so the texture isn't crushed
-                    if (matData.albedoColor.r == 0f && matData.albedoColor.g == 0f && matData.albedoColor.b == 0f)
-                    {
-                        matData.albedoColor = Color.white;
-                    }
+                    matData.albedoColor = Color.white;
+                }
 
-                    // Read Unity wrap/filter modes from texture and convert to MDL values
-                    matData.wrapModeU = UnityWrapToMdl(tex.wrapModeU);
-                    matData.wrapModeV = UnityWrapToMdl(tex.wrapModeV);
-                    matData.filterMode = (byte)(tex.filterMode == FilterMode.Point ? 0 : 1);
-                    
-                    int texId = tex.GetInstanceID();
-                    if (mpbColor.HasValue && mpbColor.Value != Color.white)
-                    {
-                        var (tintedHandle, tintedHash) = UploadTintedEmissiveTexture(tex, mpbColor.Value);
-                        matData.albedoHandle = tintedHandle;
-                        matData.albedoTextureHash = tintedHash;
-                    }
-                    else
-                    {
-                        matData.albedoHandle = UploadUnityTexture(tex);
-                        if (matData.albedoHandle != IntPtr.Zero)
-                        {
-                            if (textureHashCache.TryGetValue(texId, out ulong hash))
-                            {
-                                matData.albedoTextureHash = hash;
-                            }
-                        }
-                    }
-                    
+                // Read Unity wrap/filter modes from texture and convert to MDL values
+                matData.wrapModeU = UnityWrapToMdl(tex.wrapModeU);
+                matData.wrapModeV = UnityWrapToMdl(tex.wrapModeV);
+                matData.filterMode = (byte)(tex.filterMode == FilterMode.Point ? 0 : 1);
+                
+                int texId = tex.GetInstanceID();
+
+                // Check for stylized texture value remapping curves (_Remap1, _Remap2, _Remap3)
+                Vector2? remap = null;
+                if (matchedTexProp == "_Texture1" && material.HasProperty("_Remap1"))
+                {
+                    Vector4 r = material.GetVector("_Remap1");
+                    if (r.y > r.x && (r.x > 0.01f || r.y < 0.99f)) remap = new Vector2(r.x, r.y);
+                }
+                else if (matchedTexProp == "_Texture2" && material.HasProperty("_Remap2"))
+                {
+                    Vector4 r = material.GetVector("_Remap2");
+                    if (r.y > r.x && (r.x > 0.01f || r.y < 0.99f)) remap = new Vector2(r.x, r.y);
+                }
+                else if (matchedTexProp == "_Texture3" && material.HasProperty("_Remap3"))
+                {
+                    Vector4 r = material.GetVector("_Remap3");
+                    if (r.y > r.x && (r.x > 0.01f || r.y < 0.99f)) remap = new Vector2(r.x, r.y);
+                }
+
+                Color effectiveTint = mpbColor ?? matData.albedoColor;
+                bool isTinted = effectiveTint.r < 0.98f || effectiveTint.g < 0.98f || effectiveTint.b < 0.98f;
+                if (isTinted || remap.HasValue)
+                {
+                    var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap);
+                    matData.albedoHandle = tintedHandle;
+                    matData.albedoTextureHash = tintedHash;
+                }
+                else
+                {
+                    matData.albedoHandle = UploadUnityTexture(tex);
                     if (matData.albedoHandle != IntPtr.Zero)
                     {
-                        // Fallback: if shader metadata says Opaque but the texture has genuine cutout
-                        // transparency (large near-zero alpha regions), upgrade to Cutout.
-                        // Uses texturesWithCutoutAlpha (strict: >=10% pixels at alpha<16) instead of
-                        // texturesWithAlpha (loose: any pixel<250) to avoid false positives from
-                        // smoothness-as-alpha in Standard shader Opaque mode.
-                        if (matData.alphaMode == AlphaMode.Opaque && texturesWithCutoutAlpha.Contains(texId)
-                            && (shaderName == null || shaderName.IndexOf("Opaque", StringComparison.OrdinalIgnoreCase) < 0))
+                        if (textureHashCache.TryGetValue(texId, out ulong hash))
                         {
-                            matData.alphaMode = AlphaMode.Cutout;
-                            if (!material.HasProperty("_Cutoff"))
-                                matData.alphaCutoff = 0.5f;
-                            if (verboseTextureLogging.Value)
-                                logger.LogInfo($"[AlphaFallback] '{material.name}': texture has alpha content, upgrading Opaque -> Cutout (cutoff={matData.alphaCutoff:F2})");
+                            matData.albedoTextureHash = hash;
                         }
+                    }
+                }
+                
+                if (matData.albedoHandle != IntPtr.Zero)
+                {
+                    // Fallback: if shader metadata says Opaque but the texture has genuine cutout
+                    // transparency (large near-zero alpha regions), upgrade to Cutout.
+                    // Uses texturesWithCutoutAlpha (strict: >=10% pixels at alpha<16) instead of
+                    // texturesWithAlpha (loose: any pixel<250) to avoid false positives from
+                    // smoothness-as-alpha in Standard shader Opaque mode.
+                    if (matData.alphaMode == AlphaMode.Opaque && texturesWithCutoutAlpha.Contains(texId)
+                        && (shaderName == null || shaderName.IndexOf("Opaque", StringComparison.OrdinalIgnoreCase) < 0))
+                    {
+                        matData.alphaMode = AlphaMode.Cutout;
+                        if (!material.HasProperty("_Cutoff"))
+                            matData.alphaCutoff = 0.5f;
+                        if (verboseTextureLogging.Value)
+                            logger.LogInfo($"[AlphaFallback] '{material.name}': texture has alpha content, upgrading Opaque -> Cutout (cutoff={matData.alphaCutoff:F2})");
                     }
                 }
             }
@@ -796,13 +866,13 @@ namespace UnityRemix
                     string prop = NormalTextureProps[p];
                     if (material.HasProperty(prop))
                     {
-                        var tex = material.GetTexture(prop) as Texture2D;
-                        if (tex != null)
+                        var normTex = material.GetTexture(prop) as Texture2D;
+                        if (normTex != null)
                         {
-                            matData.normalHandle = UploadUnityTexture(tex, isNormalMap: true);
+                            matData.normalHandle = UploadUnityTexture(normTex, isNormalMap: true);
                             if (matData.normalHandle != IntPtr.Zero)
                             {
-                                int texId = tex.GetInstanceID();
+                                int texId = normTex.GetInstanceID();
                                 if (textureHashCache.TryGetValue(texId, out ulong hash))
                                 {
                                     matData.normalTextureHash = hash;
@@ -1220,6 +1290,142 @@ namespace UnityRemix
                 return (IntPtr.Zero, 0);
             }
         }
+
+        /// <summary>
+        /// Upload an albedo texture pre-tinted by the material color and optionally remapped.
+        /// RTX Remix's shader ignores albedoConstant when a texture is present,
+        /// so we bake the color multiplication (and greyscale remapping) into the texture pixels.
+        /// Returns (handle, hash) for the uploaded texture.
+        /// </summary>
+        private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap)
+        {
+            if (tex == null || createTextureFunc == null)
+                return (IntPtr.Zero, 0);
+
+            // If color is white and no remap, fast path to standard upload
+            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue)
+            {
+                var handle = UploadUnityTexture(tex);
+                int texId = tex.GetInstanceID();
+                textureHashCache.TryGetValue(texId, out ulong h);
+                return (handle, h);
+            }
+
+            // Convert linear color to gamma if running in Linear color space so multiplying with sRGB pixel bytes is correct
+            Color gammaColor = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? albedoColor.gamma : albedoColor;
+            float tintR = Mathf.Clamp01(gammaColor.r);
+            float tintG = Mathf.Clamp01(gammaColor.g);
+            float tintB = Mathf.Clamp01(gammaColor.b);
+
+            int tintKey = ((int)(tintR * 255f) << 16) | ((int)(tintG * 255f) << 8) | (int)(tintB * 255f);
+            int remapKey = remap.HasValue ? (((int)(remap.Value.x * 100f) << 8) | (int)(remap.Value.y * 100f)) : 0;
+            long cacheKey = unchecked((long)0x4100000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)remapKey << 20) ^ (uint)tintKey);
+
+            lock (pendingTextureLock)
+            {
+                if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
+                    return cached;
+                if (pendingTintedKeys.Contains(cacheKey))
+                    return (IntPtr.Zero, 0);
+            }
+
+            try
+            {
+                Color32[] pixels;
+                if (tex.isReadable)
+                {
+                    pixels = tex.GetPixels32();
+                }
+                else
+                {
+                    RenderTexture tmp = RenderTexture.GetTemporary(
+                        tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                    RenderTexture prev = RenderTexture.active;
+                    Graphics.Blit(tex, tmp);
+                    RenderTexture.active = tmp;
+                    Texture2D readable = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, false);
+                    readable.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
+                    readable.Apply();
+                    RenderTexture.active = prev;
+                    RenderTexture.ReleaseTemporary(tmp);
+                    pixels = readable.GetPixels32();
+                    UnityEngine.Object.Destroy(readable);
+                }
+
+                byte tR = (byte)(tintR * 255f);
+                byte tG = (byte)(tintG * 255f);
+                byte tB = (byte)(tintB * 255f);
+
+                byte[] pixelData = new byte[pixels.Length * 4];
+                if (remap.HasValue)
+                {
+                    float rMin = remap.Value.x;
+                    float rMax = remap.Value.y;
+                    for (int i = 0; i < pixels.Length; i++)
+                    {
+                        float normR = pixels[i].r / 255f;
+                        float normG = pixels[i].g / 255f;
+                        float normB = pixels[i].b / 255f;
+
+                        byte remappedR = (byte)(Mathf.Clamp01(Mathf.Lerp(rMin, rMax, normR)) * 255f);
+                        byte remappedG = (byte)(Mathf.Clamp01(Mathf.Lerp(rMin, rMax, normG)) * 255f);
+                        byte remappedB = (byte)(Mathf.Clamp01(Mathf.Lerp(rMin, rMax, normB)) * 255f);
+
+                        pixelData[i * 4 + 0] = (byte)((remappedR * tR) / 255);
+                        pixelData[i * 4 + 1] = (byte)((remappedG * tG) / 255);
+                        pixelData[i * 4 + 2] = (byte)((remappedB * tB) / 255);
+                        pixelData[i * 4 + 3] = pixels[i].a;
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < pixels.Length; i++)
+                    {
+                        pixelData[i * 4 + 0] = (byte)((pixels[i].r * tR) / 255);
+                        pixelData[i * 4 + 1] = (byte)((pixels[i].g * tG) / 255);
+                        pixelData[i * 4 + 2] = (byte)((pixels[i].b * tB) / 255);
+                        pixelData[i * 4 + 3] = pixels[i].a;
+                    }
+                }
+
+                // Check alpha channel for cutout transparency
+                bool hasCutoutAlpha = SampleCutoutAlphaRGBA(pixelData, alphaOffset: 3, stride: 4);
+                if (hasCutoutAlpha)
+                {
+                    texturesWithCutoutAlpha.Add(tex.GetInstanceID());
+                }
+
+                ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);
+                if (hash == 0) hash = 1;
+
+                if (verboseTextureLogging.Value)
+                    logger.LogInfo($"Computed tinted albedo hash for '{tex.name}' tint=({tintR:F2},{tintG:F2},{tintB:F2}) remap={(remap.HasValue ? remap.Value.ToString() : "none")}: 0x{hash:X16}");
+
+                lock (pendingTextureLock)
+                {
+                    pendingTextureUploads.Enqueue(new PendingTextureUpload
+                    {
+                        texId = -1,
+                        tintedCacheKey = cacheKey,
+                        pixelData = pixelData,
+                        hash = hash,
+                        width = (uint)tex.width,
+                        height = (uint)tex.height,
+                        mipLevels = 1,
+                        format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                    });
+                    pendingTintedKeys.Add(cacheKey);
+                }
+
+                return (new IntPtr((long)hash), hash);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Exception uploading tinted albedo '{tex.name}': {ex.Message}");
+                return (IntPtr.Zero, 0);
+            }
+        }
+
         
         /// <summary>
         /// Upload an SDF atlas as an emissive texture by converting alpha → tinted RGB.
