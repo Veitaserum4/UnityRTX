@@ -760,7 +760,13 @@ namespace UnityRemix
                     continue;
                 }
 
-                if (filter.gameObject.scene != scene)
+                if (!filter.gameObject.scene.IsValid() || !filter.gameObject.scene.isLoaded)
+                {
+                    skippedWrongScene++;
+                    continue;
+                }
+
+                if (filter.gameObject.scene != scene && filter.gameObject.scene.name != "DontDestroyOnLoad")
                 {
                     skippedWrongScene++;
                     continue;
@@ -854,9 +860,9 @@ namespace UnityRemix
                         colors = mesh.colors32;
                         if (colors != null && colors.Length == 0) colors = null;
                     }
-                    else if (mesh.vertexCount > 0 && SystemInfo.graphicsDeviceType == GraphicsDeviceType.Direct3D11)
+                    else if (mesh.vertexCount > 0)
                     {
-                        // GPU readback path: vertex data is GPU-only (D3D11)
+                        // GPU readback path: vertex data is GPU-only
                         try
                         {
                             if (ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out subMeshIndices))

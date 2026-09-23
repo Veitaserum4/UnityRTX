@@ -290,10 +290,13 @@ namespace UnityRemix
                 cameraHandler.ListAvailableCameras();
             }
             
-            // Invalidate caches
-            frameCapture?.InvalidateCaches();
-            lightConverter?.ClearCache();
-            sceneMeshScanner?.ClearData();
+            // Invalidate caches on single scene load (preserve existing data on additive load)
+            if (mode == UnityEngine.SceneManagement.LoadSceneMode.Single)
+            {
+                frameCapture?.InvalidateCaches();
+                lightConverter?.ClearCache();
+                sceneMeshScanner?.ClearData();
+            }
             
             // Trigger scene scan
             if (configEnableSceneScan.Value)
