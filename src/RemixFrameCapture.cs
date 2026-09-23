@@ -2952,7 +2952,11 @@ namespace UnityRemix
                     {
                         pCol = (Color)c;
                         foundAliveColor = true;
-                        break;
+                        // If this particle has chromatic color (not just grayscale/faded white), prefer it
+                        if (Mathf.Abs(c.r - c.g) > 20 || Mathf.Abs(c.g - c.b) > 20)
+                        {
+                            break;
+                        }
                     }
                 }
                 if (!foundAliveColor)
@@ -3036,13 +3040,13 @@ namespace UnityRemix
                     if (!BakeMeshParticleSystem(pr, mainCam, tintedMatId, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
-                        GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned);
+                        GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned, isJumpPadRing);
                     }
                 }
                 else
                 {
                     int particlesToDraw = Math.Min(actualAlive, 4096);
-                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned);
+                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned, isJumpPadRing);
                 }
 
                 // Capture trails if enabled on this particle system
@@ -3064,7 +3068,8 @@ namespace UnityRemix
             Vector3 camUp,
             Vector3 camForward,
             FrameState state,
-            bool isSurfaceAligned = false)
+            bool isSurfaceAligned = false,
+            bool isJumpPadRing = false)
         {
             int vertCount = numParticlesAlive * 4;
             int triCount = numParticlesAlive * 6;
@@ -3123,8 +3128,30 @@ namespace UnityRemix
 
                     rAxis = rightDir * cosR + fwdDir * sinR;
                     uAxis = -rightDir * sinR + fwdDir * cosR;
-                    hR = rAxis * (size.x * 0.5f);
-                    hU = uAxis * (size.y * 0.5f);
+
+                    Vector3 finalSize = size;
+                    if (isJumpPadRing)
+                    {
+                        // In native ULTRAKILL, JumpPad particle has startSize=10.0 but is clamped by maxParticleSize (0.5).
+                        // Scale it by 0.25 to match the physical jump pad pad bounds (~2.5m - 3.0m).
+                        float padScale = Mathf.Max(pr.transform.lossyScale.x, pr.transform.lossyScale.z);
+                        if (padScale < 0.01f) padScale = 1.0f;
+                        finalSize = size * (0.25f * padScale);
+                    }
+                    else if (pr.maxParticleSize > 0.001f && pr.maxParticleSize < 2.0f && cam != null)
+                    {
+                        float dist = Vector3.Distance(cam.transform.position, pos);
+                        float tanHalfFov = Mathf.Tan(cam.fieldOfView * 0.5f * Mathf.Deg2Rad);
+                        float maxWorldSize = pr.maxParticleSize * (2.0f * dist * tanHalfFov);
+                        if (maxWorldSize > 0.05f)
+                        {
+                            finalSize.x = Mathf.Min(finalSize.x, maxWorldSize);
+                            finalSize.y = Mathf.Min(finalSize.y, maxWorldSize);
+                        }
+                    }
+
+                    hR = rAxis * (finalSize.x * 0.5f);
+                    hU = uAxis * (finalSize.y * 0.5f);
                     pos += upDir * 0.02f;
                 }
                 else if (isHorizontal)
