@@ -29,6 +29,7 @@ namespace UnityRemix
         private readonly ConfigEntry<bool> configCaptureStaticMeshes;
         private readonly ConfigEntry<bool> configCaptureSkinnedMeshes;
         private readonly ConfigEntry<bool> configCaptureParticles;
+        private readonly ConfigEntry<float> configParticleMaxDistance;
         private readonly ConfigEntry<bool> configHardwareSkinning;
         private readonly ConfigEntry<bool> configPersistDisabledRenderers;
         private readonly ConfigEntry<int> configStaticMeshFrameSkip;
@@ -629,7 +630,8 @@ namespace UnityRemix
             ConfigEntry<bool> hardwareSkinning,
             ConfigEntry<bool> persistDisabledRenderers,
             ConfigEntry<int> staticMeshFrameSkip = null,
-            ConfigEntry<bool> captureParticles = null)
+            ConfigEntry<bool> captureParticles = null,
+            ConfigEntry<float> particleMaxDistance = null)
         {
             this.logger = logger;
             this.cameraHandler = cameraHandler;
@@ -643,6 +645,7 @@ namespace UnityRemix
             this.configCaptureStaticMeshes = captureStaticMeshes;
             this.configCaptureSkinnedMeshes = captureSkinnedMeshes;
             this.configCaptureParticles = captureParticles;
+            this.configParticleMaxDistance = particleMaxDistance;
             this.configHardwareSkinning = hardwareSkinning;
             this.configPersistDisabledRenderers = persistDisabledRenderers;
             this.configStaticMeshFrameSkip = staticMeshFrameSkip;
@@ -2867,6 +2870,11 @@ namespace UnityRemix
             Vector3 camRight = mainCam.transform.right;
             Vector3 camUp = mainCam.transform.up;
             Vector3 camForward = mainCam.transform.forward;
+            Vector3 camPos = mainCam.transform.position;
+            float maxParticleDist = (configParticleMaxDistance != null && configParticleMaxDistance.Value > 0f)
+                ? configParticleMaxDistance.Value
+                : 60f;
+            float maxParticleDistSqr = maxParticleDist * maxParticleDist;
 
             // Check active particle renderers every frame to capture transient particles immediately (bullet impacts, sparks, newly spawned systems)
             var activeRenderers = UnityEngine.Object.FindObjectsOfType<ParticleSystemRenderer>(false);
@@ -2914,6 +2922,10 @@ namespace UnityRemix
 
                 if (pr == null || ps == null) continue;
                 if (!pr.enabled || !pr.gameObject.activeInHierarchy) continue;
+
+                // Distance culling: skip particle systems whose emitter transform is beyond max render distance
+                if ((pr.transform.position - camPos).sqrMagnitude > maxParticleDistSqr)
+                    continue;
 
                 var main = ps.main;
                 if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)

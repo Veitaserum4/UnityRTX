@@ -16,6 +16,7 @@ namespace UnityRemix
 
         // Cached state for ImGui controls (avoids per-frame alloc)
         private float _maxRenderDistance;
+        private float _particleMaxDistance;
         private float _lightIntensityMultiplier;
         private int _targetFPS;
         private bool _enableGameGeometry;
@@ -156,6 +157,11 @@ namespace UnityRemix
                     _plugin.SetConfig("MaxRenderDistance", _maxRenderDistance);
                 RemixImGui.Unindent();
             }
+
+            if (RemixImGui.SliderFloat("Particle Max Distance", ref _particleMaxDistance, 5f, 500f))
+                _plugin.SetConfig("ParticleMaxDistance", _particleMaxDistance);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Maximum distance from camera to capture and render particle systems.\nCulls distant particles to maximize performance.");
 
             if (RemixImGui.Checkbox("Visibility Culling", ref _enableVisibilityCulling))
                 _plugin.SetConfig("UseVisibilityCulling", _enableVisibilityCulling);
@@ -430,6 +436,7 @@ namespace UnityRemix
             _enableGameGeometry = _plugin.GetConfigBool("EnableGameGeometry");
             _enableDistanceCulling = _plugin.GetConfigBool("EnableDistanceCulling");
             _maxRenderDistance = _plugin.GetConfigFloat("MaxRenderDistance");
+            _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");
             _sceneScanActiveOnly = _plugin.GetConfigBool("ActiveRenderersOnly");
