@@ -25,6 +25,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configUseGameGeometry;
         private ConfigEntry<bool> configUseDistanceCulling;
         private ConfigEntry<float> configMaxRenderDistance;
+        private ConfigEntry<float> configParticleMaxDistance;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
         private ConfigEntry<int> configDebugLogInterval;
@@ -162,6 +163,10 @@ namespace UnityRemix
             configMaxRenderDistance = Config.Bind("Rendering", "MaxRenderDistance", 500f,
                 new ConfigDescription("Maximum render distance in Unity units.",
                     new AcceptableValueRange<float>(10f, 10000f)));
+
+            configParticleMaxDistance = Config.Bind("Rendering", "ParticleMaxDistance", 60f,
+                new ConfigDescription("Maximum distance to capture and render particle systems (Unity units).",
+                    new AcceptableValueRange<float>(5f, 500f)));
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
@@ -430,7 +435,8 @@ namespace UnityRemix
                 configHardwareSkinning,
                 configPersistDisabledRenderers,
                 configStaticMeshFrameSkip,
-                configCaptureParticles
+                configCaptureParticles,
+                configParticleMaxDistance
             );
             frameCapture.LoadDisabledLayersString(configDisabledLayers.Value);
             
@@ -787,6 +793,7 @@ namespace UnityRemix
             switch (key)
             {
                 case "MaxRenderDistance": return configMaxRenderDistance.Value;
+                case "ParticleMaxDistance": return configParticleMaxDistance.Value;
                 case "IntensityMultiplier": return configLightIntensityMultiplier.Value;
                 default: return 0f;
             }
@@ -862,6 +869,7 @@ namespace UnityRemix
             switch (key)
             {
                 case "MaxRenderDistance": configMaxRenderDistance.Value = value; break;
+                case "ParticleMaxDistance": configParticleMaxDistance.Value = value; break;
                 case "IntensityMultiplier": configLightIntensityMultiplier.Value = value; break;
             }
         }
