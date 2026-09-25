@@ -7,8 +7,8 @@ A BepInEx plugin that brings NVIDIA RTX Remix path tracing to most modern Unity 
 | Remix Replacements |✅|
 | Basic textures     |✅|
 | Point and spot lights (that are not baked) |✅|
-| Directional lights |❌|
-| Particle systems |❌|
+| Directional lights |✅|
+| Particle systems |✅|
 | GPU-Instanced / Statically Batched Geometry |✅|
 | Hardware Skinning |✅|
 
