@@ -15,6 +15,12 @@ namespace UnityRemix
         CubeMesh = 2     // Legacy in-scene 3D cube mesh in TLAS
     }
 
+    public enum SkyboxFiltering
+    {
+        Closest = 0,   // Point / Nearest-neighbor pixelated (Authentic PSX/ULTRAKILL retro aesthetic)
+        Linear = 1     // Bilinear smooth
+    }
+
     /// <summary>
     /// Autodetects standard Unity skyboxes (RenderSettings.skybox and solid camera backgrounds)
     /// and renders them via native RTX Remix Dome Light (or procedural atmosphere / legacy mesh).
@@ -27,6 +33,7 @@ namespace UnityRemix
         private readonly RemixCameraHandler cameraHandler;
         private readonly ConfigEntry<bool> configEnableSkybox;
         private readonly ConfigEntry<SkyboxMode> configSkyboxMode;
+        private readonly ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
 
         private RemixAPI.PFN_remixapi_CreateLight createLightFunc;
         private RemixAPI.PFN_remixapi_DestroyLight destroyLightFunc;
@@ -62,7 +69,8 @@ namespace UnityRemix
             RemixMeshConverter meshConverter,
             RemixCameraHandler cameraHandler,
             ConfigEntry<bool> enableSkybox,
-            ConfigEntry<SkyboxMode> skyboxMode = null)
+            ConfigEntry<SkyboxMode> skyboxMode = null,
+            ConfigEntry<SkyboxFiltering> skyboxFiltering = null)
         {
             this.logger = logger;
             this.materialManager = materialManager;
@@ -70,6 +78,7 @@ namespace UnityRemix
             this.cameraHandler = cameraHandler;
             this.configEnableSkybox = enableSkybox;
             this.configSkyboxMode = skyboxMode;
+            this.configSkyboxFiltering = skyboxFiltering;
         }
 
         public void InitializeRemix(RemixAPI.remixapi_Interface remixInterface, object apiLock)
@@ -261,30 +270,290 @@ namespace UnityRemix
                 // In DomeLight mode, ensure rtx.skyMode = 0
                 setConfigVariableFunc?.Invoke("rtx.skyMode", "0");
 
-                bool capturedCubemap = false;
+                bool captured = false;
                 if (skyMat != null)
                 {
-                    capturedCubemap = CaptureCubemapTextures(mainCam, skyMat);
+                    // 1. Direct Panoramic capture (e.g. ULTRAKILL LustSky, Greed, etc. using Skybox/Panoramic)
+                    if (IsPanoramicMaterial(skyMat))
+                    {
+                        captured = CapturePanoramicTexture(mainCam, skyMat, mode);
+                        if (captured && mode == SkyboxMode.DomeLight)
+                            return;
+                    }
+
+                    // 2. Direct 6-Sided capture
+                    if (!captured && Is6SidedMaterial(skyMat))
+                    {
+                        captured = Capture6SidedTextures(skyMat);
+                    }
+
+                    // 3. Direct Cubemap texture extraction
+                    if (!captured && skyMat.HasProperty("_Tex") && skyMat.GetTexture("_Tex") is Cubemap cubemap)
+                    {
+                        captured = ExtractFromDirectCubemap(cubemap);
+                    }
+
+                    // 4. Fallback to Camera.RenderToCubemap
+                    if (!captured)
+                    {
+                        captured = CaptureCubemapTextures(mainCam, skyMat);
+                    }
                 }
 
                 if (mode == SkyboxMode.DomeLight)
                 {
-                    PrepareDomeLight(capturedCubemap, bgColor);
+                    PrepareDomeLight(captured, bgColor);
                     return;
                 }
 
                 // CubeMesh (legacy fallback)
                 DestroyCurrentDomeLight();
-                if (!capturedCubemap)
+                if (!captured)
                 {
                     CaptureSolidColorTextures(bgColor);
                 }
-                PrepareCubeMesh(capturedCubemap, skyMat, bgColor);
+                PrepareCubeMesh(captured, skyMat, bgColor);
             }
             catch (Exception ex)
             {
                 statusText = $"Capture Error: {ex.Message}";
                 logger?.LogWarning($"[RemixSkyboxManager] Failed to capture skybox: {ex.Message}");
+            }
+        }
+
+        private static bool IsPanoramicMaterial(Material skyMat)
+        {
+            if (skyMat == null) return false;
+            if (skyMat.shader != null && skyMat.shader.name.IndexOf("Panoramic", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            if (skyMat.HasProperty("_MainTex") && skyMat.mainTexture != null && !skyMat.HasProperty("_FrontTex") && !skyMat.HasProperty("_Tex"))
+                return true;
+            return false;
+        }
+
+        private static bool Is6SidedMaterial(Material skyMat)
+        {
+            if (skyMat == null) return false;
+            return skyMat.HasProperty("_FrontTex") && skyMat.HasProperty("_BackTex");
+        }
+
+        private bool CapturePanoramicTexture(Camera mainCam, Material skyMat, SkyboxMode mode)
+        {
+            try
+            {
+                Texture srcTex = skyMat.mainTexture ?? (skyMat.HasProperty("_MainTex") ? skyMat.GetTexture("_MainTex") : null);
+                if (srcTex == null) return false;
+
+                int srcW = srcTex.width;
+                int srcH = srcTex.height;
+                if (srcW <= 0 || srcH <= 0) return false;
+
+                logger?.LogInfo($"[RemixSkyboxManager] Capturing direct Panoramic skybox: '{skyMat.name}', texture='{srcTex.name}' ({srcW}x{srcH})");
+
+                RenderTexture tempRt = RenderTexture.GetTemporary(srcW, srcH, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(srcTex, tempRt);
+
+                RenderTexture prevActive = RenderTexture.active;
+                RenderTexture.active = tempRt;
+
+                Texture2D readTex = new Texture2D(srcW, srcH, TextureFormat.RGBA32, false);
+                readTex.ReadPixels(new Rect(0, 0, srcW, srcH), 0, 0);
+                readTex.Apply(false, false);
+
+                RenderTexture.active = prevActive;
+                RenderTexture.ReleaseTemporary(tempRt);
+
+                Color32[] srcPixels = readTex.GetPixels32();
+                UnityEngine.Object.Destroy(readTex);
+
+                Color tint = skyMat.HasProperty("_Tint") ? skyMat.GetColor("_Tint") : Color.white;
+                float exposure = skyMat.HasProperty("_Exposure") ? skyMat.GetFloat("_Exposure") : 1.0f;
+
+                if (mode == SkyboxMode.DomeLight)
+                {
+                    PrepareDomeLightFromEquirectangular(srcPixels, srcW, srcH, tint, exposure);
+                    return true;
+                }
+                else
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[RemixSkyboxManager] Direct panoramic capture failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void PrepareDomeLightFromEquirectangular(Color32[] srcPixels, int srcW, int srcH, Color tint, float exposure)
+        {
+            string modsDir = Path.Combine(Environment.CurrentDirectory, "rtx-remix", "mods");
+            if (!Directory.Exists(modsDir))
+            {
+                Directory.CreateDirectory(modsDir);
+            }
+
+            string ddsFileName = $"RemixSky_v{skyboxVersion}.dds";
+            string ddsFullPath = Path.GetFullPath(Path.Combine(modsDir, ddsFileName));
+
+            bool isClosest = (configSkyboxFiltering == null || configSkyboxFiltering.Value == SkyboxFiltering.Closest);
+
+            // In Closest (pixelated) mode, we use a 2048x1024 high-res DDS buffer with nearest-neighbor block replication.
+            // Because each retro pixel becomes a solid block of identical pixels in the DDS, Remix's LinearWrapSampler
+            // evaluates identical values across the block, producing crisp, razor-sharp retro pixel edges!
+            int dstW = isClosest ? Math.Max(srcW * 2, 2048) : srcW;
+            int dstH = isClosest ? Math.Max(srcH * 2, 1024) : srcH;
+            Color32[] ddsPixels = new Color32[dstW * dstH];
+
+            System.Threading.Tasks.Parallel.For(0, dstH, yd =>
+            {
+                float vDds = (yd + 0.5f) / dstH;
+                // yd = 0 is Zenith (top of DDS), corresponding to top of Unity texture (ys = srcH - 1)
+                // yd = dstH - 1 is Nadir (bottom of DDS), corresponding to bottom of Unity texture (ys = 0)
+                int rowOffset = yd * dstW;
+
+                for (int xd = 0; xd < dstW; xd++)
+                {
+                    float uDds = (xd + 0.5f) / dstW;
+
+                    Color32 c;
+                    if (isClosest)
+                    {
+                        int sx = Mathf.Clamp((int)(uDds * srcW), 0, srcW - 1);
+                        int sy = Mathf.Clamp((int)((1.0f - vDds) * srcH), 0, srcH - 1);
+                        c = srcPixels[sy * srcW + sx];
+                    }
+                    else
+                    {
+                        float srcXf = uDds * srcW - 0.5f;
+                        float srcYf = (1.0f - vDds) * srcH - 0.5f;
+                        c = SampleBilinear(srcPixels, srcW, srcH, srcXf, srcYf);
+                    }
+
+                    byte r = (byte)Mathf.Clamp(Mathf.RoundToInt(c.r * tint.r * exposure), 0, 255);
+                    byte g = (byte)Mathf.Clamp(Mathf.RoundToInt(c.g * tint.g * exposure), 0, 255);
+                    byte b = (byte)Mathf.Clamp(Mathf.RoundToInt(c.b * tint.b * exposure), 0, 255);
+                    ddsPixels[rowOffset + xd] = new Color32(r, g, b, 255);
+                }
+            });
+
+            WriteDdsFile(ddsFullPath, dstW, dstH, ddsPixels);
+            CleanupOldDdsFiles(modsDir, ddsFileName);
+
+            string filterDesc = isClosest ? "Closest (Pixelated)" : "Linear (Smooth)";
+            statusText = $"Dome Light (Panoramic v{skyboxVersion}, {filterDesc})";
+            logger?.LogInfo($"[RemixSkyboxManager] Generated direct panoramic DDS: {ddsFullPath} ({filterDesc})");
+
+            CreateRemixDomeLight(ddsFullPath);
+        }
+
+        private static Color32 SampleBilinear(Color32[] pixels, int w, int h, float x, float y)
+        {
+            int x0 = Mathf.FloorToInt(x);
+            int y0 = Mathf.Clamp(Mathf.FloorToInt(y), 0, h - 1);
+            int x1 = (x0 + 1) % w;
+            if (x1 < 0) x1 += w;
+            int x0_clamped = (x0 % w + w) % w;
+            int y1 = Mathf.Clamp(y0 + 1, 0, h - 1);
+
+            float fx = x - Mathf.Floor(x);
+            float fy = Mathf.Clamp01(y - y0);
+
+            Color32 c00 = pixels[y0 * w + x0_clamped];
+            Color32 c10 = pixels[y0 * w + x1];
+            Color32 c01 = pixels[y1 * w + x0_clamped];
+            Color32 c11 = pixels[y1 * w + x1];
+
+            float r = Mathf.Lerp(Mathf.Lerp(c00.r, c10.r, fx), Mathf.Lerp(c01.r, c11.r, fx), fy);
+            float g = Mathf.Lerp(Mathf.Lerp(c00.g, c10.g, fx), Mathf.Lerp(c01.g, c11.g, fx), fy);
+            float b = Mathf.Lerp(Mathf.Lerp(c00.b, c10.b, fx), Mathf.Lerp(c01.b, c11.b, fx), fy);
+
+            return new Color32(
+                (byte)Mathf.Clamp(Mathf.RoundToInt(r), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(g), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(b), 0, 255),
+                255
+            );
+        }
+
+        private bool Capture6SidedTextures(Material skyMat)
+        {
+            try
+            {
+                string[] props = new string[] { "_FrontTex", "_BackTex", "_LeftTex", "_RightTex", "_UpTex", "_DownTex" };
+                CubemapFace[] faceOrder = new CubemapFace[]
+                {
+                    CubemapFace.PositiveZ,
+                    CubemapFace.NegativeZ,
+                    CubemapFace.NegativeX,
+                    CubemapFace.PositiveX,
+                    CubemapFace.PositiveY,
+                    CubemapFace.NegativeY
+                };
+
+                Texture frontTex = skyMat.GetTexture("_FrontTex");
+                if (frontTex == null) return false;
+
+                int res = frontTex.width;
+                if (res <= 0) return false;
+
+                Color tint = skyMat.HasProperty("_Tint") ? skyMat.GetColor("_Tint") : Color.white;
+                float exposure = skyMat.HasProperty("_Exposure") ? skyMat.GetFloat("_Exposure") : 1.0f;
+
+                bool isClosest = (configSkyboxFiltering == null || configSkyboxFiltering.Value == SkyboxFiltering.Closest);
+
+                for (int i = 0; i < 6; i++)
+                {
+                    Texture faceTex = skyMat.GetTexture(props[i]);
+                    if (faceTex == null) faceTex = frontTex;
+
+                    int fw = faceTex.width;
+                    int fh = faceTex.height;
+
+                    RenderTexture tempRt = RenderTexture.GetTemporary(fw, fh, 0, RenderTextureFormat.ARGB32);
+                    Graphics.Blit(faceTex, tempRt);
+
+                    RenderTexture prevActive = RenderTexture.active;
+                    RenderTexture.active = tempRt;
+
+                    if (skyFaceTextures[i] == null || skyFaceTextures[i].width != fw || skyFaceTextures[i].height != fh)
+                    {
+                        if (skyFaceTextures[i] != null) UnityEngine.Object.Destroy(skyFaceTextures[i]);
+                        skyFaceTextures[i] = new Texture2D(fw, fh, TextureFormat.RGBA32, false);
+                        skyFaceTextures[i].name = $"RemixSkyboxFace_{faceOrder[i]}";
+                    }
+                    skyFaceTextures[i].filterMode = isClosest ? FilterMode.Point : FilterMode.Bilinear;
+                    skyFaceTextures[i].wrapMode = TextureWrapMode.Clamp;
+
+                    skyFaceTextures[i].ReadPixels(new Rect(0, 0, fw, fh), 0, 0);
+                    skyFaceTextures[i].Apply(false, false);
+
+                    RenderTexture.active = prevActive;
+                    RenderTexture.ReleaseTemporary(tempRt);
+
+                    if (tint != Color.white || exposure != 1.0f)
+                    {
+                        Color32[] pixels = skyFaceTextures[i].GetPixels32();
+                        for (int p = 0; p < pixels.Length; p++)
+                        {
+                            pixels[p].r = (byte)Mathf.Clamp(Mathf.RoundToInt(pixels[p].r * tint.r * exposure), 0, 255);
+                            pixels[p].g = (byte)Mathf.Clamp(Mathf.RoundToInt(pixels[p].g * tint.g * exposure), 0, 255);
+                            pixels[p].b = (byte)Mathf.Clamp(Mathf.RoundToInt(pixels[p].b * tint.b * exposure), 0, 255);
+                            pixels[p].a = 255;
+                        }
+                        skyFaceTextures[i].SetPixels32(pixels);
+                        skyFaceTextures[i].Apply(false, false);
+                    }
+                }
+
+                logger?.LogInfo($"[RemixSkyboxManager] Captured 6-sided skybox: '{skyMat.name}' ({res}x{res})");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[RemixSkyboxManager] 6-sided capture failed: {ex.Message}");
+                return false;
             }
         }
 
@@ -299,11 +568,14 @@ namespace UnityRemix
             string ddsFileName = $"RemixSky_v{skyboxVersion}.dds";
             string ddsFullPath = Path.GetFullPath(Path.Combine(modsDir, ddsFileName));
 
+            bool isClosest = (configSkyboxFiltering == null || configSkyboxFiltering.Value == SkyboxFiltering.Closest);
+            string filterDesc = isClosest ? "Closest (Pixelated)" : "Linear (Smooth)";
+
             if (hasCubemap)
             {
-                GenerateEquirectangularDds(ddsFullPath, 1024, 512);
-                statusText = $"Dome Light (Cubemap v{skyboxVersion})";
-                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama DDS: {ddsFullPath}");
+                GenerateEquirectangularDds(ddsFullPath, 2048, 1024);
+                statusText = $"Dome Light (Cubemap v{skyboxVersion}, {filterDesc})";
+                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama DDS: {ddsFullPath} ({filterDesc})");
             }
             else
             {
@@ -422,6 +694,7 @@ namespace UnityRemix
                 return;
             }
 
+            bool isClosest = (configSkyboxFiltering == null || configSkyboxFiltering.Value == SkyboxFiltering.Closest);
             Color32[] panoPixels = new Color32[width * height];
 
             System.Threading.Tasks.Parallel.For(0, height, y =>
@@ -473,11 +746,34 @@ namespace UnityRemix
                     float uFace = (sc / ma + 1f) * 0.5f;
                     float vFace = (tc / ma + 1f) * 0.5f;
 
-                    int px = Mathf.Clamp((int)(uFace * faceRes), 0, faceRes - 1);
-                    int py = Mathf.Clamp((int)(vFace * faceRes), 0, faceRes - 1);
-
                     Color32[] face = facePixels[faceIndex] ?? facePixels[0];
-                    panoPixels[rowOffset + x] = face[py * faceRes + px];
+                    if (isClosest)
+                    {
+                        int px = Mathf.Clamp((int)(uFace * faceRes), 0, faceRes - 1);
+                        int py = Mathf.Clamp((int)(vFace * faceRes), 0, faceRes - 1);
+                        panoPixels[rowOffset + x] = face[py * faceRes + px];
+                    }
+                    else
+                    {
+                        float fx = uFace * faceRes - 0.5f;
+                        float fy = vFace * faceRes - 0.5f;
+                        int x0 = Mathf.Clamp(Mathf.FloorToInt(fx), 0, faceRes - 1);
+                        int y0 = Mathf.Clamp(Mathf.FloorToInt(fy), 0, faceRes - 1);
+                        int x1 = Mathf.Clamp(x0 + 1, 0, faceRes - 1);
+                        int y1 = Mathf.Clamp(y0 + 1, 0, faceRes - 1);
+                        float s = Mathf.Clamp01(fx - x0);
+                        float t = Mathf.Clamp01(fy - y0);
+
+                        Color32 c00 = face[y0 * faceRes + x0];
+                        Color32 c10 = face[y0 * faceRes + x1];
+                        Color32 c01 = face[y1 * faceRes + x0];
+                        Color32 c11 = face[y1 * faceRes + x1];
+
+                        byte r = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.r, c10.r, s), Mathf.Lerp(c01.r, c11.r, s), t)), 0, 255);
+                        byte g = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.g, c10.g, s), Mathf.Lerp(c01.g, c10.g, s), t)), 0, 255);
+                        byte b = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.b, c10.b, s), Mathf.Lerp(c01.b, c11.b, s), t)), 0, 255);
+                        panoPixels[rowOffset + x] = new Color32(r, g, b, 255);
+                    }
                 }
             });
 
@@ -579,6 +875,7 @@ namespace UnityRemix
                               ?? Shader.Find("Standard")
                               ?? (skyMat != null ? skyMat.shader : null);
 
+            bool isClosest = (configSkyboxFiltering == null || configSkyboxFiltering.Value == SkyboxFiltering.Closest);
             List<Material> submeshMaterials = new List<Material>(6);
             List<int> submeshMaterialIds = new List<int>(6);
 
@@ -587,6 +884,11 @@ namespace UnityRemix
                 if (skyMaterials[i] != null)
                 {
                     UnityEngine.Object.Destroy(skyMaterials[i]);
+                }
+
+                if (skyFaceTextures[i] != null)
+                {
+                    skyFaceTextures[i].filterMode = isClosest ? FilterMode.Point : FilterMode.Bilinear;
                 }
 
                 skyMaterials[i] = new Material(unlitShader);
