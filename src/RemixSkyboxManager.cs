@@ -1,15 +1,23 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using UnityEngine;
 
 namespace UnityRemix
 {
+    public enum SkyboxMode
+    {
+        DomeLight = 0,   // Native infinite Remix Dome Light (Recommended, doesn't block lights)
+        Atmosphere = 1,  // Procedural physical atmosphere (rtx.skyMode = 1)
+        CubeMesh = 2     // Legacy in-scene 3D cube mesh in TLAS
+    }
+
     /// <summary>
-    /// Autodetects standard Unity skyboxes (RenderSettings.skybox and solid camera backgrounds),
-    /// bakes or extracts 6-face cubemap textures, constructs an inward-facing skybox cube mesh,
-    /// and submits it to RTX Remix tagged with REMIXAPI_INSTANCE_CATEGORY_BIT_SKY.
+    /// Autodetects standard Unity skyboxes (RenderSettings.skybox and solid camera backgrounds)
+    /// and renders them via native RTX Remix Dome Light (or procedural atmosphere / legacy mesh).
     /// </summary>
     public class RemixSkyboxManager
     {
@@ -18,6 +26,14 @@ namespace UnityRemix
         private readonly RemixMeshConverter meshConverter;
         private readonly RemixCameraHandler cameraHandler;
         private readonly ConfigEntry<bool> configEnableSkybox;
+        private readonly ConfigEntry<SkyboxMode> configSkyboxMode;
+
+        private RemixAPI.PFN_remixapi_CreateLight createLightFunc;
+        private RemixAPI.PFN_remixapi_DestroyLight destroyLightFunc;
+        private RemixAPI.PFN_remixapi_DrawLightInstance drawLightInstanceFunc;
+        private RemixAPI.PFN_remixapi_SetConfigVariable setConfigVariableFunc;
+        private object apiLock;
+        private IntPtr currentDomeLightHandle = IntPtr.Zero;
 
         private RemixFrameCapture frameCapture;
         private RemixFramebufferPresenter framebufferPresenter;
@@ -45,13 +61,33 @@ namespace UnityRemix
             RemixMaterialManager materialManager,
             RemixMeshConverter meshConverter,
             RemixCameraHandler cameraHandler,
-            ConfigEntry<bool> enableSkybox)
+            ConfigEntry<bool> enableSkybox,
+            ConfigEntry<SkyboxMode> skyboxMode = null)
         {
             this.logger = logger;
             this.materialManager = materialManager;
             this.meshConverter = meshConverter;
             this.cameraHandler = cameraHandler;
             this.configEnableSkybox = enableSkybox;
+            this.configSkyboxMode = skyboxMode;
+        }
+
+        public void InitializeRemix(RemixAPI.remixapi_Interface remixInterface, object apiLock)
+        {
+            this.apiLock = apiLock;
+            if (remixInterface.CreateLight != IntPtr.Zero)
+                createLightFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_CreateLight>(remixInterface.CreateLight);
+            if (remixInterface.DestroyLight != IntPtr.Zero)
+                destroyLightFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_DestroyLight>(remixInterface.DestroyLight);
+            if (remixInterface.DrawLightInstance != IntPtr.Zero)
+                drawLightInstanceFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_DrawLightInstance>(remixInterface.DrawLightInstance);
+            if (remixInterface.SetConfigVariable != IntPtr.Zero)
+                setConfigVariableFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetConfigVariable>(remixInterface.SetConfigVariable);
+        }
+
+        public void ForceRecapture()
+        {
+            needsCapture = true;
         }
 
         public void SetFrameCapture(RemixFrameCapture capture)
@@ -121,10 +157,17 @@ namespace UnityRemix
 
         /// <summary>
         /// Emits the skybox mesh instance into the frame state, centered on the camera and tagged as SKY.
+        /// Only active in legacy CubeMesh mode. In DomeLight and Atmosphere modes, no TLAS mesh is emitted,
+        /// ensuring distant directional lights and sun shadow rays are never occluded.
         /// </summary>
         public void EmitSkyboxInstance(RemixFrameCapture.FrameState state, Camera mainCam)
         {
             if (configEnableSkybox != null && !configEnableSkybox.Value)
+                return;
+
+            // In DomeLight or Atmosphere mode, do NOT emit any cube mesh into the TLAS!
+            // This prevents distant directional lights and scene lights from being blocked.
+            if (configSkyboxMode == null || configSkyboxMode.Value != SkyboxMode.CubeMesh)
                 return;
 
             if (state == null || skyboxMeshKey == 0 || mainCam == null)
@@ -172,12 +215,51 @@ namespace UnityRemix
             });
         }
 
+        /// <summary>
+        /// Called per-frame on the render thread to draw the native Remix Dome Light.
+        /// </summary>
+        public void DrawSkyLight(int frameCount)
+        {
+            if (configEnableSkybox != null && !configEnableSkybox.Value)
+                return;
+
+            if (configSkyboxMode != null && configSkyboxMode.Value != SkyboxMode.DomeLight)
+                return;
+
+            IntPtr handle = currentDomeLightHandle;
+            if (handle != IntPtr.Zero && drawLightInstanceFunc != null)
+            {
+                drawLightInstanceFunc(handle);
+                if (frameCount % 300 == 1)
+                {
+                    logger?.LogInfo($"[RemixSkyboxManager] Drawn DomeLight handle 0x{handle.ToInt64():X}");
+                }
+            }
+        }
+
         private void CaptureAndPrepareSkybox(Camera mainCam, Material skyMat, CameraClearFlags clearFlags, Color bgColor)
         {
             try
             {
                 skyboxVersion++;
-                EnsureSkyboxCubeMesh();
+                lastCapturedSkyMat = skyMat;
+                lastCapturedClearFlags = clearFlags;
+                lastCapturedBgColor = bgColor;
+                needsCapture = false;
+
+                SkyboxMode mode = configSkyboxMode != null ? configSkyboxMode.Value : SkyboxMode.DomeLight;
+
+                if (mode == SkyboxMode.Atmosphere)
+                {
+                    DestroyCurrentDomeLight();
+                    setConfigVariableFunc?.Invoke("rtx.skyMode", "1");
+                    statusText = "Atmosphere (Numos skyMode=1)";
+                    logger?.LogInfo("[RemixSkyboxManager] Atmosphere mode enabled (rtx.skyMode=1).");
+                    return;
+                }
+
+                // In DomeLight mode, ensure rtx.skyMode = 0
+                setConfigVariableFunc?.Invoke("rtx.skyMode", "0");
 
                 bool capturedCubemap = false;
                 if (skyMat != null)
@@ -185,108 +267,387 @@ namespace UnityRemix
                     capturedCubemap = CaptureCubemapTextures(mainCam, skyMat);
                 }
 
+                if (mode == SkyboxMode.DomeLight)
+                {
+                    PrepareDomeLight(capturedCubemap, bgColor);
+                    return;
+                }
+
+                // CubeMesh (legacy fallback)
+                DestroyCurrentDomeLight();
                 if (!capturedCubemap)
                 {
                     CaptureSolidColorTextures(bgColor);
                 }
-
-                if (skyFaceTextures[0] != null)
-                {
-                    Color sample = skyFaceTextures[0].GetPixel(skyFaceTextures[0].width / 2, skyFaceTextures[0].height / 2);
-                    logger?.LogInfo($"[RemixSkyboxManager] Captured skybox face 0 center pixel: RGBA({sample.r:F3}, {sample.g:F3}, {sample.b:F3}, {sample.a:F3})");
-                }
-
-                // Ensure materials are created for the 6 faces
-                Shader unlitShader = Shader.Find("Unlit/Texture")
-                                  ?? Shader.Find("UI/Default")
-                                  ?? Shader.Find("Standard")
-                                  ?? (skyMat != null ? skyMat.shader : null);
-
-                List<Material> submeshMaterials = new List<Material>(6);
-                List<int> submeshMaterialIds = new List<int>(6);
-
-                for (int i = 0; i < 6; i++)
-                {
-                    if (skyMaterials[i] != null)
-                    {
-                        UnityEngine.Object.Destroy(skyMaterials[i]);
-                    }
-
-                    skyMaterials[i] = new Material(unlitShader);
-                    skyMaterials[i].name = $"RemixSkyMaterial_v{skyboxVersion}_Face_{i}";
-                    skyMaterials[i].mainTexture = skyFaceTextures[i];
-
-                    // Unique synthetic material ID per version and face to ensure fresh material registration in Remix
-                    int matId = -2000000 - (skyboxVersion * 10 + i);
-                    submeshMaterials.Add(skyMaterials[i]);
-                    submeshMaterialIds.Add(matId);
-
-                    // Capture material textures on main thread and mark emissive so sky surface self-illuminates in path tracing
-                    materialManager.CaptureMaterialTextures(
-                        skyMaterials[i],
-                        matId,
-                        mpbEmissiveColor: Color.white,
-                        mpbEmissiveIntensity: 1.0f,
-                        mpbMainTex: skyFaceTextures[i],
-                        mpbColor: Color.white
-                    );
-                }
-
-                // Unique mesh key per skybox version so render thread always creates the updated mesh
-                skyboxMeshKey = 0x534B594200000000UL | (ulong)(skyboxVersion & 0xFFFFFFFF);
-                skyboxMeshHash = RemixMeshConverter.GenerateMeshHash("RemixSkyboxCube", skyboxMesh.vertexCount, 36, (int)skyboxMeshKey);
-
-                var submeshIndices = new List<uint[]>(6);
-                for (int s = 0; s < 6; s++)
-                {
-                    int baseIdx = s * 4;
-                    submeshIndices.Add(new uint[]
-                    {
-                        (uint)(baseIdx + 0), (uint)(baseIdx + 2), (uint)(baseIdx + 1),
-                        (uint)(baseIdx + 0), (uint)(baseIdx + 3), (uint)(baseIdx + 2)
-                    });
-                }
-
-                var preparedData = new PreparedMeshData
-                {
-                    MeshKey = skyboxMeshKey,
-                    MeshId = skyboxMeshId,
-                    MeshName = $"RemixSkyboxCube_v{skyboxVersion}",
-                    MeshHash = skyboxMeshHash,
-                    Vertices = skyboxMesh.vertices,
-                    Normals = skyboxMesh.normals,
-                    UVs = skyboxMesh.uv,
-                    Colors = null,
-                    SubmeshIndices = submeshIndices,
-                    SubmeshMaterials = submeshMaterials,
-                    SubmeshMaterialIds = submeshMaterialIds
-                };
-
-                // Queue high-priority creation for render thread
-                frameCapture?.QueuePriorityMesh(preparedData);
-                logger?.LogInfo($"[RemixSkyboxManager] Queued priority skybox mesh 0x{skyboxMeshKey:X16} (v{skyboxVersion})");
-
-                lastCapturedSkyMat = skyMat;
-                lastCapturedClearFlags = clearFlags;
-                lastCapturedBgColor = bgColor;
-                needsCapture = false;
-
-                if (capturedCubemap && skyMat != null)
-                {
-                    statusText = $"{skyMat.name} ({skyMat.shader?.name}, v{skyboxVersion})";
-                }
-                else
-                {
-                    statusText = $"Solid Color ({bgColor.r:F2}, {bgColor.g:F2}, {bgColor.b:F2}, v{skyboxVersion})";
-                }
-
-                logger?.LogInfo($"[RemixSkyboxManager] Skybox captured successfully: {statusText}");
+                PrepareCubeMesh(capturedCubemap, skyMat, bgColor);
             }
             catch (Exception ex)
             {
                 statusText = $"Capture Error: {ex.Message}";
                 logger?.LogWarning($"[RemixSkyboxManager] Failed to capture skybox: {ex.Message}");
             }
+        }
+
+        private void PrepareDomeLight(bool hasCubemap, Color bgColor)
+        {
+            string modsDir = Path.Combine(Environment.CurrentDirectory, "rtx-remix", "mods");
+            if (!Directory.Exists(modsDir))
+            {
+                Directory.CreateDirectory(modsDir);
+            }
+
+            string ddsFileName = $"RemixSky_v{skyboxVersion}.dds";
+            string ddsFullPath = Path.GetFullPath(Path.Combine(modsDir, ddsFileName));
+
+            if (hasCubemap)
+            {
+                GenerateEquirectangularDds(ddsFullPath, 1024, 512);
+                statusText = $"Dome Light (Cubemap v{skyboxVersion})";
+                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama DDS: {ddsFullPath}");
+            }
+            else
+            {
+                GenerateSolidColorDds(ddsFullPath, 16, 16, bgColor);
+                statusText = $"Dome Light (Solid v{skyboxVersion})";
+                logger?.LogInfo($"[RemixSkyboxManager] Generated solid color DDS ({bgColor}): {ddsFullPath}");
+            }
+
+            CleanupOldDdsFiles(modsDir, ddsFileName);
+            CreateRemixDomeLight(ddsFullPath);
+        }
+
+        private void CreateRemixDomeLight(string ddsFullPath)
+        {
+            if (createLightFunc == null)
+            {
+                logger?.LogWarning("[RemixSkyboxManager] createLightFunc is null, cannot create Dome Light");
+                return;
+            }
+
+            DestroyCurrentDomeLight();
+
+            float rot = 0f;
+            if (lastCapturedSkyMat != null && lastCapturedSkyMat.HasProperty("_Rotation"))
+            {
+                try { rot = lastCapturedSkyMat.GetFloat("_Rotation"); } catch { }
+            }
+
+            float rad = -rot * Mathf.Deg2Rad;
+            float cosR = Mathf.Cos(rad);
+            float sinR = Mathf.Sin(rad);
+
+            var xform = RemixAPI.remixapi_Transform.FromMatrix(
+                cosR, -sinR, 0, 0,
+                sinR, cosR, 0, 0,
+                0, 0, 1, 0
+            );
+
+            IntPtr pathPtr = Marshal.StringToHGlobalUni(ddsFullPath);
+
+            var domeExt = new RemixAPI.remixapi_LightInfoDomeEXT
+            {
+                sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DOME_EXT,
+                pNext = IntPtr.Zero,
+                transform = xform,
+                colorTexture = pathPtr
+            };
+
+            GCHandle domeHandle = GCHandle.Alloc(domeExt, GCHandleType.Pinned);
+
+            try
+            {
+                var lightInfo = new RemixAPI.remixapi_LightInfo
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_LIGHT_INFO,
+                    pNext = domeHandle.AddrOfPinnedObject(),
+                    hash = 0x534B59444F4D4500UL | (ulong)(uint)(skyboxVersion & 0xFF),
+                    radiance = new RemixAPI.remixapi_Float3D(1.0f, 1.0f, 1.0f),
+                    isDynamic = 1,
+                    ignoreViewModel = 1,
+                    ignoreFirstPersonPlayerShadow = 1
+                };
+
+                IntPtr newHandle;
+                RemixAPI.remixapi_ErrorCode result;
+                lock (apiLock ?? this)
+                {
+                    result = createLightFunc(ref lightInfo, out newHandle);
+                }
+
+                if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                {
+                    currentDomeLightHandle = newHandle;
+                    logger?.LogInfo($"[RemixSkyboxManager] Successfully created Remix Dome Light handle 0x{newHandle.ToInt64():X}");
+                }
+                else
+                {
+                    logger?.LogWarning($"[RemixSkyboxManager] Failed to create Dome Light: {result}");
+                }
+            }
+            finally
+            {
+                domeHandle.Free();
+                Marshal.FreeHGlobal(pathPtr);
+            }
+        }
+
+        private void DestroyCurrentDomeLight()
+        {
+            if (currentDomeLightHandle != IntPtr.Zero && destroyLightFunc != null)
+            {
+                lock (apiLock ?? this)
+                {
+                    destroyLightFunc(currentDomeLightHandle);
+                }
+                currentDomeLightHandle = IntPtr.Zero;
+            }
+        }
+
+        private void GenerateEquirectangularDds(string ddsPath, int width, int height)
+        {
+            Color32[][] facePixels = new Color32[6][];
+            int faceRes = 0;
+            for (int i = 0; i < 6; i++)
+            {
+                if (skyFaceTextures[i] != null)
+                {
+                    facePixels[i] = skyFaceTextures[i].GetPixels32();
+                    faceRes = skyFaceTextures[i].width;
+                }
+            }
+
+            if (faceRes == 0 || facePixels[0] == null)
+            {
+                logger?.LogWarning("[RemixSkyboxManager] Cannot generate equirectangular: face textures missing");
+                return;
+            }
+
+            Color32[] panoPixels = new Color32[width * height];
+
+            System.Threading.Tasks.Parallel.For(0, height, y =>
+            {
+                float vLatLong = (y + 0.5f) / height;
+                float theta = vLatLong * Mathf.PI; // 0 (zenith) to PI (nadir)
+                float sinTheta = Mathf.Sin(theta);
+                float rz = Mathf.Cos(theta); // Remix Z (Up)
+
+                int rowOffset = y * width;
+
+                for (int x = 0; x < width; x++)
+                {
+                    float uLatLong = (x + 0.5f) / width;
+                    float phi = (uLatLong - 0.5f) * 2f * Mathf.PI; // -PI to +PI
+
+                    float rx = sinTheta * Mathf.Sin(phi); // Remix X (Right)
+                    float ry = sinTheta * Mathf.Cos(phi); // Remix Y (Forward)
+
+                    // Convert Remix Z-up to Unity Y-up:
+                    // Unity X = rx, Unity Y = rz, Unity Z = ry
+                    float dx = rx;
+                    float dy = rz;
+                    float dz = ry;
+
+                    float absX = Mathf.Abs(dx);
+                    float absY = Mathf.Abs(dy);
+                    float absZ = Mathf.Abs(dz);
+
+                    int faceIndex;
+                    float sc, tc, ma;
+
+                    if (absX >= absY && absX >= absZ)
+                    {
+                        if (dx > 0) { faceIndex = 3; sc = -dz; tc = dy; ma = absX; } // PositiveX
+                        else        { faceIndex = 2; sc = dz;  tc = dy; ma = absX; } // NegativeX
+                    }
+                    else if (absY >= absX && absY >= absZ)
+                    {
+                        if (dy > 0) { faceIndex = 4; sc = dx; tc = -dz; ma = absY; } // PositiveY
+                        else        { faceIndex = 5; sc = dx; tc = dz;  ma = absY; } // NegativeY
+                    }
+                    else
+                    {
+                        if (dz > 0) { faceIndex = 0; sc = dx;  tc = dy; ma = absZ; } // PositiveZ
+                        else        { faceIndex = 1; sc = -dx; tc = dy; ma = absZ; } // NegativeZ
+                    }
+
+                    float uFace = (sc / ma + 1f) * 0.5f;
+                    float vFace = (tc / ma + 1f) * 0.5f;
+
+                    int px = Mathf.Clamp((int)(uFace * faceRes), 0, faceRes - 1);
+                    int py = Mathf.Clamp((int)(vFace * faceRes), 0, faceRes - 1);
+
+                    Color32[] face = facePixels[faceIndex] ?? facePixels[0];
+                    panoPixels[rowOffset + x] = face[py * faceRes + px];
+                }
+            });
+
+            WriteDdsFile(ddsPath, width, height, panoPixels);
+        }
+
+        private void GenerateSolidColorDds(string ddsPath, int width, int height, Color color)
+        {
+            Color32 c32 = color;
+            c32.a = 255;
+            Color32[] solidPixels = new Color32[width * height];
+            for (int i = 0; i < solidPixels.Length; i++)
+            {
+                solidPixels[i] = c32;
+            }
+            WriteDdsFile(ddsPath, width, height, solidPixels);
+        }
+
+        private static void WriteDdsFile(string filePath, int width, int height, Color32[] pixels)
+        {
+            byte[] dds = new byte[128 + width * height * 4];
+
+            // Magic "DDS "
+            dds[0] = (byte)'D'; dds[1] = (byte)'D'; dds[2] = (byte)'S'; dds[3] = (byte)' ';
+
+            // DDS_HEADER (124 bytes)
+            WriteInt32(dds, 4, 124);
+            WriteInt32(dds, 8, 0x00021007); // DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH | DDSD_PITCH | DDSD_PIXELFORMAT
+            WriteInt32(dds, 12, height);
+            WriteInt32(dds, 16, width);
+            WriteInt32(dds, 20, width * 4);
+            WriteInt32(dds, 24, 0); // depth
+            WriteInt32(dds, 28, 1); // mipMapCount
+
+            // DDS_PIXELFORMAT at offset 76 (32 bytes)
+            WriteInt32(dds, 76, 32);       // dwSize
+            WriteInt32(dds, 80, 0x41);     // DDPF_RGB | DDPF_ALPHAPIXELS
+            WriteInt32(dds, 84, 0);        // dwFourCC
+            WriteInt32(dds, 88, 32);       // dwRGBBitCount
+            WriteUInt32(dds, 92, 0x000000FF);  // dwRBitMask
+            WriteUInt32(dds, 96, 0x0000FF00);  // dwGBitMask
+            WriteUInt32(dds, 100, 0x00FF0000); // dwBBitMask
+            WriteUInt32(dds, 104, 0xFF000000); // dwABitMask
+
+            // dwCaps at offset 108
+            WriteInt32(dds, 108, 0x1000); // DDSCAPS_TEXTURE
+
+            // Pixel data starting at offset 128
+            int pixelOffset = 128;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                dds[pixelOffset++] = pixels[i].r;
+                dds[pixelOffset++] = pixels[i].g;
+                dds[pixelOffset++] = pixels[i].b;
+                dds[pixelOffset++] = pixels[i].a;
+            }
+
+            File.WriteAllBytes(filePath, dds);
+        }
+
+        private static void WriteInt32(byte[] buffer, int offset, int value)
+        {
+            buffer[offset + 0] = (byte)(value & 0xFF);
+            buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
+            buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
+            buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
+        }
+
+        private static void WriteUInt32(byte[] buffer, int offset, uint value)
+        {
+            buffer[offset + 0] = (byte)(value & 0xFF);
+            buffer[offset + 1] = (byte)((value >> 8) & 0xFF);
+            buffer[offset + 2] = (byte)((value >> 16) & 0xFF);
+            buffer[offset + 3] = (byte)((value >> 24) & 0xFF);
+        }
+
+        private void CleanupOldDdsFiles(string modsDir, string currentFile)
+        {
+            try
+            {
+                var files = Directory.GetFiles(modsDir, "RemixSky_v*.dds");
+                foreach (var file in files)
+                {
+                    if (!file.EndsWith(currentFile, StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { File.Delete(file); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void PrepareCubeMesh(bool capturedCubemap, Material skyMat, Color bgColor)
+        {
+            EnsureSkyboxCubeMesh();
+
+            Shader unlitShader = Shader.Find("Unlit/Texture")
+                              ?? Shader.Find("UI/Default")
+                              ?? Shader.Find("Standard")
+                              ?? (skyMat != null ? skyMat.shader : null);
+
+            List<Material> submeshMaterials = new List<Material>(6);
+            List<int> submeshMaterialIds = new List<int>(6);
+
+            for (int i = 0; i < 6; i++)
+            {
+                if (skyMaterials[i] != null)
+                {
+                    UnityEngine.Object.Destroy(skyMaterials[i]);
+                }
+
+                skyMaterials[i] = new Material(unlitShader);
+                skyMaterials[i].name = $"RemixSkyMaterial_v{skyboxVersion}_Face_{i}";
+                skyMaterials[i].mainTexture = skyFaceTextures[i];
+
+                int matId = -2000000 - (skyboxVersion * 10 + i);
+                submeshMaterials.Add(skyMaterials[i]);
+                submeshMaterialIds.Add(matId);
+
+                materialManager.CaptureMaterialTextures(
+                    skyMaterials[i],
+                    matId,
+                    mpbEmissiveColor: Color.white,
+                    mpbEmissiveIntensity: 1.0f,
+                    mpbMainTex: skyFaceTextures[i],
+                    mpbColor: Color.white
+                );
+            }
+
+            skyboxMeshKey = 0x534B594200000000UL | (ulong)(skyboxVersion & 0xFFFFFFFF);
+            skyboxMeshHash = RemixMeshConverter.GenerateMeshHash("RemixSkyboxCube", skyboxMesh.vertexCount, 36, (int)skyboxMeshKey);
+
+            var submeshIndices = new List<uint[]>(6);
+            for (int s = 0; s < 6; s++)
+            {
+                int baseIdx = s * 4;
+                submeshIndices.Add(new uint[]
+                {
+                    (uint)(baseIdx + 0), (uint)(baseIdx + 2), (uint)(baseIdx + 1),
+                    (uint)(baseIdx + 0), (uint)(baseIdx + 3), (uint)(baseIdx + 2)
+                });
+            }
+
+            var preparedData = new PreparedMeshData
+            {
+                MeshKey = skyboxMeshKey,
+                MeshId = skyboxMeshId,
+                MeshName = $"RemixSkyboxCube_v{skyboxVersion}",
+                MeshHash = skyboxMeshHash,
+                Vertices = skyboxMesh.vertices,
+                Normals = skyboxMesh.normals,
+                UVs = skyboxMesh.uv,
+                Colors = null,
+                SubmeshIndices = submeshIndices,
+                SubmeshMaterials = submeshMaterials,
+                SubmeshMaterialIds = submeshMaterialIds
+            };
+
+            frameCapture?.QueuePriorityMesh(preparedData);
+            logger?.LogInfo($"[RemixSkyboxManager] Queued priority skybox mesh 0x{skyboxMeshKey:X16} (v{skyboxVersion})");
+
+            if (capturedCubemap && skyMat != null)
+            {
+                statusText = $"Cube Mesh: {skyMat.name} (v{skyboxVersion})";
+            }
+            else
+            {
+                statusText = $"Cube Mesh: Solid ({bgColor.r:F2}, {bgColor.g:F2}, {bgColor.b:F2}, v{skyboxVersion})";
+            }
+            logger?.LogInfo($"[RemixSkyboxManager] Skybox cube mesh prepared: {statusText}");
         }
 
         private bool CaptureCubemapTextures(Camera mainCam, Material skyMat)
@@ -600,6 +961,8 @@ namespace UnityRemix
 
         public void Cleanup()
         {
+            DestroyCurrentDomeLight();
+
             for (int i = 0; i < 6; i++)
             {
                 if (skyFaceTextures[i] != null)

@@ -314,6 +314,16 @@ namespace UnityRemix
             public float volumetricRadianceScale;
         }
 
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_LightInfoDomeEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public remixapi_Transform transform;
+            public IntPtr colorTexture; // const wchar_t* path to DDS
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_LightInfoDistantEXT
         {
