@@ -20,6 +20,7 @@ namespace UnityRemix
         private bool _enableParticleDistanceCulling;
         private bool _enableSkybox;
         private int _skyboxMode;
+        private int _skyboxFiltering;
         private float _lightIntensityMultiplier;
         private int _targetFPS;
         private bool _enableGameGeometry;
@@ -245,6 +246,24 @@ namespace UnityRemix
                 }
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Dome Light: Native Remix environment light at infinity. Does not occlude sun/directional lights.\nAtmosphere: Procedural physical atmosphere.\nCube Mesh: Legacy 3D polygonal box mesh in TLAS (may block distant lights).");
+
+                string[] filterNames = { "Closest (Pixelated / Retro)", "Linear (Smooth)" };
+                string previewFilter = (_skyboxFiltering >= 0 && _skyboxFiltering < filterNames.Length) ? filterNames[_skyboxFiltering] : filterNames[0];
+                if (RemixImGui.BeginCombo("Skybox Filtering", previewFilter))
+                {
+                    for (int i = 0; i < filterNames.Length; i++)
+                    {
+                        bool selected = (_skyboxFiltering == i);
+                        if (RemixImGui.Selectable(filterNames[i], selected))
+                        {
+                            _skyboxFiltering = i;
+                            _plugin.SetConfig("SkyboxFiltering", _skyboxFiltering);
+                        }
+                    }
+                    RemixImGui.EndCombo();
+                }
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Closest: Preserves sharp retro pixels (authentic to ULTRAKILL's PSX aesthetic).\nLinear: Smooth bilinear interpolation.");
 
                 if (_plugin.SkyboxManager != null)
                 {
@@ -494,6 +513,7 @@ namespace UnityRemix
             _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
             _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
             _skyboxMode = _plugin.GetConfigInt("SkyboxMode");
+            _skyboxFiltering = _plugin.GetConfigInt("SkyboxFiltering");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");
             _sceneScanActiveOnly = _plugin.GetConfigBool("ActiveRenderersOnly");

@@ -32,6 +32,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configEnableParticleDistanceCulling;
         private ConfigEntry<bool> configEnableSkybox;
         private ConfigEntry<SkyboxMode> configSkyboxMode;
+        private ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
         private ConfigEntry<int> configDebugLogInterval;
@@ -187,6 +188,9 @@ namespace UnityRemix
             
             configSkyboxMode = Config.Bind("Rendering", "SkyboxMode", SkyboxMode.DomeLight,
                 "Skybox rendering mode: DomeLight (native infinite Remix environment, recommended), Atmosphere (procedural Numos atmosphere), CubeMesh (legacy in-scene mesh).");
+            
+            configSkyboxFiltering = Config.Bind("Rendering", "SkyboxFiltering", SkyboxFiltering.Closest,
+                "Skybox texture filtering: Closest (pixelated retro aesthetic, recommended for ULTRAKILL) or Linear (smooth).");
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
@@ -481,7 +485,8 @@ namespace UnityRemix
                 meshConverter,
                 cameraHandler,
                 configEnableSkybox,
-                configSkyboxMode
+                configSkyboxMode,
+                configSkyboxFiltering
             );
             skyboxManager.InitializeRemix(remixInterface, remixApiLock);
             skyboxManager.SetFrameCapture(frameCapture);
@@ -948,6 +953,7 @@ namespace UnityRemix
                 case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
                 case "UIOverlayFPS": return configUIOverlayFPS.Value;
                 case "SkyboxMode": return configSkyboxMode != null ? (int)configSkyboxMode.Value : 0;
+                case "SkyboxFiltering": return configSkyboxFiltering != null ? (int)configSkyboxFiltering.Value : 0;
                 default: return 0;
             }
         }
@@ -1006,6 +1012,13 @@ namespace UnityRemix
                     if (configSkyboxMode != null)
                     {
                         configSkyboxMode.Value = (SkyboxMode)value;
+                        skyboxManager?.ForceRecapture();
+                    }
+                    break;
+                case "SkyboxFiltering":
+                    if (configSkyboxFiltering != null)
+                    {
+                        configSkyboxFiltering.Value = (SkyboxFiltering)value;
                         skyboxManager?.ForceRecapture();
                     }
                     break;
