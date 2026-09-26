@@ -35,6 +35,7 @@ namespace UnityRemix
         private CameraClearFlags lastCapturedClearFlags = (CameraClearFlags)(-1);
         private Color lastCapturedBgColor = Color.clear;
         private bool needsCapture = true;
+        private int lastLoggedEmitVersion = -1;
 
         private string statusText = "Initializing...";
         public string StatusText => statusText;
@@ -136,6 +137,12 @@ namespace UnityRemix
             float farPlane = mainCam.farClipPlane > 10f ? mainCam.farClipPlane : 1000f;
             float targetDist = Mathf.Max(farPlane * 0.85f, 50f);
             float scale = targetDist * 2.0f; // Unit cube radius is 0.5 * scale = targetDist
+
+            if (lastLoggedEmitVersion != skyboxVersion)
+            {
+                lastLoggedEmitVersion = skyboxVersion;
+                logger?.LogInfo($"[RemixSkyboxManager] Skybox emit (v{skyboxVersion}): farPlane={farPlane:F1}, targetDist={targetDist:F1}, scale={scale:F1}");
+            }
 
             Quaternion skyRot = Quaternion.identity;
             if (lastCapturedSkyMat != null && lastCapturedSkyMat.HasProperty("_Rotation"))
@@ -321,14 +328,15 @@ namespace UnityRemix
                 skyCamGo.hideFlags = HideFlags.HideAndDontSave;
                 Camera skyCam = skyCamGo.AddComponent<Camera>();
                 skyCam.enabled = false;
-                // Unity skips the entire camera rendering pipeline if cullingMask is 0!
-                // Using non-zero mask ensures the skybox pass is properly executed.
-                skyCam.cullingMask = (1 << 16) | (1 << 31);
+                // Elevate the capture camera high into the sky (y=50000) away from all level geometry,
+                // ProBuilder meshes, and room colliders. Use layer 31 (SpecialLighting) so Unity's
+                // camera pipeline triggers without drawing any world objects.
+                skyCam.cullingMask = (1 << 31);
                 skyCam.clearFlags = CameraClearFlags.Skybox;
                 skyCam.nearClipPlane = 0.1f;
                 skyCam.farClipPlane = 1000f;
                 skyCam.backgroundColor = mainCam != null ? mainCam.backgroundColor : Color.black;
-                skyCam.transform.position = mainCam != null ? mainCam.transform.position : Vector3.zero;
+                skyCam.transform.position = new Vector3(0f, 50000f, 0f);
                 skyCam.transform.rotation = Quaternion.identity;
 
                 if (skyMat != null)
@@ -404,13 +412,10 @@ namespace UnityRemix
                     skyFaceTextures[i].SetPixels32(pixels);
                     skyFaceTextures[i].Apply(false, false);
 
-                    if (i == 0)
-                    {
-                        float avgR = (float)sumR / pixels.Length;
-                        float avgG = (float)sumG / pixels.Length;
-                        float avgB = (float)sumB / pixels.Length;
-                        logger?.LogInfo($"[RemixSkyboxManager] Face 0 stats: minRGB=({minR},{minG},{minB}), maxRGB=({maxR},{maxG},{maxB}), avgRGB=({avgR:F1},{avgG:F1},{avgB:F1}), gpuCopy={copiedViaGpu}");
-                    }
+                    float avgR = (float)sumR / pixels.Length;
+                    float avgG = (float)sumG / pixels.Length;
+                    float avgB = (float)sumB / pixels.Length;
+                    logger?.LogInfo($"[RemixSkyboxManager] Face {i} ({faceOrder[i]}): minRGB=({minR},{minG},{minB}), maxRGB=({maxR},{maxG},{maxB}), avgRGB=({avgR:F1},{avgG:F1},{avgB:F1}), gpuCopy={copiedViaGpu}");
                 }
 
                 Graphics.SetRenderTarget(null);
