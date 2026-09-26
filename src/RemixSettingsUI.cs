@@ -17,6 +17,7 @@ namespace UnityRemix
         // Cached state for ImGui controls (avoids per-frame alloc)
         private float _maxRenderDistance;
         private float _particleMaxDistance;
+        private bool _enableParticleDistanceCulling;
         private float _lightIntensityMultiplier;
         private int _targetFPS;
         private bool _enableGameGeometry;
@@ -85,41 +86,47 @@ namespace UnityRemix
             if (!RemixImGui.CollapsingHeader("Window", RemixImGui.TreeNodeFlags_DefaultOpen))
                 return;
 
-            if (RemixImGui.Checkbox("Single Window Mode", ref _singleWindow))
+            if (RemixImGui.Checkbox("Remove Game UI upon Remix Menu Opening", ref _hideUIOnRemixMenu))
+                _plugin.SetConfig("HideUIOnRemixMenu", _hideUIOnRemixMenu);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Hides the game UI overlay when the Alt+X Remix menu is opened, preventing HUD/crosshair from obstructing the Remix menu.\n(Updates live, no restart needed)");
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
+
+            if (RemixImGui.Checkbox("Single Window Mode (Requires Restart)", ref _singleWindow))
                 _plugin.SetConfig("SingleWindow", _singleWindow);
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Embed Remix inside the game window or blit framebuffer.\nRequires game restart to reinitialize window hierarchy.");
+                RemixImGui.SetTooltip("Embed Remix inside the game window or blit framebuffer.\nRequires game restart to take effect.");
+
+            RemixImGui.TextColored(1.0f, 0.8f, 0.2f, 1.0f, "Notice: Single Window options require game restart to take effect.");
 
             if (_singleWindow)
             {
                 RemixImGui.Indent();
-                if (RemixImGui.Checkbox("Disable In-Engine 3D Rendering", ref _disableInEngineRendering))
+                if (RemixImGui.Checkbox("Disable In-Engine 3D Rendering (Requires Restart)", ref _disableInEngineRendering))
                     _plugin.SetConfig("DisableInEngineRendering", _disableInEngineRendering);
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Stops Unity from rendering duplicate 3D scene rasterization passes.");
+                    RemixImGui.SetTooltip("Stops Unity from rendering duplicate 3D scene rasterization passes.\nRequires game restart.");
 
-                if (RemixImGui.Checkbox("Auto-Detect UI / HUD", ref _autoDetectUI))
+                if (RemixImGui.Checkbox("Auto-Detect UI / HUD (Requires Restart)", ref _autoDetectUI))
                     _plugin.SetConfig("AutoDetectUI", _autoDetectUI);
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Automatically detects UI/HUD cameras and Canvases, keeping them active.");
+                    RemixImGui.SetTooltip("Automatically detects UI/HUD cameras and Canvases, keeping them active.\nRequires game restart.");
 
-                if (RemixImGui.Checkbox("UI Overlay Window (Embedded Mode)", ref _singleWindowUIOverlay))
+                if (RemixImGui.Checkbox("UI Overlay Window (Embedded Mode) (Requires Restart)", ref _singleWindowUIOverlay))
                     _plugin.SetConfig("SingleWindowUIOverlay", _singleWindowUIOverlay);
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Renders detected UI with per-pixel alpha directly over the embedded Remix viewport.");
+                    RemixImGui.SetTooltip("Renders detected UI with per-pixel alpha directly over the embedded Remix viewport.\nRequires game restart.");
 
                 if (_singleWindowUIOverlay)
                 {
                     RemixImGui.Indent();
-                    if (RemixImGui.SliderInt("UI Overlay FPS", ref _uiOverlayFPS, 10, 300))
+                    if (RemixImGui.SliderInt("UI Overlay FPS (Requires Restart)", ref _uiOverlayFPS, 10, 300))
                         _plugin.SetConfig("UIOverlayFPS", _uiOverlayFPS);
                     if (RemixImGui.IsItemHovered())
-                        RemixImGui.SetTooltip("Target refresh rate for the transparent UI overlay window (10 to 300 FPS).");
-
-                    if (RemixImGui.Checkbox("Remove Game UI upon Remix Menu Opening", ref _hideUIOnRemixMenu))
-                        _plugin.SetConfig("HideUIOnRemixMenu", _hideUIOnRemixMenu);
-                    if (RemixImGui.IsItemHovered())
-                        RemixImGui.SetTooltip("Hides the game UI overlay when the Alt+X Remix menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
+                        RemixImGui.SetTooltip("Target refresh rate for the transparent UI overlay window (10 to 300 FPS).\nRequires game restart.");
                     RemixImGui.Unindent();
                 }
 
@@ -158,10 +165,20 @@ namespace UnityRemix
                 RemixImGui.Unindent();
             }
 
-            if (RemixImGui.SliderFloat("Particle Max Distance", ref _particleMaxDistance, 5f, 500f))
-                _plugin.SetConfig("ParticleMaxDistance", _particleMaxDistance);
+            if (RemixImGui.Checkbox("Particle Distance Culling", ref _enableParticleDistanceCulling))
+                _plugin.SetConfig("EnableParticleDistanceCulling", _enableParticleDistanceCulling);
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Maximum distance from camera to capture and render particle systems.\nCulls distant particles to maximize performance.");
+                RemixImGui.SetTooltip("Culls particle systems that are farther away than Particle Max Distance.");
+
+            if (_enableParticleDistanceCulling)
+            {
+                RemixImGui.Indent();
+                if (RemixImGui.SliderFloat("Particle Max Distance", ref _particleMaxDistance, 5f, 500f))
+                    _plugin.SetConfig("ParticleMaxDistance", _particleMaxDistance);
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Maximum distance from camera to capture and render particle systems.\nCulls distant particles to maximize performance.");
+                RemixImGui.Unindent();
+            }
 
             if (RemixImGui.Checkbox("Visibility Culling", ref _enableVisibilityCulling))
                 _plugin.SetConfig("UseVisibilityCulling", _enableVisibilityCulling);
@@ -376,7 +393,7 @@ namespace UnityRemix
             
             // Engine FPS Limit Combo
             string previewFps = _engineFPSLimit == 0 ? "Uncapped" : $"{_engineFPSLimit} FPS";
-            if (RemixImGui.BeginCombo("Engine FPS Limit", previewFps))
+            if (RemixImGui.BeginCombo("Engine FPS Limit (Requires Restart)", previewFps))
             {
                 int[] fpsOptions = { 0, 30, 60, 90, 120 };
                 string[] fpsLabels = { "Uncapped", "30 FPS (Heavy Scenes / Best Stability)", "60 FPS (Balanced / Recommended)", "90 FPS", "120 FPS" };
@@ -392,7 +409,7 @@ namespace UnityRemix
                 RemixImGui.EndCombo();
             }
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Caps Unity engine update rate in Single Window mode.\nRemix continues rendering at full speed (e.g. 150-250+ FPS).\nLowering this (30 or 60 FPS) prevents game slowdowns and CPU bottlenecks.");
+                RemixImGui.SetTooltip("Caps Unity engine update rate in Single Window mode.\nRemix continues rendering at full speed (e.g. 150-250+ FPS).\nLowering this (30 or 60 FPS) prevents game slowdowns and CPU bottlenecks.\nRequires game restart to take effect.");
 
             if (RemixImGui.Checkbox("Prevent Slow-Motion", ref _preventSlowMotion))
                 _plugin.SetConfig("PreventSlowMotion", _preventSlowMotion);
@@ -437,6 +454,7 @@ namespace UnityRemix
             _enableDistanceCulling = _plugin.GetConfigBool("EnableDistanceCulling");
             _maxRenderDistance = _plugin.GetConfigFloat("MaxRenderDistance");
             _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
+            _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");
             _sceneScanActiveOnly = _plugin.GetConfigBool("ActiveRenderersOnly");

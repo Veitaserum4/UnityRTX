@@ -45,6 +45,7 @@ namespace UnityRemix
         private int sceneRefreshCounter = 0;
 
         private RemixCameraBlitter currentCameraBlitter;
+        private bool isSingleWindowActive = false;
 
         public RemixUIDetector UIDetector => uiDetector;
         public static bool IsSingleWindowUIActive { get; private set; }
@@ -75,6 +76,7 @@ namespace UnityRemix
             this.configUIOverlayFPS = uiOverlayFPS;
             this.configHideUIOnRemixMenu = hideUIOnRemixMenu;
             this.configUIOverlayClearBlack = uiOverlayClearBlack;
+            this.isSingleWindowActive = singleWindow != null && singleWindow.Value;
 
             uiDetector = new RemixUIDetector(
                 logger,
@@ -109,7 +111,7 @@ namespace UnityRemix
 
         private void UpdateSingleWindowUIActive()
         {
-            bool isSingle = configSingleWindow != null && configSingleWindow.Value;
+            bool isSingle = isSingleWindowActive;
             bool isEmbedded = configSingleWindowMethod != null && configSingleWindowMethod.Value == SingleWindowMethod.Embedded;
             IsSingleWindowUIActive = isSingle && isEmbedded;
         }
@@ -135,7 +137,7 @@ namespace UnityRemix
         {
             if (configSingleWindow == null) return;
 
-            bool isSingle = configSingleWindow.Value;
+            bool isSingle = isSingleWindowActive;
 
             using (RemixTracy.Zone("Presenter_Update"))
             {

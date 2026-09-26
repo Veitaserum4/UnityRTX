@@ -27,6 +27,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configUseDistanceCulling;
         private ConfigEntry<float> configMaxRenderDistance;
         private ConfigEntry<float> configParticleMaxDistance;
+        private ConfigEntry<bool> configEnableParticleDistanceCulling;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
         private ConfigEntry<int> configDebugLogInterval;
@@ -65,6 +66,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configPreventSlowMotion;
         private ConfigEntry<int> configStaticMeshFrameSkip;
         private int lastAppliedEngineFPSLimit = -1;
+        private bool initialSingleWindowEnabled = false;
         
         public static ManualLogSource LogSource { get; private set; }
         private RemixAPI.remixapi_Interface remixInterface;
@@ -172,6 +174,9 @@ namespace UnityRemix
             configParticleMaxDistance = Config.Bind("Rendering", "ParticleMaxDistance", 60f,
                 new ConfigDescription("Maximum distance to capture and render particle systems (Unity units).",
                     new AcceptableValueRange<float>(5f, 500f)));
+
+            configEnableParticleDistanceCulling = Config.Bind("Rendering", "EnableParticleDistanceCulling", false,
+                "Enable distance-based culling for particle systems. When enabled, particle systems beyond ParticleMaxDistance are not rendered.");
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
@@ -272,6 +277,7 @@ namespace UnityRemix
                 new ConfigDescription("Reuses cached static mesh instances across N frames instead of iterating thousands of renderers every frame. 1 = every frame (no skip), 2 = skip every other frame (50% CPU savings), etc.",
                     new AcceptableValueRange<int>(1, 4)));
 
+            initialSingleWindowEnabled = configSingleWindow.Value;
             LogSource.LogInfo("Configuration loaded:");
             LogSource.LogInfo($"  Camera Name: '{configCameraName.Value}' (empty = auto-detect)");
             LogSource.LogInfo($"  Camera Tag: '{configCameraTag.Value}'");
@@ -441,6 +447,7 @@ namespace UnityRemix
                 configPersistDisabledRenderers,
                 configStaticMeshFrameSkip,
                 configCaptureParticles,
+                configEnableParticleDistanceCulling,
                 configParticleMaxDistance
             );
             frameCapture.LoadDisabledLayersString(configDisabledLayers.Value);
@@ -546,7 +553,7 @@ namespace UnityRemix
             frameCount++;
 
             // Engine frame throttling and DeltaTime slow-motion prevention
-            if (configSingleWindow.Value)
+            if (initialSingleWindowEnabled)
             {
                 if (configEngineFPSLimit.Value > 0)
                 {
@@ -843,6 +850,7 @@ namespace UnityRemix
                 case "CaptureStaticMeshes": return configCaptureStaticMeshes.Value;
                 case "CaptureSkinnedMeshes": return configCaptureSkinnedMeshes.Value;
                 case "CaptureParticles": return configCaptureParticles.Value;
+                case "EnableParticleDistanceCulling": return configEnableParticleDistanceCulling.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
                 case "CaptureTextures": return configCaptureTextures.Value;
                 case "CaptureMaterials": return configCaptureMaterials.Value;
@@ -920,6 +928,7 @@ namespace UnityRemix
                 case "CaptureStaticMeshes": configCaptureStaticMeshes.Value = value; break;
                 case "CaptureSkinnedMeshes": configCaptureSkinnedMeshes.Value = value; break;
                 case "CaptureParticles": configCaptureParticles.Value = value; break;
+                case "EnableParticleDistanceCulling": configEnableParticleDistanceCulling.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;
                 case "CaptureTextures": configCaptureTextures.Value = value; break;
                 case "CaptureMaterials": configCaptureMaterials.Value = value; break;
