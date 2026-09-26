@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -51,7 +53,6 @@ namespace UnityRemix
         
         // Single Window settings
         private ConfigEntry<bool> configSingleWindow;
-        private ConfigEntry<SingleWindowMethod> configSingleWindowMethod;
         private ConfigEntry<bool> configDisableInEngineRendering;
         private ConfigEntry<bool> configAutoDetectUI;
         private ConfigEntry<string> configUICameraNames;
@@ -236,8 +237,21 @@ namespace UnityRemix
             configSingleWindow = Config.Bind("Window", "SingleWindow", false,
                 "Render RTX Remix inside a single window instead of separate game and Remix windows.");
 
-            configSingleWindowMethod = Config.Bind("Window", "SingleWindowMethod", SingleWindowMethod.Embedded,
-                "Method used for single window mode: Embedded (zero performance loss, native child window) or Copy (blits framebuffer into engine).");
+            try
+            {
+                var orphanedSingleWindowMethod = new ConfigDefinition("Window", "SingleWindowMethod");
+                if (Config.ContainsKey(orphanedSingleWindowMethod))
+                {
+                    Config.Remove(orphanedSingleWindowMethod);
+                }
+                var orphanedEntriesProp = typeof(ConfigFile).GetProperty("OrphanedEntries", BindingFlags.NonPublic | BindingFlags.Instance);
+                if (orphanedEntriesProp?.GetValue(Config) is Dictionary<ConfigDefinition, string> orphanedEntries && orphanedEntries.ContainsKey(orphanedSingleWindowMethod))
+                {
+                    orphanedEntries.Remove(orphanedSingleWindowMethod);
+                    Config.Save();
+                }
+            }
+            catch { }
 
             configDisableInEngineRendering = Config.Bind("Window", "DisableInEngineRendering", true,
                 "Suppresses Unity's 3D scene rasterization passes when single window mode is enabled, eliminating duplicate rendering work.");
@@ -278,7 +292,7 @@ namespace UnityRemix
             LogSource.LogInfo($"  Camera Tag: '{configCameraTag.Value}'");
             LogSource.LogInfo($"  Game Geometry: {configUseGameGeometry.Value}");
             LogSource.LogInfo($"  Target FPS: {(configTargetFPS.Value == 0 ? "Uncapped" : configTargetFPS.Value.ToString())}");
-            LogSource.LogInfo($"  Single Window: {configSingleWindow.Value} (Method: {configSingleWindowMethod.Value}, SuppressInEngine: {configDisableInEngineRendering.Value}, AutoDetectUI: {configAutoDetectUI.Value}, EngineFPSLimit: {configEngineFPSLimit.Value})");
+            LogSource.LogInfo($"  Single Window: {configSingleWindow.Value} (SuppressInEngine: {configDisableInEngineRendering.Value}, AutoDetectUI: {configAutoDetectUI.Value}, EngineFPSLimit: {configEngineFPSLimit.Value})");
         }
         
         private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
@@ -373,7 +387,7 @@ namespace UnityRemix
             // Create all components with dependencies
             textureCategoryManager = new TextureCategoryManager();
             
-            windowManager = new RemixWindowManager(LogSource, remixInterface, configSingleWindow, configSingleWindowMethod);
+            windowManager = new RemixWindowManager(LogSource, remixInterface, configSingleWindow);
             
             cameraHandler = new RemixCameraHandler(
                 LogSource,
@@ -389,7 +403,6 @@ namespace UnityRemix
                 windowManager,
                 cameraHandler,
                 configSingleWindow,
-                configSingleWindowMethod,
                 configDisableInEngineRendering,
                 configAutoDetectUI,
                 configUICameraNames,
@@ -813,7 +826,6 @@ namespace UnityRemix
             {
                 case "CameraName": return configCameraName.Value;
                 case "DisabledLayers": return configDisabledLayers.Value;
-                case "SingleWindowMethod": return configSingleWindowMethod.Value.ToString();
                 case "UICameraNames": return configUICameraNames.Value;
                 default: return "";
             }
@@ -826,10 +838,6 @@ namespace UnityRemix
                 case "CameraName": configCameraName.Value = value; break;
                 case "DisabledLayers": configDisabledLayers.Value = value; break;
                 case "UICameraNames": configUICameraNames.Value = value; break;
-                case "SingleWindowMethod":
-                    if (Enum.TryParse<SingleWindowMethod>(value, true, out var method))
-                        configSingleWindowMethod.Value = method;
-                    break;
             }
         }
 

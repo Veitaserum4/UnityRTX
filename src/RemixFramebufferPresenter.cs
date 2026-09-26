@@ -8,12 +8,6 @@ using UnityEngine;
 
 namespace UnityRemix
 {
-    public enum SingleWindowMethod
-    {
-        Embedded = 0,
-        Copy = 1
-    }
-
     /// <summary>
     /// Coordinates Single-Window mode presentation and in-engine rendering suppression.
     /// Uses RemixUIDetector to automatically preserve and render UI/HUD cameras and Canvases on top
@@ -29,7 +23,6 @@ namespace UnityRemix
 
         // Config entries
         private ConfigEntry<bool> configSingleWindow;
-        private ConfigEntry<SingleWindowMethod> configSingleWindowMethod;
         private ConfigEntry<bool> configDisableInEngineRendering;
         private ConfigEntry<bool> configAutoDetectUI;
         private ConfigEntry<string> configUICameraNames;
@@ -44,7 +37,6 @@ namespace UnityRemix
         private bool inEngineRenderingSuppressed = false;
         private int sceneRefreshCounter = 0;
 
-        private RemixCameraBlitter currentCameraBlitter;
         private bool isSingleWindowActive = false;
 
         public RemixUIDetector UIDetector => uiDetector;
@@ -55,7 +47,6 @@ namespace UnityRemix
             RemixWindowManager windowManager,
             RemixCameraHandler cameraHandler,
             ConfigEntry<bool> singleWindow,
-            ConfigEntry<SingleWindowMethod> singleWindowMethod,
             ConfigEntry<bool> disableInEngineRendering,
             ConfigEntry<bool> autoDetectUI,
             ConfigEntry<string> uiCameraNames,
@@ -68,7 +59,6 @@ namespace UnityRemix
             this.windowManager = windowManager;
             this.cameraHandler = cameraHandler;
             this.configSingleWindow = singleWindow;
-            this.configSingleWindowMethod = singleWindowMethod;
             this.configDisableInEngineRendering = disableInEngineRendering;
             this.configAutoDetectUI = autoDetectUI;
             this.configUICameraNames = uiCameraNames;
@@ -87,7 +77,7 @@ namespace UnityRemix
 
             UpdateSingleWindowUIActive();
             Application.runInBackground = true;
-            logger?.LogInfo($"[RemixFramebufferPresenter] Initialized (SingleWindow: {singleWindow.Value}, Method: {singleWindowMethod.Value}, SuppressInEngine: {disableInEngineRendering.Value}, AutoDetectUI: {autoDetectUI.Value})");
+            logger?.LogInfo($"[RemixFramebufferPresenter] Initialized (SingleWindow: {singleWindow.Value}, SuppressInEngine: {disableInEngineRendering.Value}, AutoDetectUI: {autoDetectUI.Value})");
         }
 
         [DllImport("user32.dll")]
@@ -111,9 +101,7 @@ namespace UnityRemix
 
         private void UpdateSingleWindowUIActive()
         {
-            bool isSingle = isSingleWindowActive;
-            bool isEmbedded = configSingleWindowMethod != null && configSingleWindowMethod.Value == SingleWindowMethod.Embedded;
-            IsSingleWindowUIActive = isSingle && isEmbedded;
+            IsSingleWindowUIActive = isSingleWindowActive;
         }
 
         private int lastCameraCount = -1;
@@ -148,7 +136,7 @@ namespace UnityRemix
                     Camera worldCam = cameraHandler?.CurrentCamera ?? Camera.main;
 
                     // Ensure UI Presentation window is active if missing
-                    if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded && uiOverlay == null)
+                    if (uiOverlay == null)
                     {
                         SetupEmbeddedUIOverlay();
                     }
@@ -207,14 +195,7 @@ namespace UnityRemix
                             RestoreCameraSuppression();
 
                         // 3. Configure UI presentation with newly detected UI cameras
-                        if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded)
-                        {
-                            SetupEmbeddedUIOverlay();
-                        }
-                        else if (configSingleWindowMethod.Value == SingleWindowMethod.Copy)
-                        {
-                            SetupCopyModeBlitter(worldCam);
-                        }
+                        SetupEmbeddedUIOverlay();
 
                         // 4. Route overlay canvases to dedicated UI camera
                         if (uiDetector.UICameras.Count > 0)
@@ -238,7 +219,7 @@ namespace UnityRemix
                     }
 
                     // Sync embedded window bounds
-                    if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded && windowManager != null)
+                    if (windowManager != null)
                     {
                         windowManager.SyncWindowBounds();
                     }
@@ -272,11 +253,11 @@ namespace UnityRemix
             RemixWindowManager.SyncUIStateWithRemix(logger);
 
             // Determine whether cursor should be hidden (in-game gameplay) or visible (menus/Remix UI/tabbed out)
-            bool shouldHide = Application.isFocused && !RemixWindowManager.IsRemixUIOpen && (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked);
+            bool shouldHide = Application.isFocused && (!isSingleWindowActive || !RemixWindowManager.IsRemixUIOpen) && (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked);
             RemixWindowManager.UpdateCursorVisibility(shouldHide);
 
-            // While Remix UI is open, guarantee cursor is unlocked and visible
-            if (RemixWindowManager.IsRemixUIOpen)
+            // While Remix UI is open in Single Window mode, guarantee cursor is unlocked and visible
+            if (isSingleWindowActive && RemixWindowManager.IsRemixUIOpen)
             {
                 Cursor.lockState = CursorLockMode.None;
                 Cursor.visible = true;
@@ -303,9 +284,7 @@ namespace UnityRemix
 
         public void OnEndOfFrame()
         {
-            if (configSingleWindow != null && configSingleWindow.Value &&
-                configSingleWindowMethod.Value == SingleWindowMethod.Embedded &&
-                uiOverlay != null)
+            if (isSingleWindowActive && uiOverlay != null)
             {
                 uiOverlay.UpdateOverlay();
             }
@@ -351,10 +330,7 @@ namespace UnityRemix
         {
             Camera worldCam = cameraHandler?.CurrentCamera ?? Camera.main;
             ApplyCameraSuppression(worldCam);
-            if (configSingleWindowMethod.Value == SingleWindowMethod.Embedded)
-                SetupEmbeddedUIOverlay();
-            else if (configSingleWindowMethod.Value == SingleWindowMethod.Copy)
-                SetupCopyModeBlitter(worldCam);
+            SetupEmbeddedUIOverlay();
         }
 
         private void SetupEmbeddedUIOverlay()
@@ -384,21 +360,6 @@ namespace UnityRemix
                 uiDetector.RouteVideoPlayersToCamera(targetCam);
                 lastCanvasCount = UnityEngine.Object.FindObjectsOfType<Canvas>(true).Length;
             }
-        }
-
-        private void SetupCopyModeBlitter(Camera worldCam)
-        {
-            if (worldCam == null) worldCam = Camera.main;
-            if (worldCam == null) return;
-
-            currentCameraBlitter = worldCam.GetComponent<RemixCameraBlitter>();
-            if (currentCameraBlitter == null)
-            {
-                currentCameraBlitter = worldCam.gameObject.AddComponent<RemixCameraBlitter>();
-                currentCameraBlitter.Initialize(windowManager, logger);
-            }
-
-            currentCameraBlitter.SetBlitEnabled(true);
         }
 
         /// <summary>
@@ -438,11 +399,6 @@ namespace UnityRemix
             }
 
             uiDetector?.RestoreCanvases();
-
-            if (currentCameraBlitter != null)
-            {
-                currentCameraBlitter.SetBlitEnabled(false);
-            }
         }
 
         public void RestoreInEngineRendering()
