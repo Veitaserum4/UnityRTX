@@ -354,7 +354,7 @@ namespace UnityRemix
                     if (!StaticGeometryDedupe.TryClaimVisibleInstance(instance.rendererInstanceId, instance.dedupeKey, claimedRendererIds, claimedStaticKeys))
                         continue;
 
-                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue);
+                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags);
                     objectPickingValue++;
                 }
             }

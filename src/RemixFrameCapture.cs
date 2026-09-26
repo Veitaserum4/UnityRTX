@@ -20,6 +20,9 @@ namespace UnityRemix
         private readonly RemixCameraHandler cameraHandler;
         private readonly RemixMeshConverter meshConverter;
         private readonly RemixMaterialManager materialManager;
+        private RemixSkyboxManager skyboxManager;
+        
+        public void SetSkyboxManager(RemixSkyboxManager sm) => skyboxManager = sm;
         
         private readonly ConfigEntry<bool> configUseDistanceCulling;
         private readonly ConfigEntry<float> configMaxRenderDistance;
@@ -214,6 +217,20 @@ namespace UnityRemix
         public int PersistentStaticCount { get { lock (persistentStaticLock) return persistentStaticInstances.Count; } }
         public int CachedStaticRendererCount => cachedRenderers.Count;
         public int CachedSkinnedRendererCount => cachedSkinnedRenderers.Count;
+
+        public void QueuePriorityMesh(PreparedMeshData data)
+        {
+            if (data == null) return;
+            ulong meshKey = data.MeshKey != 0 ? data.MeshKey : (ulong)(uint)data.MeshId;
+            lock (meshQueueLock)
+            {
+                if (!meshConverter.IsMeshCached(meshKey) && !meshesInQueue.Contains(meshKey))
+                {
+                    priorityMeshesToCreate.Enqueue(data);
+                    meshesInQueue.Add(meshKey);
+                }
+            }
+        }
 
         private bool ShouldPreferSceneScan(MeshRenderer renderer, Mesh mesh)
         {
@@ -569,6 +586,7 @@ namespace UnityRemix
             public Matrix4x4 localToWorld;
             public int rendererInstanceId;
             public StaticGeometryKey dedupeKey;
+            public uint categoryFlags;
         }
         
         public struct SkinnedMeshData
@@ -1030,11 +1048,20 @@ namespace UnityRemix
                     farPlane = mainCam.farClipPlane,
                     valid = true
                 };
+
+                // Update skybox state on main thread
+                skyboxManager?.UpdateSkybox(mainCam, frameCount);
             }
             
             // Debug toggle check
             if (!configCaptureStaticMeshes.Value)
+            {
+                if (mainCam != null)
+                {
+                    skyboxManager?.EmitSkyboxInstance(state, mainCam);
+                }
                 return;
+            }
 
             // Static mesh frame skipping: reuse cached static instances if enabled and available
             int frameSkip = configStaticMeshFrameSkip != null ? configStaticMeshFrameSkip.Value : 1;
@@ -1044,6 +1071,7 @@ namespace UnityRemix
                 if (mainCam != null)
                 {
                     CaptureCameraViewModelMeshes(state, mainCam);
+                    skyboxManager?.EmitSkyboxInstance(state, mainCam);
                 }
                 return;
             }
@@ -1464,6 +1492,12 @@ namespace UnityRemix
                 int persistentCount;
                 lock (persistentStaticLock) { persistentCount = persistentStaticInstances.Count; }
                 logger.LogInfo($"[StaticCapture] frame={frameCount} drawn={totalDrawn} persistent={persistentDrawn} total={persistentCount} queued={meshesToCreate.Count} failedMeshes={failedMeshKeys.Count}");
+            }
+
+            // Emit skybox instance into frame state
+            if (mainCam != null)
+            {
+                skyboxManager?.EmitSkyboxInstance(state, mainCam);
             }
         }
 

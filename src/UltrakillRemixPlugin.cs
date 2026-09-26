@@ -30,6 +30,7 @@ namespace UnityRemix
         private ConfigEntry<float> configMaxRenderDistance;
         private ConfigEntry<float> configParticleMaxDistance;
         private ConfigEntry<bool> configEnableParticleDistanceCulling;
+        private ConfigEntry<bool> configEnableSkybox;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
         private ConfigEntry<int> configDebugLogInterval;
@@ -88,6 +89,7 @@ namespace UnityRemix
         private SceneMeshScanner sceneMeshScanner;
         private RemixSettingsUI settingsUI;
         private RemixDebugHUD debugHUD;
+        private RemixSkyboxManager skyboxManager;
         
         private int frameCount = 0;
         private static bool isQuitting = false;
@@ -178,6 +180,9 @@ namespace UnityRemix
 
             configEnableParticleDistanceCulling = Config.Bind("Rendering", "EnableParticleDistanceCulling", false,
                 "Enable distance-based culling for particle systems. When enabled, particle systems beyond ParticleMaxDistance are not rendered.");
+            
+            configEnableSkybox = Config.Bind("Rendering", "EnableSkybox", true,
+                "Automatically detect and render skyboxes in RTX Remix.");
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
@@ -305,6 +310,7 @@ namespace UnityRemix
             LogSource.LogInfo($"Scene loaded: {scene.name}, mode: {mode}");
             
             framebufferPresenter?.OnSceneLoaded(scene);
+            skyboxManager?.OnSceneLoaded(scene);
 
             // Reset camera tracking
             cameraHandler?.ResetTracking();
@@ -464,6 +470,16 @@ namespace UnityRemix
                 configParticleMaxDistance
             );
             frameCapture.LoadDisabledLayersString(configDisabledLayers.Value);
+            
+            skyboxManager = new RemixSkyboxManager(
+                LogSource,
+                materialManager,
+                meshConverter,
+                cameraHandler,
+                configEnableSkybox
+            );
+            skyboxManager.SetFrameCapture(frameCapture);
+            frameCapture.SetSkyboxManager(skyboxManager);
             
             renderThread = new RemixRenderThread(
                 LogSource,
@@ -838,6 +854,7 @@ namespace UnityRemix
             framebufferPresenter?.Cleanup();
             materialManager?.Cleanup();
             meshConverter?.Cleanup();
+            skyboxManager?.Cleanup();
             frameCapture?.Cleanup();
             lightConverter?.ClearCache();
             windowManager?.DestroyRemixWindow();
@@ -858,6 +875,7 @@ namespace UnityRemix
             {
                 case "EnableGameGeometry": return configUseGameGeometry.Value;
                 case "EnableDistanceCulling": return configUseDistanceCulling.Value;
+                case "EnableSkybox": return configEnableSkybox.Value;
                 case "UseVisibilityCulling": return configUseVisibilityCulling.Value;
                 case "EnableLights": return configEnableLights.Value;
                 case "CaptureStaticMeshes": return configCaptureStaticMeshes.Value;
@@ -931,6 +949,7 @@ namespace UnityRemix
             {
                 case "EnableGameGeometry": configUseGameGeometry.Value = value; break;
                 case "EnableDistanceCulling": configUseDistanceCulling.Value = value; break;
+                case "EnableSkybox": configEnableSkybox.Value = value; break;
                 case "UseVisibilityCulling": configUseVisibilityCulling.Value = value; break;
                 case "EnableLights": configEnableLights.Value = value; break;
                 case "CaptureStaticMeshes": configCaptureStaticMeshes.Value = value; break;
@@ -992,6 +1011,8 @@ namespace UnityRemix
         public RemixLightConverter LightConverter => lightConverter;
 
         public RemixFramebufferPresenter FramebufferPresenter => framebufferPresenter;
+
+        public RemixSkyboxManager SkyboxManager => skyboxManager;
 
         #endregion
     }
