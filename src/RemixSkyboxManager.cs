@@ -20,6 +20,7 @@ namespace UnityRemix
         private readonly ConfigEntry<bool> configEnableSkybox;
 
         private RemixFrameCapture frameCapture;
+        private RemixFramebufferPresenter framebufferPresenter;
 
         private Mesh skyboxMesh;
         private Material[] skyMaterials = new Material[6];
@@ -57,6 +58,11 @@ namespace UnityRemix
             this.frameCapture = capture;
         }
 
+        public void SetFramebufferPresenter(RemixFramebufferPresenter presenter)
+        {
+            this.framebufferPresenter = presenter;
+        }
+
         public void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene)
         {
             needsCapture = true;
@@ -90,7 +96,16 @@ namespace UnityRemix
                 currentSkyMat = camSkyboxComp.material;
             }
 
-            CameraClearFlags curFlags = mainCam.clearFlags;
+            CameraClearFlags curFlags = framebufferPresenter != null
+                ? framebufferPresenter.GetOriginalClearFlags(mainCam)
+                : mainCam.clearFlags;
+
+            // If the camera is suppressed (Nothing) but a sky material exists, treat as Skybox
+            if (curFlags == CameraClearFlags.Nothing && currentSkyMat != null)
+            {
+                curFlags = CameraClearFlags.Skybox;
+            }
+
             Color curBg = mainCam.backgroundColor;
 
             bool matChanged = (currentSkyMat != lastCapturedSkyMat);
@@ -146,7 +161,7 @@ namespace UnityRemix
                 localToWorld = l2w,
                 rendererInstanceId = 0,
                 dedupeKey = default,
-                categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY
+                categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_IGNORE_LIGHTS
             });
         }
 
@@ -158,7 +173,7 @@ namespace UnityRemix
                 EnsureSkyboxCubeMesh();
 
                 bool capturedCubemap = false;
-                if (skyMat != null && clearFlags == CameraClearFlags.Skybox)
+                if (skyMat != null)
                 {
                     capturedCubemap = CaptureCubemapTextures(mainCam, skyMat);
                 }
@@ -251,7 +266,7 @@ namespace UnityRemix
 
                 if (capturedCubemap && skyMat != null)
                 {
-                    statusText = $"{skyMat.shader.name} (Cubemap Baked, v{skyboxVersion})";
+                    statusText = $"{skyMat.name} ({skyMat.shader?.name}, v{skyboxVersion})";
                 }
                 else
                 {
@@ -270,10 +285,31 @@ namespace UnityRemix
         private bool CaptureCubemapTextures(Camera mainCam, Material skyMat)
         {
             RenderTexture rt = null;
+            RenderTexture temp2D = null;
             GameObject skyCamGo = null;
 
             try
             {
+                string mainTexInfo = "none";
+                if (skyMat.mainTexture != null)
+                {
+                    var t = skyMat.mainTexture;
+                    mainTexInfo = $"{t.name} ({t.width}x{t.height}, {t.GetType().Name})";
+                }
+                logger?.LogInfo($"[RemixSkyboxManager] Capturing skyMat: '{skyMat.name}', shader='{skyMat.shader?.name}', mainTexture={mainTexInfo}");
+
+                // If material directly has a readable Cubemap texture, extract faces directly
+                if (skyMat.HasProperty("_Tex"))
+                {
+                    var cubemapTex = skyMat.GetTexture("_Tex") as Cubemap;
+                    if (cubemapTex != null)
+                    {
+                        logger?.LogInfo($"[RemixSkyboxManager] Found direct Cubemap '{cubemapTex.name}' ({cubemapTex.width}x{cubemapTex.height}) - extracting faces directly.");
+                        if (ExtractFromDirectCubemap(cubemapTex))
+                            return true;
+                    }
+                }
+
                 const int resolution = 512;
                 rt = new RenderTexture(resolution, resolution, 16, RenderTextureFormat.ARGB32);
                 rt.dimension = UnityEngine.Rendering.TextureDimension.Cube;
@@ -285,10 +321,13 @@ namespace UnityRemix
                 skyCamGo.hideFlags = HideFlags.HideAndDontSave;
                 Camera skyCam = skyCamGo.AddComponent<Camera>();
                 skyCam.enabled = false;
-                skyCam.cullingMask = 0; // Draw only the skybox background
+                // Unity skips the entire camera rendering pipeline if cullingMask is 0!
+                // Using non-zero mask ensures the skybox pass is properly executed.
+                skyCam.cullingMask = (1 << 16) | (1 << 31);
                 skyCam.clearFlags = CameraClearFlags.Skybox;
                 skyCam.nearClipPlane = 0.1f;
-                skyCam.farClipPlane = 100f;
+                skyCam.farClipPlane = 1000f;
+                skyCam.backgroundColor = mainCam != null ? mainCam.backgroundColor : Color.black;
                 skyCam.transform.position = mainCam != null ? mainCam.transform.position : Vector3.zero;
                 skyCam.transform.rotation = Quaternion.identity;
 
@@ -322,9 +361,10 @@ namespace UnityRemix
                     CubemapFace.NegativeY
                 };
 
+                temp2D = RenderTexture.GetTemporary(resolution, resolution, 0, RenderTextureFormat.ARGB32);
+
                 for (int i = 0; i < 6; i++)
                 {
-                    Graphics.SetRenderTarget(rt, 0, faceOrder[i]);
                     if (skyFaceTextures[i] == null || skyFaceTextures[i].width != resolution)
                     {
                         if (skyFaceTextures[i] != null) UnityEngine.Object.Destroy(skyFaceTextures[i]);
@@ -334,16 +374,43 @@ namespace UnityRemix
                         skyFaceTextures[i].wrapMode = TextureWrapMode.Clamp;
                     }
 
-                    skyFaceTextures[i].ReadPixels(new Rect(0, 0, resolution, resolution), 0, 0);
+                    bool copiedViaGpu = false;
+                    try
+                    {
+                        Graphics.CopyTexture(rt, (int)faceOrder[i], 0, temp2D, 0, 0);
+                        Graphics.SetRenderTarget(temp2D);
+                        skyFaceTextures[i].ReadPixels(new Rect(0, 0, resolution, resolution), 0, 0);
+                        copiedViaGpu = true;
+                    }
+                    catch
+                    {
+                        Graphics.SetRenderTarget(rt, 0, faceOrder[i]);
+                        skyFaceTextures[i].ReadPixels(new Rect(0, 0, resolution, resolution), 0, 0);
+                    }
 
-                    // Ensure alpha is 255 for all pixels so Remix does not treat it as cutout transparency
+                    // Ensure alpha is 255 and gather stats
                     Color32[] pixels = skyFaceTextures[i].GetPixels32();
+                    byte minR = 255, maxR = 0, minG = 255, maxG = 0, minB = 255, maxB = 0;
+                    long sumR = 0, sumG = 0, sumB = 0;
                     for (int p = 0; p < pixels.Length; p++)
                     {
                         pixels[p].a = 255;
+                        byte r = pixels[p].r, g = pixels[p].g, b = pixels[p].b;
+                        if (r < minR) minR = r; if (r > maxR) maxR = r;
+                        if (g < minG) minG = g; if (g > maxG) maxG = g;
+                        if (b < minB) minB = b; if (b > maxB) maxB = b;
+                        sumR += r; sumG += g; sumB += b;
                     }
                     skyFaceTextures[i].SetPixels32(pixels);
                     skyFaceTextures[i].Apply(false, false);
+
+                    if (i == 0)
+                    {
+                        float avgR = (float)sumR / pixels.Length;
+                        float avgG = (float)sumG / pixels.Length;
+                        float avgB = (float)sumB / pixels.Length;
+                        logger?.LogInfo($"[RemixSkyboxManager] Face 0 stats: minRGB=({minR},{minG},{minB}), maxRGB=({maxR},{maxG},{maxB}), avgRGB=({avgR:F1},{avgG:F1},{avgB:F1}), gpuCopy={copiedViaGpu}");
+                    }
                 }
 
                 Graphics.SetRenderTarget(null);
@@ -357,6 +424,10 @@ namespace UnityRemix
             finally
             {
                 Graphics.SetRenderTarget(null);
+                if (temp2D != null)
+                {
+                    RenderTexture.ReleaseTemporary(temp2D);
+                }
                 if (rt != null)
                 {
                     rt.Release();
@@ -366,6 +437,52 @@ namespace UnityRemix
                 {
                     UnityEngine.Object.Destroy(skyCamGo);
                 }
+            }
+        }
+
+        private bool ExtractFromDirectCubemap(Cubemap cubemap)
+        {
+            try
+            {
+                int res = cubemap.width;
+                CubemapFace[] faceOrder = new CubemapFace[]
+                {
+                    CubemapFace.PositiveZ,
+                    CubemapFace.NegativeZ,
+                    CubemapFace.NegativeX,
+                    CubemapFace.PositiveX,
+                    CubemapFace.PositiveY,
+                    CubemapFace.NegativeY
+                };
+
+                for (int i = 0; i < 6; i++)
+                {
+                    if (skyFaceTextures[i] == null || skyFaceTextures[i].width != res)
+                    {
+                        if (skyFaceTextures[i] != null) UnityEngine.Object.Destroy(skyFaceTextures[i]);
+                        skyFaceTextures[i] = new Texture2D(res, res, TextureFormat.RGBA32, false);
+                        skyFaceTextures[i].name = $"RemixSkyboxFace_{faceOrder[i]}";
+                        skyFaceTextures[i].filterMode = FilterMode.Bilinear;
+                        skyFaceTextures[i].wrapMode = TextureWrapMode.Clamp;
+                    }
+
+                    Color[] facePixels = cubemap.GetPixels(faceOrder[i]);
+                    Color32[] c32 = new Color32[facePixels.Length];
+                    for (int p = 0; p < facePixels.Length; p++)
+                    {
+                        c32[p] = (Color32)facePixels[p];
+                        c32[p].a = 255;
+                    }
+                    skyFaceTextures[i].SetPixels32(c32);
+                    skyFaceTextures[i].Apply(false, false);
+                }
+                logger?.LogInfo($"[RemixSkyboxManager] Extracted 6 faces directly from Cubemap '{cubemap.name}' ({res}x{res})");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[RemixSkyboxManager] Direct cubemap extraction failed (unreadable?): {ex.Message}");
+                return false;
             }
         }
 

@@ -389,6 +389,19 @@ namespace UnityRemix
             }
         }
 
+        /// <summary>
+        /// Returns the original clear flags of the camera before in-engine suppression was applied,
+        /// or the current clearFlags if unsuppressed.
+        /// </summary>
+        public CameraClearFlags GetOriginalClearFlags(Camera cam)
+        {
+            if (cam != null && originalClearFlags.TryGetValue(cam, out var flags))
+            {
+                return flags;
+            }
+            return cam != null ? cam.clearFlags : CameraClearFlags.Skybox;
+        }
+
         private void TearDownUIOverlay()
         {
             if (uiOverlay != null)
