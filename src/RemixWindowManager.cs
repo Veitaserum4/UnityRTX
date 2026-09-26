@@ -264,15 +264,22 @@ namespace UnityRemix
 
         public static void OnRemixUIStateChanged(bool open, ManualLogSource logger = null)
         {
-            if (isEmbeddedStatic && instance != null && instance.remixWindow != IntPtr.Zero)
+            if (instance != null)
             {
                 ReleaseCapture();
-                EnableWindow(instance.remixWindow, open);
+                if (isEmbeddedStatic && instance.remixWindow != IntPtr.Zero)
+                {
+                    EnableWindow(instance.remixWindow, open);
+                }
+
                 if (open)
                 {
                     UpdateCursorClipping(false);
-                    SetActiveWindow(instance.remixWindow);
-                    SetFocus(instance.remixWindow);
+                    if (instance.remixWindow != IntPtr.Zero)
+                    {
+                        SetActiveWindow(instance.remixWindow);
+                        SetFocus(instance.remixWindow);
+                    }
                     ResetUnityInputAxes();
                 }
                 else if (instance.gameWindow != IntPtr.Zero)
@@ -397,7 +404,7 @@ namespace UnityRemix
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
-            if (isRemixUIOpen)
+            if (isEmbeddedStatic && isRemixUIOpen)
             {
                 // When Remix UI is open, forward keyboard input to remixWindow and suppress from Unity
                 if (uMsg >= WM_KEYDOWN && uMsg <= WM_UNICHAR)

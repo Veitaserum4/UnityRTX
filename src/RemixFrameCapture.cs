@@ -29,6 +29,7 @@ namespace UnityRemix
         private readonly ConfigEntry<bool> configCaptureStaticMeshes;
         private readonly ConfigEntry<bool> configCaptureSkinnedMeshes;
         private readonly ConfigEntry<bool> configCaptureParticles;
+        private readonly ConfigEntry<bool> configEnableParticleDistanceCulling;
         private readonly ConfigEntry<float> configParticleMaxDistance;
         private readonly ConfigEntry<bool> configHardwareSkinning;
         private readonly ConfigEntry<bool> configPersistDisabledRenderers;
@@ -616,6 +617,7 @@ namespace UnityRemix
             ConfigEntry<bool> persistDisabledRenderers,
             ConfigEntry<int> staticMeshFrameSkip = null,
             ConfigEntry<bool> captureParticles = null,
+            ConfigEntry<bool> enableParticleDistanceCulling = null,
             ConfigEntry<float> particleMaxDistance = null)
         {
             this.logger = logger;
@@ -630,6 +632,7 @@ namespace UnityRemix
             this.configCaptureStaticMeshes = captureStaticMeshes;
             this.configCaptureSkinnedMeshes = captureSkinnedMeshes;
             this.configCaptureParticles = captureParticles;
+            this.configEnableParticleDistanceCulling = enableParticleDistanceCulling;
             this.configParticleMaxDistance = particleMaxDistance;
             this.configHardwareSkinning = hardwareSkinning;
             this.configPersistDisabledRenderers = persistDisabledRenderers;
@@ -2023,7 +2026,7 @@ namespace UnityRemix
                 if (!pr.enabled || !pr.gameObject.activeInHierarchy) continue;
 
                 // Distance culling: skip particle systems whose emitter transform is beyond max render distance
-                if ((pr.transform.position - camPos).sqrMagnitude > maxParticleDistSqr)
+                if (configEnableParticleDistanceCulling != null && configEnableParticleDistanceCulling.Value && (pr.transform.position - camPos).sqrMagnitude > maxParticleDistSqr)
                     continue;
 
                 var main = ps.main;
