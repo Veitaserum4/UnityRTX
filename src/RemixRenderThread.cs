@@ -311,6 +311,10 @@ namespace UnityRemix
                         continue;
 
                     meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags);
+                    if (instance.categoryFlags != 0 && (state.frameCount % 300 == 1 || state.frameCount < 5))
+                    {
+                        logger.LogInfo($"[RenderThread] Drawn categorized instance meshKey=0x{meshKey:X16} (category=0x{instance.categoryFlags:X})");
+                    }
                     objectPickingValue++;
                 }
             }

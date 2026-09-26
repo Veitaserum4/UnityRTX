@@ -25,6 +25,7 @@ namespace UnityRemix
         private Material[] skyMaterials = new Material[6];
         private Texture2D[] skyFaceTextures = new Texture2D[6];
 
+        private int skyboxVersion = 0;
         private ulong skyboxMeshKey = 0;
         private int skyboxMeshId = 0;
         private ulong skyboxMeshHash = 0;
@@ -118,7 +119,8 @@ namespace UnityRemix
                 return;
 
             float farPlane = mainCam.farClipPlane > 10f ? mainCam.farClipPlane : 1000f;
-            float scale = farPlane * 0.5f;
+            float targetDist = Mathf.Max(farPlane * 0.85f, 50f);
+            float scale = targetDist * 2.0f; // Unit cube radius is 0.5 * scale = targetDist
 
             Quaternion skyRot = Quaternion.identity;
             if (lastCapturedSkyMat != null && lastCapturedSkyMat.HasProperty("_Rotation"))
@@ -152,6 +154,7 @@ namespace UnityRemix
         {
             try
             {
+                skyboxVersion++;
                 EnsureSkyboxCubeMesh();
 
                 bool capturedCubemap = false;
@@ -165,6 +168,12 @@ namespace UnityRemix
                     CaptureSolidColorTextures(bgColor);
                 }
 
+                if (skyFaceTextures[0] != null)
+                {
+                    Color sample = skyFaceTextures[0].GetPixel(skyFaceTextures[0].width / 2, skyFaceTextures[0].height / 2);
+                    logger?.LogInfo($"[RemixSkyboxManager] Captured skybox face 0 center pixel: RGBA({sample.r:F3}, {sample.g:F3}, {sample.b:F3}, {sample.a:F3})");
+                }
+
                 // Ensure materials are created for the 6 faces
                 Shader unlitShader = Shader.Find("Unlit/Texture")
                                   ?? Shader.Find("UI/Default")
@@ -176,25 +185,34 @@ namespace UnityRemix
 
                 for (int i = 0; i < 6; i++)
                 {
-                    if (skyMaterials[i] == null)
+                    if (skyMaterials[i] != null)
                     {
-                        skyMaterials[i] = new Material(unlitShader);
-                        skyMaterials[i].name = $"RemixSkyMaterial_Face_{i}";
+                        UnityEngine.Object.Destroy(skyMaterials[i]);
                     }
+
+                    skyMaterials[i] = new Material(unlitShader);
+                    skyMaterials[i].name = $"RemixSkyMaterial_v{skyboxVersion}_Face_{i}";
                     skyMaterials[i].mainTexture = skyFaceTextures[i];
 
-                    int matId = skyMaterials[i].GetInstanceID();
+                    // Unique synthetic material ID per version and face to ensure fresh material registration in Remix
+                    int matId = -2000000 - (skyboxVersion * 10 + i);
                     submeshMaterials.Add(skyMaterials[i]);
                     submeshMaterialIds.Add(matId);
 
-                    // Capture material textures on main thread so render thread can upload to Remix
-                    materialManager.CaptureMaterialTextures(skyMaterials[i], matId);
+                    // Capture material textures on main thread and mark emissive so sky surface self-illuminates in path tracing
+                    materialManager.CaptureMaterialTextures(
+                        skyMaterials[i],
+                        matId,
+                        mpbEmissiveColor: Color.white,
+                        mpbEmissiveIntensity: 1.0f,
+                        mpbMainTex: skyFaceTextures[i],
+                        mpbColor: Color.white
+                    );
                 }
 
-                // Prepare mesh data
-                int matSig = StaticGeometryDedupe.ComputeMaterialSignature(skyMaterials);
-                skyboxMeshKey = RemixMeshConverter.GetMeshKey(skyboxMeshId, matSig);
-                skyboxMeshHash = RemixMeshConverter.GenerateMeshHash("RemixSkyboxCube", skyboxMesh.vertexCount, 36, matSig);
+                // Unique mesh key per skybox version so render thread always creates the updated mesh
+                skyboxMeshKey = 0x534B594200000000UL | (ulong)(skyboxVersion & 0xFFFFFFFF);
+                skyboxMeshHash = RemixMeshConverter.GenerateMeshHash("RemixSkyboxCube", skyboxMesh.vertexCount, 36, (int)skyboxMeshKey);
 
                 var submeshIndices = new List<uint[]>(6);
                 for (int s = 0; s < 6; s++)
@@ -211,7 +229,7 @@ namespace UnityRemix
                 {
                     MeshKey = skyboxMeshKey,
                     MeshId = skyboxMeshId,
-                    MeshName = "RemixSkyboxCube",
+                    MeshName = $"RemixSkyboxCube_v{skyboxVersion}",
                     MeshHash = skyboxMeshHash,
                     Vertices = skyboxMesh.vertices,
                     Normals = skyboxMesh.normals,
@@ -224,19 +242,20 @@ namespace UnityRemix
 
                 // Queue high-priority creation for render thread
                 frameCapture?.QueuePriorityMesh(preparedData);
+                logger?.LogInfo($"[RemixSkyboxManager] Queued priority skybox mesh 0x{skyboxMeshKey:X16} (v{skyboxVersion})");
 
                 lastCapturedSkyMat = skyMat;
                 lastCapturedClearFlags = clearFlags;
                 lastCapturedBgColor = bgColor;
                 needsCapture = false;
 
-                if (skyMat != null)
+                if (capturedCubemap && skyMat != null)
                 {
-                    statusText = $"{skyMat.shader.name} (Cubemap Baked)";
+                    statusText = $"{skyMat.shader.name} (Cubemap Baked, v{skyboxVersion})";
                 }
                 else
                 {
-                    statusText = $"Solid Color ({bgColor.r:F2}, {bgColor.g:F2}, {bgColor.b:F2})";
+                    statusText = $"Solid Color ({bgColor.r:F2}, {bgColor.g:F2}, {bgColor.b:F2}, v{skyboxVersion})";
                 }
 
                 logger?.LogInfo($"[RemixSkyboxManager] Skybox captured successfully: {statusText}");
@@ -272,6 +291,12 @@ namespace UnityRemix
                 skyCam.farClipPlane = 100f;
                 skyCam.transform.position = mainCam != null ? mainCam.transform.position : Vector3.zero;
                 skyCam.transform.rotation = Quaternion.identity;
+
+                if (skyMat != null)
+                {
+                    var skyComp = skyCamGo.AddComponent<Skybox>();
+                    skyComp.material = skyMat;
+                }
 
                 bool renderOk = skyCam.RenderToCubemap(rt);
                 if (!renderOk)
@@ -310,6 +335,14 @@ namespace UnityRemix
                     }
 
                     skyFaceTextures[i].ReadPixels(new Rect(0, 0, resolution, resolution), 0, 0);
+
+                    // Ensure alpha is 255 for all pixels so Remix does not treat it as cutout transparency
+                    Color32[] pixels = skyFaceTextures[i].GetPixels32();
+                    for (int p = 0; p < pixels.Length; p++)
+                    {
+                        pixels[p].a = 255;
+                    }
+                    skyFaceTextures[i].SetPixels32(pixels);
                     skyFaceTextures[i].Apply(false, false);
                 }
 
@@ -338,6 +371,16 @@ namespace UnityRemix
 
         private void CaptureSolidColorTextures(Color bgColor)
         {
+            Color32 c32 = new Color32(
+                (byte)Mathf.Clamp(Mathf.RoundToInt(bgColor.r * 255f), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(bgColor.g * 255f), 0, 255),
+                (byte)Mathf.Clamp(Mathf.RoundToInt(bgColor.b * 255f), 0, 255),
+                255
+            );
+
+            Color32[] pixels = new Color32[16];
+            for (int p = 0; p < 16; p++) pixels[p] = c32;
+
             for (int i = 0; i < 6; i++)
             {
                 if (skyFaceTextures[i] == null || skyFaceTextures[i].width != 4)
@@ -349,9 +392,6 @@ namespace UnityRemix
                     skyFaceTextures[i].wrapMode = TextureWrapMode.Clamp;
                 }
 
-                Color32 c32 = bgColor;
-                Color32[] pixels = new Color32[16];
-                for (int p = 0; p < 16; p++) pixels[p] = c32;
                 skyFaceTextures[i].SetPixels32(pixels);
                 skyFaceTextures[i].Apply(false, false);
             }
