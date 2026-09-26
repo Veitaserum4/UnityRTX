@@ -25,7 +25,6 @@ namespace UnityRemix
         private const string WINDOW_CLASS_NAME = "RemixWindowClass";
         
         private readonly BepInEx.Configuration.ConfigEntry<bool> configSingleWindow;
-        private readonly BepInEx.Configuration.ConfigEntry<SingleWindowMethod> configSingleWindowMethod;
         private static RemixWindowManager instance;
         private IntPtr gameWindow = IntPtr.Zero;
         private bool isEmbedded = false;
@@ -291,7 +290,10 @@ namespace UnityRemix
                 }
                 ReleaseCapture();
             }
-            RemixGameStateHelper.SetRemixMenuState(open, logger);
+            if (isEmbeddedStatic)
+            {
+                RemixGameStateHelper.SetRemixMenuState(open, logger);
+            }
         }
 
         public void HandleAltX()
@@ -338,7 +340,10 @@ namespace UnityRemix
                     ReleaseCapture();
                 }
 
-                RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
+                if (isEmbedded)
+                {
+                    RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
+                }
             }
         }
         
@@ -453,7 +458,7 @@ namespace UnityRemix
                 }
             }
 
-            if (ShouldHideCursor && !isRemixUIOpen)
+            if (ShouldHideCursor && (!isEmbeddedStatic || !isRemixUIOpen))
             {
                 if (uMsg == WM_MOUSEMOVE)
                 {
@@ -474,7 +479,7 @@ namespace UnityRemix
 
             if (uMsg == WM_SETCURSOR)
             {
-                if (isRemixUIOpen)
+                if (isEmbeddedStatic && isRemixUIOpen)
                 {
                     SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
                     return new IntPtr(1);
@@ -529,33 +534,6 @@ namespace UnityRemix
 
         [DllImport("user32.dll")]
         private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetDC(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
-
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteDC(IntPtr hdc);
-
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFO pbmi, uint iUsage, out IntPtr ppvBits, IntPtr hSection, uint dwOffset);
-
-        [DllImport("gdi32.dll")]
-        private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
-
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteObject(IntPtr hObject);
-
-        [DllImport("gdi32.dll")]
-        private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
-
-        [DllImport("user32.dll")]
-        private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
         
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr CreateWindowExW(
@@ -687,29 +665,6 @@ namespace UnityRemix
             public int Width => right - left;
             public int Height => bottom - top;
         }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct BITMAPINFOHEADER
-        {
-            public uint biSize;
-            public int biWidth;
-            public int biHeight;
-            public ushort biPlanes;
-            public ushort biBitCount;
-            public uint biCompression;
-            public uint biSizeImage;
-            public int biXPelsPerMeter;
-            public int biYPelsPerMeter;
-            public uint biClrUsed;
-            public uint biClrImportant;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct BITMAPINFO
-        {
-            public BITMAPINFOHEADER bmiHeader;
-            public uint bmiColors;
-        }
         
         // Constants
         private const int IDC_ARROW = 32512;
@@ -759,13 +714,11 @@ namespace UnityRemix
         public RemixWindowManager(
             ManualLogSource logger,
             RemixAPI.remixapi_Interface remixInterface,
-            BepInEx.Configuration.ConfigEntry<bool> singleWindow = null,
-            BepInEx.Configuration.ConfigEntry<SingleWindowMethod> singleWindowMethod = null)
+            BepInEx.Configuration.ConfigEntry<bool> singleWindow = null)
         {
             instance = this;
             this.logger = logger;
             this.configSingleWindow = singleWindow;
-            this.configSingleWindowMethod = singleWindowMethod;
             
             // Cache delegates
             if (remixInterface.dxvk_CreateD3D9 != IntPtr.Zero)
@@ -994,7 +947,6 @@ namespace UnityRemix
             }
             
             bool isSingleWindow = configSingleWindow != null && configSingleWindow.Value;
-            SingleWindowMethod method = configSingleWindowMethod != null ? configSingleWindowMethod.Value : SingleWindowMethod.Embedded;
             
             if (isSingleWindow)
             {
@@ -1006,7 +958,7 @@ namespace UnityRemix
                 }
                 else
                 {
-                    logger.LogInfo($"[RemixWindowManager] SingleWindow mode active: game window = 0x{gameWindow:X}, method = {method}");
+                    logger.LogInfo($"[RemixWindowManager] SingleWindow mode active (Embedded): game window = 0x{gameWindow:X}");
                     EnsureGameWindowSubclassed();
                 }
             }
@@ -1019,7 +971,7 @@ namespace UnityRemix
             uint dwExStyle = WS_EX_APPWINDOW;
             IntPtr parentHwnd = IntPtr.Zero;
 
-            if (isSingleWindow && method == SingleWindowMethod.Embedded)
+            if (isSingleWindow)
             {
                 if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
                 {
@@ -1036,15 +988,6 @@ namespace UnityRemix
                 isEmbedded = true;
                 isEmbeddedStatic = true;
             }
-            else if (isSingleWindow && method == SingleWindowMethod.Copy)
-            {
-                // Hidden off-screen window for headless presentation
-                posX = -32000;
-                posY = -32000;
-                dwStyle = WS_POPUP | WS_VISIBLE;
-                dwExStyle = WS_EX_TOOLWINDOW;
-                parentHwnd = IntPtr.Zero;
-            }
 
             // Create window
             string windowTitle = $"{Application.productName} - RTX Remix - {BuildInfo.GitHash}";
@@ -1058,7 +1001,7 @@ namespace UnityRemix
             );
 
             // Fallback for Embedded mode if CreateWindowExW with parent fails
-            if (remixWindow == IntPtr.Zero && isSingleWindow && method == SingleWindowMethod.Embedded)
+            if (remixWindow == IntPtr.Zero && isSingleWindow)
             {
                 logger.LogWarning("[RemixWindowManager] CreateWindowExW with parent failed; attempting SetParent fallback...");
                 remixWindow = CreateWindowExW(
@@ -1087,14 +1030,7 @@ namespace UnityRemix
             }
             
             logger.LogInfo($"Remix window created: 0x{remixWindow:X} (Embedded: {isEmbedded})");
-            if (isSingleWindow && method == SingleWindowMethod.Copy)
-            {
-                ShowWindow(remixWindow, SW_HIDE);
-            }
-            else
-            {
-                ShowWindow(remixWindow, SW_SHOW);
-            }
+            ShowWindow(remixWindow, SW_SHOW);
 
             if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
             {
@@ -1138,95 +1074,6 @@ namespace UnityRemix
             return true;
         }
 
-        #region Framebuffer Capture (Copy Mode)
-
-        private IntPtr captureHdc = IntPtr.Zero;
-        private IntPtr captureDib = IntPtr.Zero;
-        private IntPtr captureOldBmp = IntPtr.Zero;
-        private IntPtr captureBits = IntPtr.Zero;
-        private int captureWidth = 0;
-        private int captureHeight = 0;
-        private readonly object captureLock = new object();
-
-        /// <summary>
-        /// Captures the Remix framebuffer from the remixWindow into raw BGRA pixel bytes.
-        /// </summary>
-        public bool CaptureRemixFramebuffer(byte[] destination, int width, int height)
-        {
-            if (remixWindow == IntPtr.Zero || destination == null || width <= 0 || height <= 0 || !IsWindow(remixWindow) || !IsWindowVisible(remixWindow))
-                return false;
-
-            lock (captureLock)
-            {
-                if (captureHdc == IntPtr.Zero || captureWidth != width || captureHeight != height)
-                {
-                    CleanupCapture();
-
-                    IntPtr screenDC = GetDC(IntPtr.Zero);
-                    captureHdc = CreateCompatibleDC(screenDC);
-
-                    var bmi = new BITMAPINFO();
-                    bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
-                    bmi.bmiHeader.biWidth = width;
-                    bmi.bmiHeader.biHeight = -height; // Top-down DIB
-                    bmi.bmiHeader.biPlanes = 1;
-                    bmi.bmiHeader.biBitCount = 32;
-                    bmi.bmiHeader.biCompression = 0; // BI_RGB
-
-                    captureDib = CreateDIBSection(captureHdc, ref bmi, 0, out captureBits, IntPtr.Zero, 0);
-                    captureOldBmp = SelectObject(captureHdc, captureDib);
-                    ReleaseDC(IntPtr.Zero, screenDC);
-
-                    captureWidth = width;
-                    captureHeight = height;
-                }
-
-                if (captureHdc == IntPtr.Zero || captureBits == IntPtr.Zero)
-                    return false;
-
-                bool ok = PrintWindow(remixWindow, captureHdc, 2 /* PW_RENDERFULLCONTENT */);
-                if (!ok)
-                {
-                    IntPtr wndDC = GetDC(remixWindow);
-                    if (wndDC != IntPtr.Zero)
-                    {
-                        ok = BitBlt(captureHdc, 0, 0, width, height, wndDC, 0, 0, 0x00CC0020 /* SRCCOPY */);
-                        ReleaseDC(remixWindow, wndDC);
-                    }
-                }
-
-                if (ok && captureBits != IntPtr.Zero)
-                {
-                    int bytesToCopy = Math.Min(destination.Length, width * height * 4);
-                    Marshal.Copy(captureBits, destination, 0, bytesToCopy);
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private void CleanupCapture()
-        {
-            if (captureHdc != IntPtr.Zero)
-            {
-                if (captureOldBmp != IntPtr.Zero)
-                {
-                    SelectObject(captureHdc, captureOldBmp);
-                    captureOldBmp = IntPtr.Zero;
-                }
-                DeleteDC(captureHdc);
-                captureHdc = IntPtr.Zero;
-            }
-            if (captureDib != IntPtr.Zero)
-            {
-                DeleteObject(captureDib);
-                captureDib = IntPtr.Zero;
-            }
-            captureBits = IntPtr.Zero;
-        }
-
-        #endregion
         
         /// <summary>
         /// Pump Windows messages to keep window responsive
@@ -1262,7 +1109,6 @@ namespace UnityRemix
         {
             UpdateCursorVisibility(false);
             EnforceCursorVisible();
-            CleanupCapture();
             if (remixWindow != IntPtr.Zero)
             {
                 if (isEmbedded && gameWindow != IntPtr.Zero)
