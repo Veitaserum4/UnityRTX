@@ -19,7 +19,6 @@ namespace UnityRemix
         private float _particleMaxDistance;
         private bool _enableParticleDistanceCulling;
         private bool _enableSkybox;
-        private int _skyboxMode;
         private int _skyboxFiltering;
         private float _lightIntensityMultiplier;
         private int _targetFPS;
@@ -229,25 +228,7 @@ namespace UnityRemix
             {
                 RemixImGui.Indent();
 
-                string[] modeNames = { "Dome Light (Native / Infinite)", "Atmosphere (Numos skyMode=1)", "Cube Mesh (Legacy TLAS Mesh)" };
-                string previewMode = (_skyboxMode >= 0 && _skyboxMode < modeNames.Length) ? modeNames[_skyboxMode] : modeNames[0];
-                if (RemixImGui.BeginCombo("Skybox Mode", previewMode))
-                {
-                    for (int i = 0; i < modeNames.Length; i++)
-                    {
-                        bool selected = (_skyboxMode == i);
-                        if (RemixImGui.Selectable(modeNames[i], selected))
-                        {
-                            _skyboxMode = i;
-                            _plugin.SetConfig("SkyboxMode", _skyboxMode);
-                        }
-                    }
-                    RemixImGui.EndCombo();
-                }
-                if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Dome Light: Native Remix environment light at infinity. Does not occlude sun/directional lights.\nAtmosphere: Procedural physical atmosphere.\nCube Mesh: Legacy 3D polygonal box mesh in TLAS (may block distant lights).");
-
-                string[] filterNames = { "Closest (Pixelated / Retro)", "Linear (Smooth)" };
+                string[] filterNames = { "Linear (Smooth)", "Closest (Pixelated / Retro)" };
                 string previewFilter = (_skyboxFiltering >= 0 && _skyboxFiltering < filterNames.Length) ? filterNames[_skyboxFiltering] : filterNames[0];
                 if (RemixImGui.BeginCombo("Skybox Filtering", previewFilter))
                 {
@@ -263,7 +244,7 @@ namespace UnityRemix
                     RemixImGui.EndCombo();
                 }
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Closest: Preserves sharp retro pixels (authentic to ULTRAKILL's PSX aesthetic).\nLinear: Smooth bilinear interpolation.");
+                    RemixImGui.SetTooltip("Linear: Smooth bilinear interpolation (Default).\nClosest: Preserves sharp retro pixels (authentic to ULTRAKILL's PSX aesthetic).");
 
                 if (_plugin.SkyboxManager != null)
                 {
@@ -512,7 +493,6 @@ namespace UnityRemix
             _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
             _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
             _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
-            _skyboxMode = _plugin.GetConfigInt("SkyboxMode");
             _skyboxFiltering = _plugin.GetConfigInt("SkyboxFiltering");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");

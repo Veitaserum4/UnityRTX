@@ -31,7 +31,6 @@ namespace UnityRemix
         private ConfigEntry<float> configParticleMaxDistance;
         private ConfigEntry<bool> configEnableParticleDistanceCulling;
         private ConfigEntry<bool> configEnableSkybox;
-        private ConfigEntry<SkyboxMode> configSkyboxMode;
         private ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
@@ -184,13 +183,10 @@ namespace UnityRemix
                 "Enable distance-based culling for particle systems. When enabled, particle systems beyond ParticleMaxDistance are not rendered.");
             
             configEnableSkybox = Config.Bind("Rendering", "EnableSkybox", true,
-                "Automatically detect and render skyboxes in RTX Remix.");
+                "Automatically detect and render skyboxes in RTX Remix as a native Dome Light environment.");
             
-            configSkyboxMode = Config.Bind("Rendering", "SkyboxMode", SkyboxMode.DomeLight,
-                "Skybox rendering mode: DomeLight (native infinite Remix environment, recommended), Atmosphere (procedural Numos atmosphere), CubeMesh (legacy in-scene mesh).");
-            
-            configSkyboxFiltering = Config.Bind("Rendering", "SkyboxFiltering", SkyboxFiltering.Closest,
-                "Skybox texture filtering: Closest (pixelated retro aesthetic, recommended for ULTRAKILL) or Linear (smooth).");
+            configSkyboxFiltering = Config.Bind("Rendering", "SkyboxFiltering", SkyboxFiltering.Linear,
+                "Skybox texture filtering: Linear (smooth, default) or Closest (pixelated retro aesthetic, recommended for ULTRAKILL).");
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
@@ -485,7 +481,6 @@ namespace UnityRemix
                 meshConverter,
                 cameraHandler,
                 configEnableSkybox,
-                configSkyboxMode,
                 configSkyboxFiltering
             );
             skyboxManager.InitializeRemix(remixInterface, remixApiLock);
@@ -952,7 +947,6 @@ namespace UnityRemix
                 case "EngineFPSLimit": return configEngineFPSLimit.Value;
                 case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
                 case "UIOverlayFPS": return configUIOverlayFPS.Value;
-                case "SkyboxMode": return configSkyboxMode != null ? (int)configSkyboxMode.Value : 0;
                 case "SkyboxFiltering": return configSkyboxFiltering != null ? (int)configSkyboxFiltering.Value : 0;
                 default: return 0;
             }
@@ -1008,13 +1002,6 @@ namespace UnityRemix
                 case "EngineFPSLimit": configEngineFPSLimit.Value = value; break;
                 case "StaticMeshFrameSkip": configStaticMeshFrameSkip.Value = value; break;
                 case "UIOverlayFPS": configUIOverlayFPS.Value = value; break;
-                case "SkyboxMode":
-                    if (configSkyboxMode != null)
-                    {
-                        configSkyboxMode.Value = (SkyboxMode)value;
-                        skyboxManager?.ForceRecapture();
-                    }
-                    break;
                 case "SkyboxFiltering":
                     if (configSkyboxFiltering != null)
                     {
