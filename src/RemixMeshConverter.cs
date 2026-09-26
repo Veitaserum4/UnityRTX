@@ -657,7 +657,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -686,7 +686,7 @@ namespace UnityRemix
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
                     pNext = pickingHandle.AddrOfPinnedObject(),
-                    categoryFlags = 0,
+                    categoryFlags = categoryFlags,
                     mesh = meshHandle,
                     transform = transform,
                     doubleSided = 1

@@ -18,6 +18,7 @@ namespace UnityRemix
         private float _maxRenderDistance;
         private float _particleMaxDistance;
         private bool _enableParticleDistanceCulling;
+        private bool _enableSkybox;
         private float _lightIntensityMultiplier;
         private int _targetFPS;
         private bool _enableGameGeometry;
@@ -214,6 +215,18 @@ namespace UnityRemix
                     _plugin.SetConfig("ParticleMaxDistance", _particleMaxDistance);
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Maximum distance from camera to capture and render particle systems.\nCulls distant particles to maximize performance.");
+                RemixImGui.Unindent();
+            }
+
+            if (RemixImGui.Checkbox("Skybox Autodetection", ref _enableSkybox))
+                _plugin.SetConfig("EnableSkybox", _enableSkybox);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Automatically detects Unity skybox (cubemap, procedural, or solid color)\nand renders it in RTX Remix as a sky surface.");
+
+            if (_enableSkybox && _plugin.SkyboxManager != null)
+            {
+                RemixImGui.Indent();
+                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Status: {_plugin.SkyboxManager.StatusText}");
                 RemixImGui.Unindent();
             }
 
@@ -456,6 +469,7 @@ namespace UnityRemix
             _maxRenderDistance = _plugin.GetConfigFloat("MaxRenderDistance");
             _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
             _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
+            _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");
             _sceneScanActiveOnly = _plugin.GetConfigBool("ActiveRenderersOnly");
