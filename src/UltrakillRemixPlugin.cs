@@ -474,6 +474,7 @@ namespace UnityRemix
                 configEnableSkybox
             );
             skyboxManager.SetFrameCapture(frameCapture);
+            skyboxManager.SetFramebufferPresenter(framebufferPresenter);
             frameCapture.SetSkyboxManager(skyboxManager);
             
             renderThread = new RemixRenderThread(
