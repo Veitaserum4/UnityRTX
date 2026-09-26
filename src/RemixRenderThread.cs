@@ -51,6 +51,12 @@ namespace UnityRemix
         
         // Scene mesh scanner (optional)
         private SceneMeshScanner sceneMeshScanner;
+        private RemixSkyboxManager skyboxManager;
+        
+        public void SetSkyboxManager(RemixSkyboxManager manager)
+        {
+            skyboxManager = manager;
+        }
         
         public RemixRenderThread(
             ManualLogSource logger,
@@ -240,6 +246,9 @@ namespace UnityRemix
                             lightConverter.ProcessLights(frameNum);
                             processLightsMs = sw.Elapsed.TotalMilliseconds;
                         }
+
+                        // Draw skybox light (DomeLight mode)
+                        skyboxManager?.DrawSkyLight(frameNum);
                         
                         // Draw test light if lights disabled
                         if (!configEnableLights.Value && testLightHandle != IntPtr.Zero)

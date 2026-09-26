@@ -19,6 +19,7 @@ namespace UnityRemix
         private float _particleMaxDistance;
         private bool _enableParticleDistanceCulling;
         private bool _enableSkybox;
+        private int _skyboxMode;
         private float _lightIntensityMultiplier;
         private int _targetFPS;
         private bool _enableGameGeometry;
@@ -223,10 +224,32 @@ namespace UnityRemix
             if (RemixImGui.IsItemHovered())
                 RemixImGui.SetTooltip("Automatically detects Unity skybox (cubemap, procedural, or solid color)\nand renders it in RTX Remix as a sky surface.");
 
-            if (_enableSkybox && _plugin.SkyboxManager != null)
+            if (_enableSkybox)
             {
                 RemixImGui.Indent();
-                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Status: {_plugin.SkyboxManager.StatusText}");
+
+                string[] modeNames = { "Dome Light (Native / Infinite)", "Atmosphere (Numos skyMode=1)", "Cube Mesh (Legacy TLAS Mesh)" };
+                string previewMode = (_skyboxMode >= 0 && _skyboxMode < modeNames.Length) ? modeNames[_skyboxMode] : modeNames[0];
+                if (RemixImGui.BeginCombo("Skybox Mode", previewMode))
+                {
+                    for (int i = 0; i < modeNames.Length; i++)
+                    {
+                        bool selected = (_skyboxMode == i);
+                        if (RemixImGui.Selectable(modeNames[i], selected))
+                        {
+                            _skyboxMode = i;
+                            _plugin.SetConfig("SkyboxMode", _skyboxMode);
+                        }
+                    }
+                    RemixImGui.EndCombo();
+                }
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Dome Light: Native Remix environment light at infinity. Does not occlude sun/directional lights.\nAtmosphere: Procedural physical atmosphere.\nCube Mesh: Legacy 3D polygonal box mesh in TLAS (may block distant lights).");
+
+                if (_plugin.SkyboxManager != null)
+                {
+                    RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Status: {_plugin.SkyboxManager.StatusText}");
+                }
                 RemixImGui.Unindent();
             }
 
@@ -470,6 +493,7 @@ namespace UnityRemix
             _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
             _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
             _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
+            _skyboxMode = _plugin.GetConfigInt("SkyboxMode");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");
             _sceneScanActiveOnly = _plugin.GetConfigBool("ActiveRenderersOnly");

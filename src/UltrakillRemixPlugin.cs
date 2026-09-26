@@ -31,6 +31,7 @@ namespace UnityRemix
         private ConfigEntry<float> configParticleMaxDistance;
         private ConfigEntry<bool> configEnableParticleDistanceCulling;
         private ConfigEntry<bool> configEnableSkybox;
+        private ConfigEntry<SkyboxMode> configSkyboxMode;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
         private ConfigEntry<int> configDebugLogInterval;
@@ -183,6 +184,9 @@ namespace UnityRemix
             
             configEnableSkybox = Config.Bind("Rendering", "EnableSkybox", true,
                 "Automatically detect and render skyboxes in RTX Remix.");
+            
+            configSkyboxMode = Config.Bind("Rendering", "SkyboxMode", SkyboxMode.DomeLight,
+                "Skybox rendering mode: DomeLight (native infinite Remix environment, recommended), Atmosphere (procedural Numos atmosphere), CubeMesh (legacy in-scene mesh).");
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
@@ -476,8 +480,10 @@ namespace UnityRemix
                 materialManager,
                 meshConverter,
                 cameraHandler,
-                configEnableSkybox
+                configEnableSkybox,
+                configSkyboxMode
             );
+            skyboxManager.InitializeRemix(remixInterface, remixApiLock);
             skyboxManager.SetFrameCapture(frameCapture);
             skyboxManager.SetFramebufferPresenter(framebufferPresenter);
             frameCapture.SetSkyboxManager(skyboxManager);
@@ -505,8 +511,9 @@ namespace UnityRemix
                 configSceneScanActiveOnly.Value
             );
             
-            // Give render thread access to scene mesh scanner
+            // Give render thread access to scene mesh scanner and skybox manager
             renderThread.SetSceneMeshScanner(sceneMeshScanner);
+            renderThread.SetSkyboxManager(skyboxManager);
             
             // Initialize ImGui overlay
             if (RemixImGui.Initialize(LogSource))
@@ -940,6 +947,7 @@ namespace UnityRemix
                 case "EngineFPSLimit": return configEngineFPSLimit.Value;
                 case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
                 case "UIOverlayFPS": return configUIOverlayFPS.Value;
+                case "SkyboxMode": return configSkyboxMode != null ? (int)configSkyboxMode.Value : 0;
                 default: return 0;
             }
         }
@@ -994,6 +1002,13 @@ namespace UnityRemix
                 case "EngineFPSLimit": configEngineFPSLimit.Value = value; break;
                 case "StaticMeshFrameSkip": configStaticMeshFrameSkip.Value = value; break;
                 case "UIOverlayFPS": configUIOverlayFPS.Value = value; break;
+                case "SkyboxMode":
+                    if (configSkyboxMode != null)
+                    {
+                        configSkyboxMode.Value = (SkyboxMode)value;
+                        skyboxManager?.ForceRecapture();
+                    }
+                    break;
             }
         }
 
