@@ -276,10 +276,6 @@ namespace UnityRemix
             if (instance != null)
             {
                 ReleaseCapture();
-                if (isEmbeddedStatic && instance.remixWindow != IntPtr.Zero)
-                {
-                    EnableWindow(instance.remixWindow, open);
-                }
 
                 if (open)
                 {
@@ -329,10 +325,6 @@ namespace UnityRemix
                 if (remixWindow != IntPtr.Zero)
                 {
                     ReleaseCapture();
-                    if (isEmbedded)
-                    {
-                        EnableWindow(remixWindow, isRemixUIOpen);
-                    }
 
                     PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
                     PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
@@ -394,6 +386,9 @@ namespace UnityRemix
         private const uint WM_MBUTTONDOWN = 0x0207;
         private const uint WM_MBUTTONUP = 0x0208;
         private const uint WM_MOUSEWHEEL = 0x020A;
+        private const uint WM_XBUTTONDOWN = 0x020B;
+        private const uint WM_XBUTTONUP = 0x020C;
+        private const uint WM_MOUSEHWHEEL = 0x020E;
 
         private const uint WM_KEYDOWN = 0x0100;
         private const uint WM_KEYUP = 0x0101;
@@ -421,6 +416,10 @@ namespace UnityRemix
         private static SubclassProc gameWindowSubclassDelegate;
         private static bool gameWindowSubclassed = false;
         private const uint SUBCLASS_ID_GAME_WINDOW = 1001;
+
+        private static SubclassProc remixWindowSubclassDelegate;
+        private static bool remixWindowSubclassed = false;
+        private const uint SUBCLASS_ID_REMIX_WINDOW = 1002;
 
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
@@ -506,6 +505,62 @@ namespace UnityRemix
                     return new IntPtr(1);
                 }
             }
+            return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
+
+        private static IntPtr RemixWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
+        {
+            if (isEmbeddedStatic && !isRemixUIOpen)
+            {
+                if (uMsg == WM_MOUSEACTIVATE)
+                {
+                    if (instance != null && instance.gameWindow != IntPtr.Zero)
+                    {
+                        SetForegroundWindow(instance.gameWindow);
+                        SetActiveWindow(instance.gameWindow);
+                        SetFocus(instance.gameWindow);
+                    }
+                    return (IntPtr)MA_NOACTIVATE;
+                }
+
+                if (uMsg == WM_SETFOCUS)
+                {
+                    if (instance != null && instance.gameWindow != IntPtr.Zero)
+                    {
+                        SetFocus(instance.gameWindow);
+                        return IntPtr.Zero;
+                    }
+                }
+
+                if (uMsg >= WM_MOUSEMOVE && uMsg <= WM_MOUSEHWHEEL)
+                {
+                    if (instance != null && instance.gameWindow != IntPtr.Zero)
+                    {
+                        if (uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN || uMsg == WM_MBUTTONDOWN || uMsg == WM_XBUTTONDOWN)
+                        {
+                            SetForegroundWindow(instance.gameWindow);
+                            SetFocus(instance.gameWindow);
+                        }
+                        PostMessage(instance.gameWindow, uMsg, wParam, lParam);
+                        return IntPtr.Zero;
+                    }
+                }
+
+                if (uMsg == WM_SETCURSOR)
+                {
+                    if (ShouldHideCursor)
+                    {
+                        SetCursor(BlankCursor);
+                        return new IntPtr(1);
+                    }
+                    else
+                    {
+                        SetCursor(LoadCursorW(IntPtr.Zero, IDC_ARROW));
+                        return new IntPtr(1);
+                    }
+                }
+            }
+
             return DefSubclassProc(hWnd, uMsg, wParam, lParam);
         }
 
@@ -836,6 +891,19 @@ namespace UnityRemix
             }
         }
 
+        public void EnsureRemixWindowSubclassed()
+        {
+            if (remixWindow != IntPtr.Zero && isEmbedded && !remixWindowSubclassed)
+            {
+                remixWindowSubclassDelegate = RemixWindowSubclassProc;
+                remixWindowSubclassed = SetWindowSubclass(remixWindow, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW, UIntPtr.Zero);
+                if (remixWindowSubclassed)
+                {
+                    logger?.LogInfo($"[RemixWindowManager] Subclassed remixWindow 0x{remixWindow:X} for mouse input routing.");
+                }
+            }
+        }
+
         private int lastRemixX = -1;
         private int lastRemixY = -1;
 
@@ -845,6 +913,7 @@ namespace UnityRemix
         public void SyncWindowBounds()
         {
             EnsureGameWindowSubclassed();
+            EnsureRemixWindowSubclassed();
 
             if (!isEmbedded || remixWindow == IntPtr.Zero || gameWindow == IntPtr.Zero)
                 return;
@@ -923,13 +992,6 @@ namespace UnityRemix
                     break;
 
                 case WM_NCHITTEST:
-                    if (isEmbeddedStatic)
-                    {
-                        // When Remix UI is not open, make child window transparent to mouse
-                        // so all mouse clicks and movements pass through to Unity game window!
-                        if (!isRemixUIOpen)
-                            return new IntPtr(HTTRANSPARENT);
-                    }
                     return DefWindowProcW(hWnd, msg, wParam, lParam);
 
                 case WM_SETCURSOR:
@@ -1027,7 +1089,7 @@ namespace UnityRemix
                 posY = pt.y;
                 lastRemixX = pt.x;
                 lastRemixY = pt.y;
-                dwStyle = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
+                dwStyle = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS;
                 dwExStyle = WS_EX_TOOLWINDOW;
                 parentHwnd = gameWindow;
                 isEmbedded = true;
@@ -1054,7 +1116,7 @@ namespace UnityRemix
                     WS_EX_TOOLWINDOW,
                     WINDOW_CLASS_NAME,
                     windowTitle,
-                    WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED,
+                    WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS,
                     posX, posY, width, height,
                     IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero
                 );
@@ -1072,11 +1134,9 @@ namespace UnityRemix
 
             if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
             {
-                // Ensure child window is initially disabled so it never intercepts mouse messages
-                EnableWindow(remixWindow, false);
-
                 SetForegroundWindow(gameWindow);
                 SetFocus(gameWindow);
+                EnsureRemixWindowSubclassed();
 
                 uint gameThreadId = GetWindowThreadProcessId(gameWindow, out _);
                 uint renderThreadId = GetCurrentThreadId();
@@ -1109,6 +1169,7 @@ namespace UnityRemix
             }
             
             logger.LogInfo("Remix Startup succeeded!");
+            EnsureRemixWindowSubclassed();
             if (RemixAPI.IsOpenRemix && setConfigVariableFunc != null)
             {
                 string backend = configNativeBackend?.Value ?? "raster";
@@ -1166,16 +1227,14 @@ namespace UnityRemix
                     logger.LogInfo($"openremix settings {(state == RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE ? "closed" : "opened")}");
                     if (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE)
                     {
-                        if (isEmbedded)
-                        {
-                            EnableWindow(remixWindow, true);
-                        }
                         SetForegroundWindow(remixWindow);
                         SetFocus(remixWindow);
                     }
-                    else if (isEmbedded)
+                    else if (gameWindow != IntPtr.Zero)
                     {
-                        EnableWindow(remixWindow, false);
+                        SetForegroundWindow(gameWindow);
+                        SetActiveWindow(gameWindow);
+                        SetFocus(gameWindow);
                     }
                 }
                 else
@@ -1183,11 +1242,11 @@ namespace UnityRemix
             }
             // Also reflect the panel's own close button for embedded mouse routing.
             bool newOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
-            if (isEmbedded && isRemixUIOpen != newOpen)
+            if (isRemixUIOpen != newOpen)
             {
-                EnableWindow(remixWindow, newOpen);
+                isRemixUIOpen = newOpen;
+                OnRemixUIStateChanged(isRemixUIOpen, logger);
             }
-            isRemixUIOpen = newOpen;
         }
         
         /// <summary>
@@ -1210,6 +1269,11 @@ namespace UnityRemix
             EnforceCursorVisible();
             if (remixWindow != IntPtr.Zero)
             {
+                if (remixWindowSubclassed)
+                {
+                    RemoveWindowSubclass(remixWindow, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW);
+                    remixWindowSubclassed = false;
+                }
                 if (isEmbedded && gameWindow != IntPtr.Zero)
                 {
                     uint gameThreadId = GetWindowThreadProcessId(gameWindow, out _);
