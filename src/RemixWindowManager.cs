@@ -432,10 +432,20 @@ namespace UnityRemix
         private static SubclassProc remixWindowSubclassDelegate;
         private static bool remixWindowSubclassed = false;
         private const uint SUBCLASS_ID_REMIX_WINDOW = 1002;
+        private const uint WM_REQUEST_ACTIVATE = 0x8000 + 101; // WM_APP + 101: Thread-safe activation request
 
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
+            if (uMsg == WM_REQUEST_ACTIVATE)
+            {
+                instance?.logger?.LogInfo("[GameWindowSubclassProc] Processing WM_REQUEST_ACTIVATE on Main Thread");
+                SetForegroundWindow(hWnd);
+                SetActiveWindow(hWnd);
+                SetFocus(hWnd);
+                return IntPtr.Zero;
+            }
+
             if (isEmbeddedStatic && isRemixUIOpen)
             {
                 // When Remix UI is open, forward keyboard input to remixWindow and suppress from Unity
@@ -567,20 +577,20 @@ namespace UnityRemix
             {
                 if (uMsg == WM_MOUSEACTIVATE)
                 {
-                    instance?.logger?.LogInfo("[RemixWindowSubclassProc] WM_MOUSEACTIVATE -> returning MA_ACTIVATE");
+                    instance?.logger?.LogInfo("[RemixWindowSubclassProc] WM_MOUSEACTIVATE -> posting WM_REQUEST_ACTIVATE to gameWindow");
                     if (instance != null && instance.gameWindow != IntPtr.Zero)
                     {
-                        SetForegroundWindow(instance.gameWindow);
+                        PostMessage(instance.gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
                     }
                     return (IntPtr)MA_ACTIVATE;
                 }
 
                 if (uMsg == WM_SETFOCUS)
                 {
-                    instance?.logger?.LogInfo("[RemixWindowSubclassProc] WM_SETFOCUS -> transferring foreground to gameWindow");
+                    instance?.logger?.LogInfo("[RemixWindowSubclassProc] WM_SETFOCUS -> posting WM_REQUEST_ACTIVATE to gameWindow");
                     if (instance != null && instance.gameWindow != IntPtr.Zero)
                     {
-                        SetForegroundWindow(instance.gameWindow);
+                        PostMessage(instance.gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
                     }
                     return IntPtr.Zero;
                 }
@@ -591,8 +601,7 @@ namespace UnityRemix
                     {
                         if (uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN || uMsg == WM_MBUTTONDOWN || uMsg == WM_XBUTTONDOWN)
                         {
-                            instance?.logger?.LogInfo($"[RemixWindowSubclassProc] Mouse button down (uMsg=0x{uMsg:X}) -> SetForegroundWindow");
-                            SetForegroundWindow(instance.gameWindow);
+                            PostMessage(instance.gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
                         }
                         PostMessage(instance.gameWindow, uMsg, wParam, lParam);
                         return IntPtr.Zero;
@@ -1147,7 +1156,9 @@ namespace UnityRemix
                 lastRemixY = pt.y;
                 dwStyle = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS;
                 dwExStyle = WS_EX_TOOLWINDOW;
-                parentHwnd = gameWindow;
+                // Standalone un-owned popup to prevent cross-thread Win32 user32 activation deadlocks.
+                // Owned popups across threads cause synchronous kernel-level win32k desktop lock conflicts!
+                parentHwnd = IntPtr.Zero;
                 isEmbedded = true;
                 isEmbeddedStatic = true;
             }
@@ -1190,7 +1201,7 @@ namespace UnityRemix
 
             if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
             {
-                SetForegroundWindow(gameWindow);
+                PostMessage(gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
                 EnsureRemixWindowSubclassed();
             }
             
@@ -1233,6 +1244,7 @@ namespace UnityRemix
         /// </summary>
         public void PumpWindowsMessages()
         {
+            RemixWatchdog.BeatRender("PumpMessages.VisibilityAndBounds");
             if (remixWindow != IntPtr.Zero)
             {
                 if (pendingRemixVisibilityChange)
@@ -1255,21 +1267,30 @@ namespace UnityRemix
                 }
             }
 
+            RemixWatchdog.BeatRender("PumpMessages.Cursor");
             if (ShouldHideCursor)
                 EnforceCursorHidden();
             else
                 EnforceCursorVisible();
 
             // SDL event pumping belongs to the same thread as Startup/Present.
+            RemixWatchdog.BeatRender("PumpMessages.SDLPumpEvents");
             RemixAPI.NativePumpEvents?.Invoke();
+
+            RemixWatchdog.BeatRender("PumpMessages.PeekAndDispatch");
             MSG msg;
             while (PeekMessageW(out msg, IntPtr.Zero, 0, 0, PM_REMOVE))
             {
                 TranslateMessage(ref msg);
                 DispatchMessageW(ref msg);
             }
+
             if (RemixAPI.IsOpenRemix)
+            {
+                RemixWatchdog.BeatRender("PumpMessages.NativeSettings");
                 UpdateNativeSettings();
+            }
+            RemixWatchdog.BeatRender("PumpMessages.End");
         }
 
         private void UpdateNativeSettings()
@@ -1301,18 +1322,18 @@ namespace UnityRemix
                     }
                     else if (gameWindow != IntPtr.Zero)
                     {
-                        SetForegroundWindow(gameWindow);
+                        PostMessage(gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
                     }
                 }
                 else
                     logger.LogWarning($"Could not toggle openremix settings: {result}");
             }
-            // Also reflect the panel's own close button for embedded mouse routing.
+            // Reflect the panel's open/close state. Do not call OnRemixUIStateChanged here on the Render Thread!
+            // Unity Main Thread polls SyncUIStateWithRemix in Presenter.Update each frame where Unity GameObject/Camera APIs are safe.
             bool newOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
             if (isRemixUIOpen != newOpen)
             {
                 isRemixUIOpen = newOpen;
-                OnRemixUIStateChanged(isRemixUIOpen, logger);
             }
         }
         

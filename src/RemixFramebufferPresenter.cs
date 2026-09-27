@@ -84,6 +84,9 @@ namespace UnityRemix
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
         private static extern IntPtr SetFocus(IntPtr hWnd);
 
         [DllImport("user32.dll")]
@@ -222,6 +225,7 @@ namespace UnityRemix
                     // Sync embedded window bounds
                     if (windowManager != null)
                     {
+                        RemixWatchdog.BeatMain("Presenter.Update.SyncBounds");
                         windowManager.SyncWindowBounds();
                     }
                 }
@@ -234,6 +238,7 @@ namespace UnityRemix
 
             }
 
+            RemixWatchdog.BeatMain("Presenter.Update.AltX");
             // Handle Alt+X detection for Remix ImGui using direct hardware query so it never drops even when window focus changes
             bool altHeld = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
             bool xHeld = (GetAsyncKeyState(VK_X) & 0x8000) != 0;
@@ -251,9 +256,11 @@ namespace UnityRemix
             }
 
             // Continuously query ground truth UI state directly from Remix runtime
+            RemixWatchdog.BeatMain("Presenter.Update.SyncUIState");
             RemixWindowManager.SyncUIStateWithRemix(logger);
 
             // Determine whether cursor should be hidden (in-game gameplay) or visible (menus/Remix UI/tabbed out)
+            RemixWatchdog.BeatMain("Presenter.Update.Cursor");
             bool shouldHide = Application.isFocused && (!isSingleWindowActive || !RemixWindowManager.IsRemixUIOpen) && (!Cursor.visible || Cursor.lockState == CursorLockMode.Locked);
             RemixWindowManager.UpdateCursorVisibility(shouldHide);
 
@@ -266,6 +273,19 @@ namespace UnityRemix
             else if (shouldHide)
             {
                 SetCursor(RemixWindowManager.BlankCursor);
+            }
+
+            // Foreground safety net: On Main Thread, if gameplay is active but remixWindow was activated, focus gameWindow safely
+            if (isSingleWindowActive && !RemixWindowManager.IsRemixUIOpen && windowManager != null)
+            {
+                IntPtr fg = GetForegroundWindow();
+                IntPtr rw = windowManager.RemixWindow;
+                IntPtr gw = windowManager.GameWindow;
+                if (rw != IntPtr.Zero && fg == rw && gw != IntPtr.Zero)
+                {
+                    SetForegroundWindow(gw);
+                    SetFocus(gw);
+                }
             }
 
             // Ensure game window retains activation and focus during startup
@@ -281,6 +301,7 @@ namespace UnityRemix
                     logger?.LogInfo($"[RemixFramebufferPresenter] Enforced foreground focus on gameWindow 0x{gameWnd:X} at frame #{frameCount}");
                 }
             }
+            RemixWatchdog.BeatMain("Presenter.Update.End");
         }
 
         public void OnEndOfFrame()
