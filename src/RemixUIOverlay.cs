@@ -28,6 +28,7 @@ namespace UnityRemix
         private bool isReadbackPending = false;
         private bool isProcessingOverlay = false;
         private bool isOverlayVisible = false;
+        private static volatile bool isAppFocused = true;
         private int lastPresentedNonZero = -1;
         private int currentWidth = 0;
         private int currentHeight = 0;
@@ -582,6 +583,22 @@ namespace UnityRemix
         {
             if (overlayWindow == IntPtr.Zero) return;
 
+            isAppFocused = Application.isFocused;
+
+            // If game is unfocused and Remix menu is not open, hide the overlay window so it does not float over other apps on Alt-Tab.
+            if (!isAppFocused && !RemixWindowManager.IsRemixUIOpen)
+            {
+                if (isOverlayVisible)
+                {
+                    lock (dibLock)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
+                    }
+                }
+                return;
+            }
+
             // If user enabled HideUIOnRemixMenu, hide the game UI overlay while Remix Alt+X menu is open.
             bool hideOnMenu = configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value;
             if (hideOnMenu && RemixWindowManager.IsRemixUIOpen)
@@ -1059,7 +1076,7 @@ namespace UnityRemix
                     logger?.LogError($"[RemixUIOverlay] UpdateLayeredWindow failed! Win32 Error: {err}");
                 }
 
-                if (!isOverlayVisible && !(configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen))
+                if (!isOverlayVisible && isAppFocused && !(configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen))
                 {
                     SetWindowPos(
                         overlayWindow,

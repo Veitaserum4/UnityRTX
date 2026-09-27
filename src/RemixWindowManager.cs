@@ -35,6 +35,7 @@ namespace UnityRemix
         private static RemixWindowManager instance;
         private IntPtr gameWindow = IntPtr.Zero;
         private bool isEmbedded = false;
+        private bool isRemixWindowVisible = true;
         private static bool isEmbeddedStatic = false;
         private static volatile bool isRemixUIOpen = false;
         public static volatile bool ShouldHideCursor = false;
@@ -376,6 +377,7 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         private static extern IntPtr SetCursor(IntPtr hCursor);
 
+        private const uint WM_SIZE = 0x0005;
         private const uint WM_SETFOCUS = 0x0007;
         private const uint WM_KILLFOCUS = 0x0008;
         private const uint WM_SETCURSOR = 0x0020;
@@ -506,6 +508,16 @@ namespace UnityRemix
                     return new IntPtr(1);
                 }
             }
+
+            if (uMsg == WM_SIZE && wParam == (IntPtr)1 /* SIZE_MINIMIZED */)
+            {
+                if (instance != null && instance.remixWindow != IntPtr.Zero)
+                {
+                    ShowWindow(instance.remixWindow, SW_HIDE);
+                    instance.isRemixWindowVisible = false;
+                }
+            }
+
             return DefSubclassProc(hWnd, uMsg, wParam, lParam);
         }
 
@@ -518,19 +530,17 @@ namespace UnityRemix
                     if (instance != null && instance.gameWindow != IntPtr.Zero)
                     {
                         SetForegroundWindow(instance.gameWindow);
-                        SetActiveWindow(instance.gameWindow);
-                        SetFocus(instance.gameWindow);
                     }
-                    return (IntPtr)MA_NOACTIVATE;
+                    return (IntPtr)MA_ACTIVATE;
                 }
 
                 if (uMsg == WM_SETFOCUS)
                 {
                     if (instance != null && instance.gameWindow != IntPtr.Zero)
                     {
-                        SetFocus(instance.gameWindow);
-                        return IntPtr.Zero;
+                        SetForegroundWindow(instance.gameWindow);
                     }
+                    return IntPtr.Zero;
                 }
 
                 if (uMsg >= WM_MOUSEMOVE && uMsg <= WM_MOUSEHWHEEL)
@@ -540,7 +550,6 @@ namespace UnityRemix
                         if (uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN || uMsg == WM_MBUTTONDOWN || uMsg == WM_XBUTTONDOWN)
                         {
                             SetForegroundWindow(instance.gameWindow);
-                            SetFocus(instance.gameWindow);
                         }
                         PostMessage(instance.gameWindow, uMsg, wParam, lParam);
                         return IntPtr.Zero;
@@ -564,9 +573,6 @@ namespace UnityRemix
 
             return DefSubclassProc(hWnd, uMsg, wParam, lParam);
         }
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 
         [DllImport("kernel32.dll")]
         private static extern uint GetCurrentThreadId();
@@ -921,8 +927,18 @@ namespace UnityRemix
 
             if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
             {
-                ShowWindow(remixWindow, SW_HIDE);
+                if (isRemixWindowVisible)
+                {
+                    ShowWindow(remixWindow, SW_HIDE);
+                    isRemixWindowVisible = false;
+                }
                 return;
+            }
+
+            if (!isRemixWindowVisible)
+            {
+                ShowWindow(remixWindow, SW_SHOWNOACTIVATE);
+                isRemixWindowVisible = true;
             }
 
             if (GetClientRect(gameWindow, out RECT rect))
@@ -1136,16 +1152,7 @@ namespace UnityRemix
             if (isSingleWindow && isEmbedded && gameWindow != IntPtr.Zero)
             {
                 SetForegroundWindow(gameWindow);
-                SetFocus(gameWindow);
                 EnsureRemixWindowSubclassed();
-
-                uint gameThreadId = GetWindowThreadProcessId(gameWindow, out _);
-                uint renderThreadId = GetCurrentThreadId();
-                if (gameThreadId != 0 && renderThreadId != 0 && gameThreadId != renderThreadId)
-                {
-                    bool attached = AttachThreadInput(renderThreadId, gameThreadId, true);
-                    logger.LogInfo($"[RemixWindowManager] AttachThreadInput (render thread {renderThreadId} <-> game thread {gameThreadId}): {attached}");
-                }
             }
             
             // Call Remix Startup
@@ -1234,8 +1241,6 @@ namespace UnityRemix
                     else if (gameWindow != IntPtr.Zero)
                     {
                         SetForegroundWindow(gameWindow);
-                        SetActiveWindow(gameWindow);
-                        SetFocus(gameWindow);
                     }
                 }
                 else
@@ -1274,15 +1279,6 @@ namespace UnityRemix
                 {
                     RemoveWindowSubclass(remixWindow, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW);
                     remixWindowSubclassed = false;
-                }
-                if (isEmbedded && gameWindow != IntPtr.Zero)
-                {
-                    uint gameThreadId = GetWindowThreadProcessId(gameWindow, out _);
-                    uint renderThreadId = GetCurrentThreadId();
-                    if (gameThreadId != 0 && renderThreadId != 0 && gameThreadId != renderThreadId)
-                    {
-                        AttachThreadInput(renderThreadId, gameThreadId, false);
-                    }
                 }
                 DestroyWindow(remixWindow);
                 remixWindow = IntPtr.Zero;
