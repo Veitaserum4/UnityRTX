@@ -1,6 +1,7 @@
 using System;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using BepInEx.Logging;
 using UnityEngine;
 
@@ -36,13 +37,6 @@ namespace UnityRemix
         private IntPtr gameWindow = IntPtr.Zero;
         private bool isEmbedded = false;
         private bool isRemixWindowVisible = true;
-        private volatile bool pendingRemixBoundsChange = false;
-        private volatile bool pendingRemixVisibilityChange = false;
-        private volatile bool targetRemixVisible = true;
-        private int targetRemixX = 0;
-        private int targetRemixY = 0;
-        private int targetRemixW = 0;
-        private int targetRemixH = 0;
         private static bool isEmbeddedStatic = false;
         private static volatile bool isRemixUIOpen = false;
         public static volatile bool ShouldHideCursor = false;
@@ -59,17 +53,6 @@ namespace UnityRemix
         [DllImport("user32.dll")]
         public static extern bool GetCursorInfo(out CURSORINFO pci);
 
-        public static string GetCursorDiagnosticString()
-        {
-            var ci = new CURSORINFO();
-            ci.cbSize = Marshal.SizeOf<CURSORINFO>();
-            if (GetCursorInfo(out ci))
-            {
-                string state = (ci.flags == 0) ? "HIDDEN(0)" : ((ci.flags == 1) ? "SHOWING(1)" : $"FLAG({ci.flags})");
-                return $"{state}, hCursor=0x{ci.hCursor:X}, pos=({ci.ptScreenPos.x},{ci.ptScreenPos.y})";
-            }
-            return "GetCursorInfo failed";
-        }
 
         [DllImport("user32.dll")]
         private static extern IntPtr CreateCursor(IntPtr hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight, byte[] pvANDPlane, byte[] pvXORPlane);
@@ -112,45 +95,14 @@ namespace UnityRemix
         public static extern int ShowCursor(bool bShow);
 
         private static bool cursorStateInitialized = false;
-        private static RECT lastClipRect;
         private static bool isCursorClipped = false;
 
         public static void UpdateCursorClipping(bool shouldClip)
         {
-            if (shouldClip)
-            {
-                IntPtr gWnd = instance != null && instance.gameWindow != IntPtr.Zero ? instance.gameWindow : FindGameWindow();
-                if (gWnd != IntPtr.Zero && GetClientRect(gWnd, out RECT rc) && rc.Width > 10 && rc.Height > 10)
-                {
-                    POINT topLeft = new POINT { x = rc.left, y = rc.top };
-                    POINT bottomRight = new POINT { x = rc.right, y = rc.bottom };
-                    ClientToScreen(gWnd, ref topLeft);
-                    ClientToScreen(gWnd, ref bottomRight);
-
-                    RECT clipRect = new RECT
-                    {
-                        left = topLeft.x + 4,
-                        top = topLeft.y + 4,
-                        right = Math.Max(topLeft.x + 5, bottomRight.x - 4),
-                        bottom = Math.Max(topLeft.y + 5, bottomRight.y - 4)
-                    };
-
-                    if (!isCursorClipped || clipRect.left != lastClipRect.left || clipRect.top != lastClipRect.top ||
-                        clipRect.right != lastClipRect.right || clipRect.bottom != lastClipRect.bottom)
-                    {
-                        ClipCursor(ref clipRect);
-                        lastClipRect = clipRect;
-                        isCursorClipped = true;
-                    }
-                    return;
-                }
-            }
-
-            if (isCursorClipped)
+            if (isCursorClipped && !shouldClip)
             {
                 ClipCursor(IntPtr.Zero);
                 isCursorClipped = false;
-                lastClipRect = default;
             }
         }
 
@@ -279,6 +231,7 @@ namespace UnityRemix
             catch { }
         }
 
+
         public static void OnRemixUIStateChanged(bool open, ManualLogSource logger = null)
         {
             if (instance != null)
@@ -388,6 +341,7 @@ namespace UnityRemix
         private const uint WM_ACTIVATE = 0x0006;
         private const uint WM_SETFOCUS = 0x0007;
         private const uint WM_KILLFOCUS = 0x0008;
+        private const uint WM_CLOSE = 0x0010;
         private const uint WM_ACTIVATEAPP = 0x001C;
         private const uint WM_SETCURSOR = 0x0020;
         private const uint WM_MOUSEMOVE = 0x0200;
@@ -433,7 +387,6 @@ namespace UnityRemix
         private static bool remixWindowSubclassed = false;
         private const uint SUBCLASS_ID_REMIX_WINDOW = 1002;
         private const uint WM_REQUEST_ACTIVATE = 0x8000 + 101; // WM_APP + 101: Thread-safe activation request
-
 
         private static IntPtr GameWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
@@ -532,18 +485,40 @@ namespace UnityRemix
             {
                 int wa = (int)(wParam.ToInt64() & 0xFFFF);
                 instance?.logger?.LogInfo($"[GameWindowSubclassProc] WM_ACTIVATE: state={(wa == 0 ? "INACTIVE" : (wa == 1 ? "ACTIVE" : "CLICKACTIVE"))}");
+                if (wa == 0)
+                {
+                    RemixUIOverlay.Instance?.HideOverlayImmediate();
+                }
+                else
+                {
+                    RemixUIOverlay.Instance?.RestoreOverlayImmediate();
+                }
             }
             else if (uMsg == 0x001C /* WM_ACTIVATEAPP */)
             {
-                instance?.logger?.LogInfo($"[GameWindowSubclassProc] WM_ACTIVATEAPP: active={(wParam != IntPtr.Zero)}");
+                bool active = (wParam != IntPtr.Zero);
+                instance?.logger?.LogInfo($"[GameWindowSubclassProc] WM_ACTIVATEAPP: active={active}");
+                if (!active)
+                {
+                    RemixUIOverlay.Instance?.HideOverlayImmediate();
+                }
+                else
+                {
+                    RemixUIOverlay.Instance?.RestoreOverlayImmediate();
+                }
             }
             else if (uMsg == WM_SETFOCUS)
             {
                 instance?.logger?.LogInfo("[GameWindowSubclassProc] WM_SETFOCUS");
+                RemixUIOverlay.Instance?.RestoreOverlayImmediate();
             }
             else if (uMsg == WM_KILLFOCUS)
             {
                 instance?.logger?.LogInfo("[GameWindowSubclassProc] WM_KILLFOCUS");
+                if (!isRemixUIOpen)
+                {
+                    RemixUIOverlay.Instance?.HideOverlayImmediate();
+                }
             }
             else if (uMsg == WM_SIZE)
             {
@@ -551,19 +526,21 @@ namespace UnityRemix
                 if (sizeType == 1 /* SIZE_MINIMIZED */)
                 {
                     instance?.logger?.LogInfo("[GameWindowSubclassProc] WM_SIZE: SIZE_MINIMIZED");
-                    if (instance != null)
+                    RemixUIOverlay.Instance?.HideOverlayImmediate();
+                    if (instance != null && instance.remixWindow != IntPtr.Zero)
                     {
-                        instance.targetRemixVisible = false;
-                        instance.pendingRemixVisibilityChange = true;
+                        ShowWindow(instance.remixWindow, SW_HIDE);
+                        instance.isRemixWindowVisible = false;
                     }
                 }
                 else if (sizeType == 0 /* SIZE_RESTORED */ || sizeType == 2 /* SIZE_MAXIMIZED */)
                 {
                     instance?.logger?.LogInfo($"[GameWindowSubclassProc] WM_SIZE: {(sizeType == 0 ? "SIZE_RESTORED" : "SIZE_MAXIMIZED")}");
-                    if (instance != null)
+                    RemixUIOverlay.Instance?.RestoreOverlayImmediate();
+                    if (instance != null && instance.remixWindow != IntPtr.Zero)
                     {
-                        instance.targetRemixVisible = true;
-                        instance.pendingRemixVisibilityChange = true;
+                        ShowWindow(instance.remixWindow, SW_SHOWNOACTIVATE);
+                        instance.isRemixWindowVisible = true;
                     }
                 }
             }
@@ -575,20 +552,17 @@ namespace UnityRemix
         {
             if (isEmbeddedStatic && !isRemixUIOpen)
             {
-                if (uMsg == WM_MOUSEACTIVATE)
+                if (uMsg == WM_NCHITTEST)
                 {
-                    // Return MA_NOACTIVATE so remixWindow never steals active focus from gameWindow.
-                    // Mouse events continue to be routed directly to gameWindow below.
-                    return (IntPtr)MA_NOACTIVATE;
+                    // Pass hit-testing directly to gameWindow beneath us on the same thread!
+                    // Windows automatically delivers all mouse movement, clicks, and wheel events natively to gameWindow.
+                    return (IntPtr)HTTRANSPARENT;
                 }
 
-                if (uMsg >= WM_MOUSEMOVE && uMsg <= WM_MOUSEHWHEEL)
+                if (uMsg == WM_MOUSEACTIVATE)
                 {
-                    if (instance != null && instance.gameWindow != IntPtr.Zero)
-                    {
-                        PostMessage(instance.gameWindow, uMsg, wParam, lParam);
-                        return IntPtr.Zero;
-                    }
+                    // Never steal activation from gameWindow
+                    return (IntPtr)MA_NOACTIVATE;
                 }
 
                 if (uMsg == WM_SETCURSOR)
@@ -616,13 +590,16 @@ namespace UnityRemix
         private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr SetFocus(IntPtr hWnd);
+        public static extern IntPtr SetFocus(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr GetActiveWindow();
+        public static extern IntPtr GetFocus();
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetActiveWindow();
         
         [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
+        public static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -951,8 +928,7 @@ namespace UnityRemix
 
         /// <summary>
         /// Synchronizes the embedded child window size and position with the parent game window.
-        /// Called from Unity Main Thread. Note: Does NOT call Win32 SetWindowPos or ShowWindow across threads.
-        /// Instead, queues changes for Render Thread's PumpWindowsMessages to apply to its own window safely!
+        /// Called from Unity Main Thread. Direct Win32 call since remixWindow was created on Main Thread!
         /// </summary>
         public void SyncWindowBounds()
         {
@@ -965,11 +941,10 @@ namespace UnityRemix
             bool isGameIconic = IsIconic(gameWindow) || !IsWindowVisible(gameWindow);
             bool shouldBeVisible = !isGameIconic;
 
-            if (shouldBeVisible != targetRemixVisible)
+            if (shouldBeVisible != isRemixWindowVisible)
             {
-                targetRemixVisible = shouldBeVisible;
-                pendingRemixVisibilityChange = true;
-                logger?.LogInfo($"[RemixWindowManager] MainThread queued remixWindow visibility change: visible={shouldBeVisible}");
+                ShowWindow(remixWindow, shouldBeVisible ? SW_SHOWNOACTIVATE : SW_HIDE);
+                isRemixWindowVisible = shouldBeVisible;
             }
 
             if (shouldBeVisible && GetClientRect(gameWindow, out RECT rect))
@@ -980,11 +955,11 @@ namespace UnityRemix
                 if (rect.Width > 0 && rect.Height > 0 &&
                     (rect.Width != windowWidth || rect.Height != windowHeight || pt.x != lastRemixX || pt.y != lastRemixY))
                 {
-                    targetRemixX = pt.x;
-                    targetRemixY = pt.y;
-                    targetRemixW = rect.Width;
-                    targetRemixH = rect.Height;
-                    pendingRemixBoundsChange = true;
+                    windowWidth = rect.Width;
+                    windowHeight = rect.Height;
+                    lastRemixX = pt.x;
+                    lastRemixY = pt.y;
+                    SetWindowPos(remixWindow, IntPtr.Zero, pt.x, pt.y, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 }
             }
         }
@@ -1040,6 +1015,10 @@ namespace UnityRemix
                     break;
 
                 case WM_NCHITTEST:
+                    if (isEmbeddedStatic && !isRemixUIOpen)
+                    {
+                        return (IntPtr)HTTRANSPARENT;
+                    }
                     return DefWindowProcW(hWnd, msg, wParam, lParam);
 
                 case WM_SETCURSOR:
@@ -1060,10 +1039,13 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Create Remix window on render thread
+        /// Create Remix window on the calling thread (Unity Main Thread)
         /// </summary>
         public bool CreateRemixWindow()
         {
+            if (remixWindow != IntPtr.Zero)
+                return true;
+
             IntPtr hInstance = GetModuleHandleW(null);
             
             // Register window class if needed
@@ -1188,8 +1170,26 @@ namespace UnityRemix
                 EnsureRemixWindowSubclassed();
             }
             
+            return true;
+        }
+
+        /// <summary>
+        /// Initialize Remix API / Startup on render thread
+        /// </summary>
+        public bool InitializeRemixAPI()
+        {
+            if (remixWindow == IntPtr.Zero)
+            {
+                logger.LogWarning("[RemixWindowManager] InitializeRemixAPI called before CreateRemixWindow; creating window fallback...");
+                if (!CreateRemixWindow())
+                {
+                    logger.LogError("[RemixWindowManager] Failed to create remixWindow fallback");
+                    return false;
+                }
+            }
+
             // Call Remix Startup
-            logger.LogInfo("Calling Remix Startup...");
+            logger.LogInfo("Calling Remix Startup on render thread...");
             var startupInfo = new RemixAPI.remixapi_StartupInfo
             {
                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_STARTUP_INFO,
@@ -1204,8 +1204,7 @@ namespace UnityRemix
             if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
             {
                 logger.LogError($"Remix Startup failed: {result}");
-                DestroyWindow(remixWindow);
-                remixWindow = IntPtr.Zero;
+                DestroyRemixWindow();
                 return false;
             }
             
@@ -1221,52 +1220,14 @@ namespace UnityRemix
             return true;
         }
 
-        
         /// <summary>
-        /// Pump Windows messages to keep window responsive
+        /// Pump Windows messages to keep window responsive (called from Render Thread)
         /// </summary>
         public void PumpWindowsMessages()
         {
-            RemixWatchdog.BeatRender("PumpMessages.VisibilityAndBounds");
-            if (remixWindow != IntPtr.Zero)
-            {
-                if (pendingRemixVisibilityChange)
-                {
-                    pendingRemixVisibilityChange = false;
-                    ShowWindow(remixWindow, targetRemixVisible ? SW_SHOWNOACTIVATE : SW_HIDE);
-                    isRemixWindowVisible = targetRemixVisible;
-                    logger?.LogInfo($"[RemixWindowManager] RenderThread applied remixWindow visibility: visible={targetRemixVisible}");
-                }
-
-                if (pendingRemixBoundsChange && targetRemixVisible)
-                {
-                    pendingRemixBoundsChange = false;
-                    windowWidth = targetRemixW;
-                    windowHeight = targetRemixH;
-                    lastRemixX = targetRemixX;
-                    lastRemixY = targetRemixY;
-                    SetWindowPos(remixWindow, IntPtr.Zero, targetRemixX, targetRemixY, targetRemixW, targetRemixH, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-                    logger?.LogInfo($"[RemixWindowManager] RenderThread applied remixWindow bounds: {targetRemixW}x{targetRemixH} at ({targetRemixX},{targetRemixY})");
-                }
-            }
-
-            RemixWatchdog.BeatRender("PumpMessages.Cursor");
-            if (ShouldHideCursor)
-                EnforceCursorHidden();
-            else
-                EnforceCursorVisible();
-
             // SDL event pumping belongs to the same thread as Startup/Present.
             RemixWatchdog.BeatRender("PumpMessages.SDLPumpEvents");
             RemixAPI.NativePumpEvents?.Invoke();
-
-            RemixWatchdog.BeatRender("PumpMessages.PeekAndDispatch");
-            MSG msg;
-            while (PeekMessageW(out msg, IntPtr.Zero, 0, 0, PM_REMOVE))
-            {
-                TranslateMessage(ref msg);
-                DispatchMessageW(ref msg);
-            }
 
             if (RemixAPI.IsOpenRemix)
             {
@@ -1274,6 +1235,22 @@ namespace UnityRemix
                 UpdateNativeSettings();
             }
             RemixWatchdog.BeatRender("PumpMessages.End");
+        }
+
+        /// <summary>
+        /// Pump Windows messages for remixWindow on Unity Main Thread
+        /// </summary>
+        public static void PumpMainThreadMessages()
+        {
+            if (instance != null && instance.remixWindow != IntPtr.Zero)
+            {
+                MSG msg;
+                while (PeekMessageW(out msg, instance.remixWindow, 0, 0, PM_REMOVE))
+                {
+                    TranslateMessage(ref msg);
+                    DispatchMessageW(ref msg);
+                }
+            }
         }
 
         private void UpdateNativeSettings()
@@ -1340,14 +1317,23 @@ namespace UnityRemix
             EnforceCursorVisible();
             if (remixWindow != IntPtr.Zero)
             {
+                IntPtr wnd = remixWindow;
+                remixWindow = IntPtr.Zero;
                 if (remixWindowSubclassed)
                 {
-                    RemoveWindowSubclass(remixWindow, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW);
+                    RemoveWindowSubclass(wnd, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW);
                     remixWindowSubclassed = false;
                 }
-                DestroyWindow(remixWindow);
-                remixWindow = IntPtr.Zero;
-                logger.LogInfo("Remix window destroyed");
+                uint windowThread = GetWindowThreadProcessId(wnd, out _);
+                if (GetCurrentThreadId() == windowThread)
+                {
+                    DestroyWindow(wnd);
+                }
+                else
+                {
+                    PostMessage(wnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+                }
+                logger.LogInfo("Remix window destroyed/closed");
             }
         }
     }

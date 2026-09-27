@@ -167,10 +167,10 @@ namespace UnityRemix
         {
             logger.LogInfo("Render thread loop starting...");
             
-            // Create window on this thread
-            if (!windowManager.CreateRemixWindow())
+            // Initialize Remix API on this render thread
+            if (!windowManager.InitializeRemixAPI())
             {
-                logger.LogError("Failed to create Remix window on render thread");
+                logger.LogError("Failed to initialize Remix API on render thread");
                 return;
             }
             

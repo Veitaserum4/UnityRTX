@@ -575,9 +575,16 @@ namespace UnityRemix
             if (windowManager != null)
             {
                 windowManager.SetWindowDimensions(width, height);
+                // Create remixWindow on Unity's main thread so both gameWindow and remixWindow
+                // belong to the same thread message queue, enabling native Win32 HTTRANSPARENT hit-testing!
+                if (!windowManager.CreateRemixWindow())
+                {
+                    LogSource.LogError("Failed to create Remix window on main thread");
+                    return;
+                }
             }
             
-            // Start render thread — it will create the window and D3D9 device.
+            // Start render thread — it will initialize Remix API and run the render loop.
             // deviceRegistered stays false until the render thread confirms DeviceReady.
             LogSource.LogInfo("Starting render thread...");
             renderThread?.Start();

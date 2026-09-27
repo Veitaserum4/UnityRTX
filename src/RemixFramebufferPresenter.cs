@@ -288,6 +288,10 @@ namespace UnityRemix
                     logger?.LogInfo($"[RemixFramebufferPresenter] Enforced foreground focus on gameWindow 0x{gameWnd:X} at frame #{frameCount}");
                 }
             }
+
+            // Pump any main-thread messages for remixWindow
+            RemixWindowManager.PumpMainThreadMessages();
+
             RemixWatchdog.BeatMain("Presenter.Update.End");
         }
 

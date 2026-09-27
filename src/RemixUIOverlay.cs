@@ -389,8 +389,9 @@ namespace UnityRemix
             ClientToScreen(gameWindow, ref pt);
 
             // Create transparent, click-through layered popup owned by gameWindow
+            // Does NOT use WS_EX_TOPMOST so it never floats above other desktop applications on Alt-Tab!
             overlayWindow = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
                 OVERLAY_CLASS_NAME,
                 "UnityRemix_UIOverlay",
                 WS_POPUP | WS_VISIBLE | WS_DISABLED,
@@ -560,12 +561,36 @@ namespace UnityRemix
                 lastPresentedNonZero = -1;
                 SetWindowPos(
                     overlayWindow,
-                    HWND_TOPMOST,
+                    HWND_TOP,
                     0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
                 );
                 isOverlayVisible = true;
                 logger?.LogInfo("[RemixUIOverlay] Restored UI overlay after Remix menu closed.");
+            }
+        }
+
+        public void HideOverlayImmediate()
+        {
+            if (overlayWindow != IntPtr.Zero && isOverlayVisible)
+            {
+                ShowWindow(overlayWindow, SW_HIDE);
+                isOverlayVisible = false;
+            }
+        }
+
+        public void RestoreOverlayImmediate()
+        {
+            if (overlayWindow != IntPtr.Zero && !isOverlayVisible && !RemixWindowManager.IsRemixUIOpen)
+            {
+                lastPresentedNonZero = -1;
+                SetWindowPos(
+                    overlayWindow,
+                    HWND_TOP,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                );
+                isOverlayVisible = true;
             }
         }
 
@@ -604,11 +629,11 @@ namespace UnityRemix
             }
             else if (!isOverlayVisible && Application.isFocused && (!hideOnMenu || !RemixWindowManager.IsRemixUIOpen))
             {
-                // Fallback: Ensure overlay window is unhidden and topmost once Remix menu is closed
+                // Fallback: Ensure overlay window is unhidden and in front of remixWindow once Remix menu is closed
                 lastPresentedNonZero = -1;
                 SetWindowPos(
                     overlayWindow,
-                    HWND_TOPMOST,
+                    HWND_TOP,
                     0, 0, 0, 0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
                 );
@@ -1098,7 +1123,7 @@ namespace UnityRemix
 
                         SetWindowPos(
                             overlayWindow,
-                            HWND_TOPMOST,
+                            HWND_TOP,
                             pt.x, pt.y, clientRect.Width, clientRect.Height,
                             SWP_NOACTIVATE | SWP_SHOWWINDOW
                         );
