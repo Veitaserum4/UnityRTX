@@ -99,6 +99,14 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT = 26,
             REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT = 27,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO = 28,
+            REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT = 0x7fff1002,
+        }
+
+        public enum remixapi_InstanceClassEXT : uint
+        {
+            REMIXAPI_INSTANCE_STATIC_EXT = 0,
+            REMIXAPI_INSTANCE_DYNAMIC_EXT = 1,
+            REMIXAPI_INSTANCE_RASTER_ONLY_EXT = 2,
         }
 
         public enum remixapi_CameraType : int
@@ -309,6 +317,16 @@ namespace UnityRemix
             public IntPtr pNext;
             public IntPtr boneTransforms_values;  // const remixapi_Transform*
             public uint boneTransforms_count;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_InstanceIdentityEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public ulong instanceId;
+            public uint classification;
+            public uint rasterVisible;
         }
 
         [StructLayout(LayoutKind.Sequential)]

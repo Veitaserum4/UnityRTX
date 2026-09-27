@@ -678,6 +678,23 @@ namespace UnityRemix
                 objectPickingValue = objectPickingValue
             };
             
+            GCHandle identityHandle = default;
+            bool hasIdentity = false;
+            if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
+            {
+                var identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
+                    pNext = IntPtr.Zero,
+                    instanceId = (ulong)objectPickingValue,
+                    classification = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0 ? 1u : 0u,
+                    rasterVisible = 1
+                };
+                identityHandle = GCHandle.Alloc(identityExt, GCHandleType.Pinned);
+                objectPickingExt.pNext = identityHandle.AddrOfPinnedObject();
+                hasIdentity = true;
+            }
+
             GCHandle pickingHandle = GCHandle.Alloc(objectPickingExt, GCHandleType.Pinned);
             
             try
@@ -706,6 +723,7 @@ namespace UnityRemix
             finally
             {
                 pickingHandle.Free();
+                if (hasIdentity) identityHandle.Free();
             }
         }
         
@@ -872,6 +890,23 @@ namespace UnityRemix
                     objectPickingValue = objectPickingValue
                 };
                 
+                GCHandle identityHandle = default;
+                bool hasIdentity = false;
+                if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
+                {
+                    var identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
+                        pNext = IntPtr.Zero,
+                        instanceId = (ulong)objectPickingValue,
+                        classification = 1u, // Skinned meshes are dynamic
+                        rasterVisible = 1
+                    };
+                    identityHandle = GCHandle.Alloc(identityExt, GCHandleType.Pinned);
+                    objectPickingExt.pNext = identityHandle.AddrOfPinnedObject();
+                    hasIdentity = true;
+                }
+
                 GCHandle pickingHandle = GCHandle.Alloc(objectPickingExt, GCHandleType.Pinned);
                 
                 try
@@ -907,6 +942,20 @@ namespace UnityRemix
                         if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                         {
                             logger.LogWarning($"DrawSkinnedInstance failed for mesh 0x{meshHandle.ToInt64():X}: {result}");
+                            // Evict invalid mesh handle from cache so it can be cleanly recreated next frame
+                            List<ulong> staleKeys = null;
+                            foreach (var kvp in skinnedMeshHandles)
+                            {
+                                if (kvp.Value == meshHandle)
+                                {
+                                    if (staleKeys == null) staleKeys = new List<ulong>();
+                                    staleKeys.Add(kvp.Key);
+                                }
+                            }
+                            if (staleKeys != null)
+                            {
+                                foreach (var k in staleKeys) skinnedMeshHandles.Remove(k);
+                            }
                         }
                     }
                     finally
@@ -917,6 +966,7 @@ namespace UnityRemix
                 finally
                 {
                     pickingHandle.Free();
+                    if (hasIdentity) identityHandle.Free();
                 }
             }
             finally
