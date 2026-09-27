@@ -125,6 +125,7 @@ namespace UnityRemix
         {
             if (configSingleWindow == null) return;
 
+            RemixWatchdog.BeatMain("Presenter.Update");
             bool isSingle = isSingleWindowActive;
 
             using (RemixTracy.Zone("Presenter_Update"))

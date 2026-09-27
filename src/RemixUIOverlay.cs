@@ -583,6 +583,7 @@ namespace UnityRemix
         {
             if (overlayWindow == IntPtr.Zero) return;
 
+            RemixWatchdog.BeatMain("UIOverlay.UpdateOverlay");
             isAppFocused = Application.isFocused;
 
             // If game is unfocused and Remix menu is not open, hide the overlay window so it does not float over other apps on Alt-Tab.

@@ -189,9 +189,11 @@ namespace UnityRemix
             {
                 try
                 {
+                    RemixWatchdog.BeatRender("RenderLoop.PumpMessages");
                     // Process messages
                     windowManager.PumpWindowsMessages();
                     
+                    RemixWatchdog.BeatRender("RenderLoop.RenderFrame");
                     // Render frame
                     RenderFrame(frameNum);
                     frameNum++;
@@ -207,9 +209,11 @@ namespace UnityRemix
                         waitMs = 1; // Uncapped but still responsive
                     }
                     
+                    RemixWatchdog.BeatRender("RenderLoop.WaitForMessages");
                     // Wait for messages or timeout
                     if (windowManager.WaitForMessages(waitMs))
                     {
+                        RemixWatchdog.BeatRender("RenderLoop.PumpMessagesAfterWait");
                         windowManager.PumpWindowsMessages();
                     }
                 }
@@ -234,15 +238,19 @@ namespace UnityRemix
                 if (configUseGameGeometry.Value)
                 {
                     // Process queued mesh creation on render thread (prevents main thread deadlocks)
+                    RemixWatchdog.BeatRender("RenderFrame.ProcessMeshCreationBatch");
                     frameCapture?.ProcessMeshCreationBatch();
                     
                     // Render game geometry
+                    RemixWatchdog.BeatRender("RenderFrame.RenderGameGeometry");
                     hasGeometry = RenderGameGeometry();
                     
                     // Process Unity lights
+                    RemixWatchdog.BeatRender("RenderFrame.ProcessLights");
                     lightConverter.ProcessLights(frameNum);
 
                     // Draw skybox light (DomeLight mode)
+                    RemixWatchdog.BeatRender("RenderFrame.DrawSkyLight");
                     skyboxManager?.DrawSkyLight(frameNum);
                     
                     // Draw test light if lights disabled
@@ -275,6 +283,7 @@ namespace UnityRemix
                 // Present (only when geometry has been submitted to prevent DXVK divide-by-zero crashes on empty scenes)
                 if (presentFunc != null && hasGeometry)
                 {
+                    RemixWatchdog.BeatRender("RenderFrame.Present.Before");
                     var presentInfo = new RemixAPI.remixapi_PresentInfo
                     {
                         sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_PRESENT_INFO,
@@ -283,6 +292,7 @@ namespace UnityRemix
                     };
                     
                     var result = presentFunc(ref presentInfo);
+                    RemixWatchdog.BeatRender("RenderFrame.Present.After");
                     if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                     {
                         if (configDebugLogInterval.Value > 0 && frameNum % configDebugLogInterval.Value == 0)

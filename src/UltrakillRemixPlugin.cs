@@ -102,6 +102,7 @@ namespace UnityRemix
         {
             LogSource = Logger;
             LogSource.LogInfo($"Plugin {PluginName} v{PluginVersion} is loading!");
+            RemixWatchdog.Start(LogSource);
 
             // Suppress conflicting Vulkan implicit layer (Steam overlay) for DXVK/Remix
             try
