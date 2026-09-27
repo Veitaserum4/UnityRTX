@@ -836,6 +836,9 @@ namespace UnityRemix
             }
         }
 
+        private int lastRemixX = -1;
+        private int lastRemixY = -1;
+
         /// <summary>
         /// Synchronizes the embedded child window size and position with the parent game window.
         /// </summary>
@@ -846,13 +849,25 @@ namespace UnityRemix
             if (!isEmbedded || remixWindow == IntPtr.Zero || gameWindow == IntPtr.Zero)
                 return;
 
+            if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
+            {
+                ShowWindow(remixWindow, SW_HIDE);
+                return;
+            }
+
             if (GetClientRect(gameWindow, out RECT rect))
             {
-                if (rect.Width > 0 && rect.Height > 0 && (rect.Width != windowWidth || rect.Height != windowHeight))
+                var pt = new POINT { x = 0, y = 0 };
+                ClientToScreen(gameWindow, ref pt);
+
+                if (rect.Width > 0 && rect.Height > 0 &&
+                    (rect.Width != windowWidth || rect.Height != windowHeight || pt.x != lastRemixX || pt.y != lastRemixY))
                 {
                     windowWidth = rect.Width;
                     windowHeight = rect.Height;
-                    SetWindowPos(remixWindow, IntPtr.Zero, 0, 0, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE);
+                    lastRemixX = pt.x;
+                    lastRemixY = pt.y;
+                    SetWindowPos(remixWindow, IntPtr.Zero, pt.x, pt.y, rect.Width, rect.Height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 }
             }
         }
@@ -1006,9 +1021,13 @@ namespace UnityRemix
                     windowWidth = width;
                     windowHeight = height;
                 }
-                posX = 0;
-                posY = 0;
-                dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
+                var pt = new POINT { x = 0, y = 0 };
+                ClientToScreen(gameWindow, ref pt);
+                posX = pt.x;
+                posY = pt.y;
+                lastRemixX = pt.x;
+                lastRemixY = pt.y;
+                dwStyle = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED;
                 dwExStyle = WS_EX_TOOLWINDOW;
                 parentHwnd = gameWindow;
                 isEmbedded = true;
@@ -1027,26 +1046,18 @@ namespace UnityRemix
                 parentHwnd, IntPtr.Zero, hInstance, IntPtr.Zero
             );
 
-            // Fallback for Embedded mode if CreateWindowExW with parent fails
+            // Fallback for Embedded mode if initial CreateWindowExW fails
             if (remixWindow == IntPtr.Zero && isSingleWindow)
             {
-                logger.LogWarning("[RemixWindowManager] CreateWindowExW with parent failed; attempting SetParent fallback...");
+                logger.LogWarning("[RemixWindowManager] CreateWindowExW with parent failed; attempting standalone popup fallback...");
                 remixWindow = CreateWindowExW(
                     WS_EX_TOOLWINDOW,
                     WINDOW_CLASS_NAME,
                     windowTitle,
-                    WS_POPUP | WS_VISIBLE,
-                    0, 0, width, height,
+                    WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_DISABLED,
+                    posX, posY, width, height,
                     IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero
                 );
-                if (remixWindow != IntPtr.Zero)
-                {
-                    SetParent(remixWindow, gameWindow);
-                    int style = GetWindowLongW(remixWindow, GWL_STYLE);
-                    style = (style & ~unchecked((int)WS_POPUP)) | (int)(WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS);
-                    SetWindowLongW(remixWindow, GWL_STYLE, style);
-                    SetWindowPos(remixWindow, IntPtr.Zero, 0, 0, width, height, SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-                }
             }
             
             if (remixWindow == IntPtr.Zero)
