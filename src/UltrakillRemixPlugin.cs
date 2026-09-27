@@ -517,7 +517,7 @@ namespace UnityRemix
             renderThread.SetSkyboxManager(skyboxManager);
             
             // Initialize ImGui overlay
-            if (!RemixAPI.IsOpenRemix && RemixImGui.Initialize(LogSource))
+            if (RemixImGui.Initialize(LogSource))
             {
                 settingsUI = new RemixSettingsUI(LogSource, this);
                 RemixImGui.RegisterDrawCallback(new RemixImGui.DrawCallback(settingsUI.Draw));
