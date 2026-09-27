@@ -300,6 +300,7 @@ namespace UnityRemix
             {
                 RemixGameStateHelper.SetRemixMenuState(open, logger);
             }
+            RemixUIOverlay.Instance?.OnRemixUIStateChanged(open);
         }
 
         public void HandleAltX()

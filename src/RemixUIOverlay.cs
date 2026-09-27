@@ -65,6 +65,7 @@ namespace UnityRemix
         private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
         private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int WS_EX_TOPMOST = 0x00000008;
         private const int WS_POPUP = unchecked((int)0x80000000);
         private const int WS_VISIBLE = 0x10000000;
         private const int WS_DISABLED = 0x08000000;
@@ -74,6 +75,7 @@ namespace UnityRemix
         private const byte AC_SRC_ALPHA = 0x01;
 
         private static readonly IntPtr HWND_TOP = IntPtr.Zero;
+        private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
         private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOMOVE = 0x0002;
@@ -387,7 +389,7 @@ namespace UnityRemix
 
             // Create transparent, click-through layered popup owned by gameWindow
             overlayWindow = CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
                 OVERLAY_CLASS_NAME,
                 "UnityRemix_UIOverlay",
                 WS_POPUP | WS_VISIBLE | WS_DISABLED,
@@ -537,6 +539,41 @@ namespace UnityRemix
             logger?.LogInfo($"[RemixUIOverlay] Configured {uiCameras.Count} UI cameras to render to UI RenderTexture.");
         }
 
+        public void OnRemixUIStateChanged(bool open)
+        {
+            if (overlayWindow == IntPtr.Zero) return;
+
+            bool hideOnMenu = configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value;
+
+            if (open)
+            {
+                if (hideOnMenu && isOverlayVisible)
+                {
+                    lock (dibLock)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
+                    }
+                    logger?.LogInfo("[RemixUIOverlay] Hidden UI overlay for Remix menu.");
+                }
+            }
+            else
+            {
+                lock (dibLock)
+                {
+                    lastPresentedNonZero = -1;
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
+                    isOverlayVisible = true;
+                }
+                logger?.LogInfo("[RemixUIOverlay] Restored UI overlay after Remix menu closed.");
+            }
+        }
+
         /// <summary>
         /// Updates the transparent Win32 layered overlay with the contents of the UI RenderTexture.
         /// Uses non-blocking AsyncGPUReadback to eliminate GPU stalls and Parallel.For for scanline conversion.
@@ -546,14 +583,34 @@ namespace UnityRemix
             if (overlayWindow == IntPtr.Zero) return;
 
             // If user enabled HideUIOnRemixMenu, hide the game UI overlay while Remix Alt+X menu is open.
-            if (configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen)
+            bool hideOnMenu = configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value;
+            if (hideOnMenu && RemixWindowManager.IsRemixUIOpen)
             {
                 if (isOverlayVisible)
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
-                    isOverlayVisible = false;
+                    lock (dibLock)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
+                    }
                 }
                 return;
+            }
+            else if (!isOverlayVisible && Application.isFocused && (!hideOnMenu || !RemixWindowManager.IsRemixUIOpen))
+            {
+                // Fallback: Ensure overlay window is unhidden and topmost once Remix menu is closed
+                lock (dibLock)
+                {
+                    lastPresentedNonZero = -1;
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
+                    isOverlayVisible = true;
+                }
+                logger?.LogInfo("[RemixUIOverlay] Restored UI overlay in UpdateOverlay fallback.");
             }
 
             SyncWindowBounds();
@@ -956,7 +1013,7 @@ namespace UnityRemix
                 // If completely empty (no UI pixels rendered at all), present transparent once and skip redundant updates
                 if (nonZeroPixelCount == 0)
                 {
-                    if (lastPresentedNonZero == 0)
+                    if (isOverlayVisible && lastPresentedNonZero == 0)
                     {
                         // Already presented fully transparent buffer; skip redundant DWM update
                         return;
@@ -1004,7 +1061,12 @@ namespace UnityRemix
 
                 if (!isOverlayVisible && !(configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen))
                 {
-                    ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
                     isOverlayVisible = true;
                 }
                 }
@@ -1019,7 +1081,7 @@ namespace UnityRemix
             {
                 if (overlayWindow == IntPtr.Zero || gameWindow == IntPtr.Zero) return;
 
-                if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow))
+                if (IsIconic(gameWindow) || !IsWindowVisible(gameWindow) || (!Application.isFocused && !RemixWindowManager.IsRemixUIOpen))
                 {
                     if (isOverlayVisible)
                     {
@@ -1048,7 +1110,7 @@ namespace UnityRemix
                         {
                             SetWindowPos(
                                 overlayWindow,
-                                HWND_TOP,
+                                HWND_TOPMOST,
                                 pt.x, pt.y, clientRect.Width, clientRect.Height,
                                 SWP_NOACTIVATE | SWP_SHOWWINDOW
                             );
