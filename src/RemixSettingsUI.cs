@@ -219,10 +219,10 @@ namespace UnityRemix
                 RemixImGui.Unindent();
             }
 
-            if (RemixImGui.Checkbox("Skybox Autodetection", ref _enableSkybox))
+            if (RemixImGui.Checkbox("Skybox Autodetection (Requires Scene Reload)", ref _enableSkybox))
                 _plugin.SetConfig("EnableSkybox", _enableSkybox);
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Automatically detects Unity skybox (cubemap, procedural, or solid color)\nand renders it in RTX Remix as a sky surface.");
+                RemixImGui.SetTooltip("Automatically detects Unity skybox (cubemap, panoramic, or solid color)\nand renders it in RTX Remix as a native Dome Light.\nRequires scene reload to take effect.");
 
             if (_enableSkybox)
             {
