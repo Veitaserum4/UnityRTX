@@ -678,11 +678,11 @@ namespace UnityRemix
                 objectPickingValue = objectPickingValue
             };
             
-            GCHandle identityHandle = default;
+            RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
             bool hasIdentity = false;
             if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
             {
-                var identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
+                identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                     pNext = IntPtr.Zero,
@@ -690,19 +690,20 @@ namespace UnityRemix
                     classification = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0 ? 1u : 0u,
                     rasterVisible = 1
                 };
-                identityHandle = GCHandle.Alloc(identityExt, GCHandleType.Pinned);
-                objectPickingExt.pNext = identityHandle.AddrOfPinnedObject();
                 hasIdentity = true;
             }
 
-            GCHandle pickingHandle = GCHandle.Alloc(objectPickingExt, GCHandleType.Pinned);
-            
-            try
+            unsafe
             {
+                if (hasIdentity)
+                {
+                    objectPickingExt.pNext = (IntPtr)(&identityExt);
+                }
+
                 var instanceInfo = new RemixAPI.remixapi_InstanceInfo
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                    pNext = pickingHandle.AddrOfPinnedObject(),
+                    pNext = (IntPtr)(&objectPickingExt),
                     categoryFlags = categoryFlags,
                     mesh = meshHandle,
                     transform = transform,
@@ -719,11 +720,6 @@ namespace UnityRemix
                 {
                     logger.LogWarning($"DrawInstance failed for mesh 0x{meshHandle.ToInt64():X}: {result}");
                 }
-            }
-            finally
-            {
-                pickingHandle.Free();
-                if (hasIdentity) identityHandle.Free();
             }
         }
         

@@ -373,11 +373,11 @@ namespace UnityRemix
                             if (!StaticGeometryDedupe.TryClaimVisibleInstance(instance.RendererInstanceId, instance.DedupeKey, claimedRendererIds, claimedStaticKeys))
                                 continue;
                             
-                            GCHandle identityHandle = default;
+                            RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
                             bool hasIdentity = false;
                             if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
                             {
-                                var identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
+                                identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                                 {
                                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                                     pNext = IntPtr.Zero,
@@ -385,16 +385,15 @@ namespace UnityRemix
                                     classification = 0u, // Scanned static scene meshes
                                     rasterVisible = 1
                                 };
-                                identityHandle = GCHandle.Alloc(identityExt, GCHandleType.Pinned);
                                 hasIdentity = true;
                             }
 
-                            try
+                            unsafe
                             {
                                 var instanceInfo = new RemixAPI.remixapi_InstanceInfo
                                 {
                                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                                    pNext = hasIdentity ? identityHandle.AddrOfPinnedObject() : IntPtr.Zero,
+                                    pNext = hasIdentity ? (IntPtr)(&identityExt) : IntPtr.Zero,
                                     categoryFlags = 0,
                                     mesh = instance.MeshHandle,
                                     transform = instance.Transform,
@@ -403,10 +402,6 @@ namespace UnityRemix
                                 
                                 drawFunc(ref instanceInfo);
                                 objectPickingValue++;
-                            }
-                            finally
-                            {
-                                if (hasIdentity) identityHandle.Free();
                             }
                         }
                     }
