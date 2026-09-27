@@ -275,19 +275,6 @@ namespace UnityRemix
                 SetCursor(RemixWindowManager.BlankCursor);
             }
 
-            // Foreground safety net: On Main Thread, if gameplay is active but remixWindow was activated, focus gameWindow safely
-            if (isSingleWindowActive && !RemixWindowManager.IsRemixUIOpen && windowManager != null)
-            {
-                IntPtr fg = GetForegroundWindow();
-                IntPtr rw = windowManager.RemixWindow;
-                IntPtr gw = windowManager.GameWindow;
-                if (rw != IntPtr.Zero && fg == rw && gw != IntPtr.Zero)
-                {
-                    SetForegroundWindow(gw);
-                    SetFocus(gw);
-                }
-            }
-
             // Ensure game window retains activation and focus during startup
             if ((frameCount == 15 || frameCount == 60) && isSingle)
             {

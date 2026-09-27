@@ -550,27 +550,21 @@ namespace UnityRemix
             {
                 if (hideOnMenu && isOverlayVisible)
                 {
-                    lock (dibLock)
-                    {
-                        ShowWindow(overlayWindow, SW_HIDE);
-                        isOverlayVisible = false;
-                    }
+                    ShowWindow(overlayWindow, SW_HIDE);
+                    isOverlayVisible = false;
                     logger?.LogInfo("[RemixUIOverlay] Hidden UI overlay for Remix menu.");
                 }
             }
             else
             {
-                lock (dibLock)
-                {
-                    lastPresentedNonZero = -1;
-                    SetWindowPos(
-                        overlayWindow,
-                        HWND_TOPMOST,
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                    );
-                    isOverlayVisible = true;
-                }
+                lastPresentedNonZero = -1;
+                SetWindowPos(
+                    overlayWindow,
+                    HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                );
+                isOverlayVisible = true;
                 logger?.LogInfo("[RemixUIOverlay] Restored UI overlay after Remix menu closed.");
             }
         }
@@ -591,11 +585,8 @@ namespace UnityRemix
             {
                 if (isOverlayVisible)
                 {
-                    lock (dibLock)
-                    {
-                        ShowWindow(overlayWindow, SW_HIDE);
-                        isOverlayVisible = false;
-                    }
+                    ShowWindow(overlayWindow, SW_HIDE);
+                    isOverlayVisible = false;
                 }
                 return;
             }
@@ -606,28 +597,22 @@ namespace UnityRemix
             {
                 if (isOverlayVisible)
                 {
-                    lock (dibLock)
-                    {
-                        ShowWindow(overlayWindow, SW_HIDE);
-                        isOverlayVisible = false;
-                    }
+                    ShowWindow(overlayWindow, SW_HIDE);
+                    isOverlayVisible = false;
                 }
                 return;
             }
             else if (!isOverlayVisible && Application.isFocused && (!hideOnMenu || !RemixWindowManager.IsRemixUIOpen))
             {
                 // Fallback: Ensure overlay window is unhidden and topmost once Remix menu is closed
-                lock (dibLock)
-                {
-                    lastPresentedNonZero = -1;
-                    SetWindowPos(
-                        overlayWindow,
-                        HWND_TOPMOST,
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                    );
-                    isOverlayVisible = true;
-                }
+                lastPresentedNonZero = -1;
+                SetWindowPos(
+                    overlayWindow,
+                    HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                );
+                isOverlayVisible = true;
                 logger?.LogInfo("[RemixUIOverlay] Restored UI overlay in UpdateOverlay fallback.");
             }
 
@@ -740,20 +725,16 @@ namespace UnityRemix
                 var totalSw = System.Diagnostics.Stopwatch.StartNew();
                 double updateLayeredMs = 0;
 
-                lock (dibLock)
+                if (!System.Threading.Monitor.TryEnter(dibLock, 20))
+                    return;
+
+                try
                 {
                     if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
                         return;
 
                     if (configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen)
-                    {
-                        if (isOverlayVisible)
-                        {
-                            ShowWindow(overlayWindow, SW_HIDE);
-                            isOverlayVisible = false;
-                        }
                         return;
-                    }
 
                 int totalPixels = destWidth * destHeight;
                 int nonZeroPixelCount = 0;
@@ -1077,16 +1058,10 @@ namespace UnityRemix
                     logger?.LogError($"[RemixUIOverlay] UpdateLayeredWindow failed! Win32 Error: {err}");
                 }
 
-                if (!isOverlayVisible && isAppFocused && !(configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen))
-                {
-                    SetWindowPos(
-                        overlayWindow,
-                        HWND_TOPMOST,
-                        0, 0, 0, 0,
-                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                    );
-                    isOverlayVisible = true;
                 }
+                finally
+                {
+                    System.Threading.Monitor.Exit(dibLock);
                 }
 
                 RemixProfiler.RecordOverlayThread(totalSw.Elapsed.TotalMilliseconds, updateLayeredMs);
@@ -1103,11 +1078,8 @@ namespace UnityRemix
                 {
                     if (isOverlayVisible)
                     {
-                        lock (dibLock)
-                        {
-                            ShowWindow(overlayWindow, SW_HIDE);
-                            isOverlayVisible = false;
-                        }
+                        ShowWindow(overlayWindow, SW_HIDE);
+                        isOverlayVisible = false;
                     }
                     return;
                 }
@@ -1124,15 +1096,12 @@ namespace UnityRemix
                         lastOverlayW = clientRect.Width;
                         lastOverlayH = clientRect.Height;
 
-                        lock (dibLock)
-                        {
-                            SetWindowPos(
-                                overlayWindow,
-                                HWND_TOPMOST,
-                                pt.x, pt.y, clientRect.Width, clientRect.Height,
-                                SWP_NOACTIVATE | SWP_SHOWWINDOW
-                            );
-                        }
+                        SetWindowPos(
+                            overlayWindow,
+                            HWND_TOPMOST,
+                            pt.x, pt.y, clientRect.Width, clientRect.Height,
+                            SWP_NOACTIVATE | SWP_SHOWWINDOW
+                        );
                     }
                 }
             }

@@ -577,32 +577,15 @@ namespace UnityRemix
             {
                 if (uMsg == WM_MOUSEACTIVATE)
                 {
-                    instance?.logger?.LogInfo("[RemixWindowSubclassProc] WM_MOUSEACTIVATE -> posting WM_REQUEST_ACTIVATE to gameWindow");
-                    if (instance != null && instance.gameWindow != IntPtr.Zero)
-                    {
-                        PostMessage(instance.gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
-                    }
-                    return (IntPtr)MA_ACTIVATE;
-                }
-
-                if (uMsg == WM_SETFOCUS)
-                {
-                    instance?.logger?.LogInfo("[RemixWindowSubclassProc] WM_SETFOCUS -> posting WM_REQUEST_ACTIVATE to gameWindow");
-                    if (instance != null && instance.gameWindow != IntPtr.Zero)
-                    {
-                        PostMessage(instance.gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
-                    }
-                    return IntPtr.Zero;
+                    // Return MA_NOACTIVATE so remixWindow never steals active focus from gameWindow.
+                    // Mouse events continue to be routed directly to gameWindow below.
+                    return (IntPtr)MA_NOACTIVATE;
                 }
 
                 if (uMsg >= WM_MOUSEMOVE && uMsg <= WM_MOUSEHWHEEL)
                 {
                     if (instance != null && instance.gameWindow != IntPtr.Zero)
                     {
-                        if (uMsg == WM_LBUTTONDOWN || uMsg == WM_RBUTTONDOWN || uMsg == WM_MBUTTONDOWN || uMsg == WM_XBUTTONDOWN)
-                        {
-                            PostMessage(instance.gameWindow, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
-                        }
                         PostMessage(instance.gameWindow, uMsg, wParam, lParam);
                         return IntPtr.Zero;
                     }
@@ -1156,9 +1139,9 @@ namespace UnityRemix
                 lastRemixY = pt.y;
                 dwStyle = WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS;
                 dwExStyle = WS_EX_TOOLWINDOW;
-                // Standalone un-owned popup to prevent cross-thread Win32 user32 activation deadlocks.
-                // Owned popups across threads cause synchronous kernel-level win32k desktop lock conflicts!
-                parentHwnd = IntPtr.Zero;
+                // Setting parentHwnd = gameWindow makes remixWindow an owned popup,
+                // guaranteeing it stays permanently positioned in front of gameWindow in Z-order.
+                parentHwnd = gameWindow;
                 isEmbedded = true;
                 isEmbeddedStatic = true;
             }
