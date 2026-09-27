@@ -534,19 +534,6 @@ namespace UnityRemix
         // Cached GPU skinning data per sharedMesh (bind-pose vertices + bone weights)
         private Dictionary<int, CachedSkinningData> cachedSkinning = new Dictionary<int, CachedSkinningData>(); // keyed by sharedMesh instance ID
         
-        // Pending GPU readback requests
-        private struct PendingReadback
-        {
-            public int skinnedId;
-            public int materialId;
-            public int sharedMeshId;
-            public Matrix4x4 localToWorld;
-            public AsyncGPUReadbackRequest request;
-        }
-        private List<PendingReadback> pendingReadbacks = new List<PendingReadback>();
-        
-        // Track which renderers have had vertexBufferTarget configured
-        private HashSet<int> configuredBufferTargets = new HashSet<int>();
         private HashSet<string> loggedHashDebugMeshes = new HashSet<string>();
         
         // Track logged skinned mesh materials to avoid spam
@@ -681,8 +668,6 @@ namespace UnityRemix
             loggedSkinnedMaterials.Clear();
             skinnedRoundRobinIndex = 0;
             persistentSkinnedData.Clear();
-            pendingReadbacks.Clear();
-            configuredBufferTargets.Clear();
             loggedHashDebugMeshes.Clear();
             cachedTopology.Clear();
             cachedSkinning.Clear();
@@ -705,9 +690,8 @@ namespace UnityRemix
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
             skinnedRoundRobinIndex = 0;
-            // Don't clear configuredBufferTargets — the property persists on the component
             
-            var allStatic = UnityEngine.Object.FindObjectsOfType<MeshRenderer>(true);
+            var allStatic = UnityCompat.FindSceneComponentsIncludingInactive<MeshRenderer>();
             for (int i = 0; i < allStatic.Length; i++)
             {
                 var r = allStatic[i];
@@ -717,7 +701,7 @@ namespace UnityRemix
                 }
             }
 
-            var allSkinned = UnityEngine.Object.FindObjectsOfType<SkinnedMeshRenderer>(true);
+            var allSkinned = UnityCompat.FindSceneComponentsIncludingInactive<SkinnedMeshRenderer>();
             for (int i = 0; i < allSkinned.Length; i++)
             {
                 var sr = allSkinned[i];
@@ -1868,10 +1852,8 @@ namespace UnityRemix
                 if (mesh == null || mesh.vertexCount == 0)
                 {
                     var cr = g.canvasRenderer;
-                    if (cr != null && _canvasRendererGetMesh != null)
-                    {
-                        try { mesh = (Mesh)_canvasRendererGetMesh.Invoke(cr, null); } catch { }
-                    }
+                    if (cr != null)
+                        mesh = UnityCompat.GetCanvasMesh(cr);
                 }
 
                 Vector3[] verts = null;
@@ -3051,67 +3033,6 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Try to issue an async GPU readback for a skinned mesh renderer's vertex buffer.
-        /// Returns true if request was issued, false if GPU readback not possible for this renderer.
-        /// </summary>
-        private bool TryIssueGPUReadback(SkinnedMeshRenderer skinned, int skinnedId, int sharedMeshId, int matId, Matrix4x4 localToWorld, bool doLog)
-        {
-            try
-            {
-                // Ensure vertex buffer is readable — must be set before the GPU skins this renderer,
-                // so we configure it and skip readback this frame (buffer won't exist yet).
-                // Unity 2019 lacks vertexBufferTarget and forceMatrixRecalculationPerRender —
-                // MissingMethodException will be caught and BakeMesh fallback used instead.
-                if (!configuredBufferTargets.Contains(skinnedId))
-                {
-                    skinned.vertexBufferTarget |= GraphicsBuffer.Target.Raw;
-                    skinned.forceMatrixRecalculationPerRender = true;
-                    configuredBufferTargets.Add(skinnedId);
-                    logger.LogInfo($"  GPU readback: configured vertexBufferTarget for '{skinned.name}' (id={skinnedId}), deferring to next frame");
-                    return false;
-                }
-                
-                var buffer = skinned.GetVertexBuffer();
-                if (buffer == null || !buffer.IsValid())
-                {
-                    logger.LogInfo($"  GPU readback: GetVertexBuffer() returned {(buffer == null ? "null" : "invalid")} for '{skinned.name}' (id={skinnedId})");
-                    buffer?.Dispose();
-                    return false;
-                }
-                
-                var request = AsyncGPUReadback.Request(buffer);
-                buffer.Dispose();
-                
-                pendingReadbacks.Add(new PendingReadback
-                {
-                    skinnedId = skinnedId,
-                    materialId = matId,
-                    sharedMeshId = sharedMeshId,
-                    localToWorld = localToWorld,
-                    request = request
-                });
-                
-                return true;
-            }
-            catch (MissingMethodException)
-            {
-                // Unity 2019: vertexBufferTarget / GetVertexBuffer / forceMatrixRecalculationPerRender
-                // don't exist. Silently fall through to BakeMesh — log once per renderer.
-                if (!configuredBufferTargets.Contains(skinnedId))
-                {
-                    logger.LogInfo($"  GPU readback: not available for '{skinned.name}' (Unity 2019) — using BakeMesh");
-                    configuredBufferTargets.Add(skinnedId); // prevent repeated log
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning($"  GPU readback: exception for '{skinned.name}' (id={skinnedId}): {ex.Message}");
-                return false;
-            }
-        }
-        
-        /// <summary>
         /// BakeMesh fallback: CPU re-skin a single skinned mesh.
         /// </summary>
         private bool BakeSingleMesh(SkinnedMeshRenderer skinned, int skinnedId, int matId, Matrix4x4 localToWorld, bool doLog)
@@ -3354,8 +3275,6 @@ namespace UnityRemix
                 }
             }
             bakedMeshes.Clear();
-            pendingReadbacks.Clear();
-            configuredBufferTargets.Clear();
             cachedTopology.Clear();
         }
     }

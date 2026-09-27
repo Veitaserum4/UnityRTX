@@ -37,6 +37,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configEnableLights;
         private ConfigEntry<float> configLightIntensityMultiplier;
         private ConfigEntry<int> configTargetFPS;
+        private ConfigEntry<string> configNativeBackend;
 
         // Debug Toggles
         private ConfigEntry<bool> configCaptureStaticMeshes;
@@ -149,6 +150,10 @@ namespace UnityRemix
         
         private void InitializeConfig()
         {
+            configNativeBackend = Config.Bind("Native", "Backend", "raster",
+                new ConfigDescription("openremix rendering backend. Restart the game after changing this setting.",
+                    new AcceptableValueList<string>("raster", "pathtrace")));
+
             // Camera Settings
             configCameraName = Config.Bind("Camera", "CameraName", "",
                 "Specific camera name to use for RTX Remix rendering. Leave empty to use auto-detection.");
@@ -375,10 +380,12 @@ namespace UnityRemix
             if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
             {
                 LogSource.LogError($"Failed to load Remix API: {result}");
+                if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_INCOMPATIBLE_VERSION)
+                    LogSource.LogError("Use openremix API 0.1003.0, Remix Plus API 0.1000.0, or UnityRTX v0.2's 0.6.1 runtime. Other layouts are not supported.");
                 return;
             }
             
-            LogSource.LogInfo("Remix API loaded successfully!");
+            LogSource.LogInfo($"Remix API loaded successfully! API: {RemixAPI.LoadedApiVersion}");
             LogSource.LogInfo($"Interface pointers - CreateMesh: {remixInterface.CreateMesh}, DrawInstance: {remixInterface.DrawInstance}");
             
             remixInitialized = true;
@@ -397,7 +404,7 @@ namespace UnityRemix
             // Create all components with dependencies
             textureCategoryManager = new TextureCategoryManager();
             
-            windowManager = new RemixWindowManager(LogSource, remixInterface, configSingleWindow);
+            windowManager = new RemixWindowManager(LogSource, remixInterface, configSingleWindow, configNativeBackend);
             
             cameraHandler = new RemixCameraHandler(
                 LogSource,
@@ -510,7 +517,7 @@ namespace UnityRemix
             renderThread.SetSkyboxManager(skyboxManager);
             
             // Initialize ImGui overlay
-            if (RemixImGui.Initialize(LogSource))
+            if (!RemixAPI.IsOpenRemix && RemixImGui.Initialize(LogSource))
             {
                 settingsUI = new RemixSettingsUI(LogSource, this);
                 RemixImGui.RegisterDrawCallback(new RemixImGui.DrawCallback(settingsUI.Draw));
@@ -784,7 +791,11 @@ namespace UnityRemix
             RemixImGui.UnregisterOverlayCallback();
             
             // Stop render thread
-            renderThread?.Stop();
+            if (renderThread != null && !renderThread.Stop())
+            {
+                LogSource.LogWarning("Render thread is still stopping; keeping the runtime loaded until process exit.");
+                return;
+            }
             
             // Cleanup all components
             framebufferPresenter?.Cleanup();
