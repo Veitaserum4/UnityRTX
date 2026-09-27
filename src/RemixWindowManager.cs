@@ -219,6 +219,8 @@ namespace UnityRemix
         public static void SetRemixUIOpen(bool open) => isRemixUIOpen = open;
         public static void ToggleRemixUI() => isRemixUIOpen = !isRemixUIOpen;
 
+        private static bool lastSyncedRemixOpen = false;
+
         /// <summary>
         /// Continuously queries the ground-truth UI state directly from the Remix runtime (RtxOptions::showUI).
         /// Prevents state inversion across scene loads, startup modals (e.g. preset selection), or mouse clicks on ImGui windows.
@@ -231,8 +233,9 @@ namespace UnityRemix
                 {
                     var state = RemixAPI.GetUIStateFunc();
                     bool remixOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
-                    if (remixOpen != isRemixUIOpen)
+                    if (remixOpen != lastSyncedRemixOpen)
                     {
+                        lastSyncedRemixOpen = remixOpen;
                         isRemixUIOpen = remixOpen;
                         logger?.LogInfo($"[RemixWindowManager] Synced isRemixUIOpen with Remix runtime: {isRemixUIOpen} (UIState={state})");
                         OnRemixUIStateChanged(isRemixUIOpen, logger);
@@ -1152,15 +1155,28 @@ namespace UnityRemix
                     logger.LogInfo($"openremix settings {(state == RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE ? "closed" : "opened")}");
                     if (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE)
                     {
+                        if (isEmbedded)
+                        {
+                            EnableWindow(remixWindow, true);
+                        }
                         SetForegroundWindow(remixWindow);
                         SetFocus(remixWindow);
+                    }
+                    else if (isEmbedded)
+                    {
+                        EnableWindow(remixWindow, false);
                     }
                 }
                 else
                     logger.LogWarning($"Could not toggle openremix settings: {result}");
             }
             // Also reflect the panel's own close button for embedded mouse routing.
-            isRemixUIOpen = state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE;
+            bool newOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
+            if (isEmbedded && isRemixUIOpen != newOpen)
+            {
+                EnableWindow(remixWindow, newOpen);
+            }
+            isRemixUIOpen = newOpen;
         }
         
         /// <summary>
@@ -1178,6 +1194,7 @@ namespace UnityRemix
         public void DestroyRemixWindow()
         {
             isRemixUIOpen = false;
+            lastSyncedRemixOpen = false;
             UpdateCursorVisibility(false);
             EnforceCursorVisible();
             if (remixWindow != IntPtr.Zero)

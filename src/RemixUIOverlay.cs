@@ -670,6 +670,16 @@ namespace UnityRemix
                     if (overlayWindow == IntPtr.Zero || overlayBits == IntPtr.Zero || processPixels == null)
                         return;
 
+                    if (configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen)
+                    {
+                        if (isOverlayVisible)
+                        {
+                            ShowWindow(overlayWindow, SW_HIDE);
+                            isOverlayVisible = false;
+                        }
+                        return;
+                    }
+
                 int totalPixels = destWidth * destHeight;
                 int nonZeroPixelCount = 0;
                 int opaquePixelCount = 0;
@@ -992,7 +1002,7 @@ namespace UnityRemix
                     logger?.LogError($"[RemixUIOverlay] UpdateLayeredWindow failed! Win32 Error: {err}");
                 }
 
-                if (!isOverlayVisible)
+                if (!isOverlayVisible && !(configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen))
                 {
                     ShowWindow(overlayWindow, SW_SHOWNOACTIVATE);
                     isOverlayVisible = true;
