@@ -880,7 +880,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw a GPU-skinned mesh instance with bone transforms via pNext chain.
         /// </summary>
-        public unsafe void DrawSkinnedInstance(IntPtr meshHandle, Matrix4x4 localToWorld, Matrix4x4[] boneTransforms, uint objectPickingValue, ulong persistentInstanceId = 0)
+        public unsafe void DrawSkinnedInstance(IntPtr meshHandle, Matrix4x4 localToWorld, Matrix4x4[] boneTransforms, uint objectPickingValue, ulong persistentInstanceId = 0, uint categoryFlags = 0)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero || boneTransforms == null)
                 return;
@@ -956,7 +956,7 @@ namespace UnityRemix
                         {
                             sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
                             pNext = boneExtHandle.AddrOfPinnedObject(),
-                            categoryFlags = 0,
+                            categoryFlags = categoryFlags,
                             mesh = meshHandle,
                             transform = transform,
                             doubleSided = 1

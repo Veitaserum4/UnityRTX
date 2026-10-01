@@ -1782,8 +1782,55 @@ namespace UnityRemix
                 }
             }
             
-            // 4. Render queue heuristic (fallback)
+            // 4. Shader name heuristics (particles, transparents, additive, cutout)
+            if (material.shader != null)
+            {
+                string sName = material.shader.name;
+                if (!string.IsNullOrEmpty(sName))
+                {
+                    if (sName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        sName.IndexOf("AlphaTest", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return (AlphaMode.Cutout, $"shader:{sName}");
+
+                    if (sName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        sName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        sName.IndexOf("Transparent", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        sName.IndexOf("Fade", StringComparison.OrdinalIgnoreCase) >= 0)
+                        return (AlphaMode.Blend, $"shader:{sName}");
+                }
+            }
+
+            // 5. Material name heuristics
+            string mName = material.name;
+            if (!string.IsNullOrEmpty(mName))
+            {
+                if (mName.IndexOf("Cutout", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    mName.IndexOf("AlphaTest", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return (AlphaMode.Cutout, $"matName:{mName}");
+
+                if (mName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    mName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    mName.IndexOf("Trail", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return (AlphaMode.Blend, $"matName:{mName}");
+            }
+
+            // 6. Tint color alpha heuristics
+            if (material.HasProperty("_TintColor"))
+            {
+                Color tc = material.GetColor("_TintColor");
+                if (tc.a < 0.99f) return (AlphaMode.Blend, $"_TintColor.a={tc.a:F2}");
+            }
+            if (material.HasProperty("_Color"))
+            {
+                Color c = material.GetColor("_Color");
+                if (c.a < 0.99f) return (AlphaMode.Blend, $"_Color.a={c.a:F2}");
+            }
+            
+            // 7. Render queue heuristic (check both material and shader queue)
             int queue = material.renderQueue;
+            if (queue < 0 && material.shader != null)
+                queue = material.shader.renderQueue;
+
             if (queue >= 2450 && queue < 3000) return (AlphaMode.Cutout, $"renderQueue={queue}");
             if (queue >= 3000) return (AlphaMode.Blend, $"renderQueue={queue}");
             
@@ -1863,14 +1910,25 @@ namespace UnityRemix
                     case AlphaMode.Cutout:
                         // VkCompareOp 6 = GREATER_OR_EQUAL: pass pixels with alpha >= reference
                         opaqueExt.alphaTestType = 6;
-                        opaqueExt.alphaReferenceValue = (byte)(Mathf.Clamp01(matData.alphaCutoff) * 255f);
+                        opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
+                            ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
+                            : (byte)1;
                         break;
                     case AlphaMode.Blend:
+                        // DXVK-Remix compatibility
                         opaqueExt.blendType_hasvalue = 1; // remixapi_Bool.True
-                        // kAlphaEmissive (1) makes the surface directly visible as a
-                        // blended surface; kAlpha (0) only contributes indirect light
-                        // bounces which makes blended geometry invisible in direct view.
                         opaqueExt.blendType_value = 1;
+                        // OpenRemix: enable alpha testing (GREATER_OR_EQUAL) so alpha==0 texels are discarded in acceptCandidate
+                        opaqueExt.alphaTestType = 6;
+                        opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
+                            ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
+                            : (byte)1;
+                        // Ensure opacityConstant < 1.0f so OpenRemix sets material->translucent = true
+                        // and enables coverageBlended layer traversal for semi-transparent particles and sheets.
+                        if (opaqueExt.opacityConstant >= 1.0f)
+                        {
+                            opaqueExt.opacityConstant = 0.999f;
+                        }
                         break;
                 }
                 

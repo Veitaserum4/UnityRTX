@@ -485,7 +485,7 @@ namespace UnityRemix
                         ulong persistentId = (ulong)(uint)skinned.meshId;
                         if (persistentId == 0) persistentId = (ulong)objectPickingValue;
 
-                        meshConverter.DrawSkinnedInstance(meshHandle, skinned.localToWorld, skinned.boneTransforms, objectPickingValue, persistentId);
+                        meshConverter.DrawSkinnedInstance(meshHandle, skinned.localToWorld, skinned.boneTransforms, objectPickingValue, persistentId, skinned.categoryFlags);
                         objectPickingValue++;
                     }
                     else
@@ -511,7 +511,7 @@ namespace UnityRemix
                         ulong persistentId = (ulong)(uint)skinned.meshId;
                         if (persistentId == 0) persistentId = (ulong)objectPickingValue;
 
-                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, 0, persistentId);
+                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId);
                         objectPickingValue++;
                     }
                 }

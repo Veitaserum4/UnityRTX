@@ -578,6 +578,7 @@ namespace UnityRemix
             public Matrix4x4[] boneTransforms;
             // GPU skinning: bind-pose data + weights cached per sharedMesh (null = BakeMesh fallback)
             public CachedSkinningData skinningData;
+            public uint categoryFlags;
         }
 
         /// <summary>
@@ -1968,7 +1969,8 @@ namespace UnityRemix
                     triangles = tris,
                     localToWorld = g.rectTransform.localToWorldMatrix,
                     boneTransforms = null,
-                    skinningData = null
+                    skinningData = null,
+                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI
                 });
             }
         }
@@ -2409,7 +2411,8 @@ namespace UnityRemix
                 triangles = tris,
                 localToWorld = Matrix4x4.identity,
                 boneTransforms = null,
-                skinningData = null
+                skinningData = null,
+                categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
             });
         }
 
@@ -2452,7 +2455,8 @@ namespace UnityRemix
                         triangles = _reusableParticleMesh.triangles,
                         localToWorld = Matrix4x4.identity,
                         boneTransforms = null,
-                        skinningData = null
+                        skinningData = null,
+                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
                     });
                     return true;
                 }
@@ -2540,7 +2544,8 @@ namespace UnityRemix
                         triangles = tris,
                         localToWorld = trailLocalToWorld,
                         boneTransforms = null,
-                        skinningData = null
+                        skinningData = null,
+                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
                     });
                 }
             }
@@ -2662,7 +2667,8 @@ namespace UnityRemix
                         triangles = tris,
                         localToWorld = Matrix4x4.identity,
                         boneTransforms = null,
-                        skinningData = null
+                        skinningData = null,
+                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
                     });
                 }
                 catch (Exception ex)
