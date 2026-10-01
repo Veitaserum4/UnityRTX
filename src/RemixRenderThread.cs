@@ -499,7 +499,8 @@ namespace UnityRemix
                             skinned.triangles,
                             state.frameCount,
                             skinned.materialId,
-                            skinned.colors
+                            skinned.colors,
+                            skinned.uvST
                         );
                         
                         if (meshHandle == IntPtr.Zero)

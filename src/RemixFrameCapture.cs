@@ -60,6 +60,20 @@ namespace UnityRemix
         private static Mesh _reusableParticleTrailMesh = null;
         private static Mesh _reusableTrailRendererMesh = null;
         private int rendererCacheFrame = -1;
+
+        // Scrolling UV mesh tracking
+        private static readonly int PropScrollOffset = Shader.PropertyToID("_ScrollOffset");
+        private class CachedScrollingMesh
+        {
+            public Vector3[] vertices;
+            public Vector3[] normals;
+            public Vector2[] baseUVs;
+            public Color32[] colors;
+            public List<int[]> submeshTriangles;
+        }
+        private readonly Dictionary<int, CachedScrollingMesh> cachedScrollingMeshes = new Dictionary<int, CachedScrollingMesh>();
+        private readonly HashSet<int> scrollingRendererIds = new HashSet<int>();
+        private readonly List<MeshRenderer> cachedScrollingRenderers = new List<MeshRenderer>();
         
         // Cached baked meshes for skinned renderers
         private Dictionary<int, Mesh> bakedMeshes = new Dictionary<int, Mesh>();
@@ -579,6 +593,7 @@ namespace UnityRemix
             // GPU skinning: bind-pose data + weights cached per sharedMesh (null = BakeMesh fallback)
             public CachedSkinningData skinningData;
             public uint categoryFlags;
+            public Vector4 uvST;
         }
 
         /// <summary>
@@ -672,6 +687,10 @@ namespace UnityRemix
             loggedHashDebugMeshes.Clear();
             cachedTopology.Clear();
             cachedSkinning.Clear();
+            cachedScrollingMeshes.Clear();
+            scrollingRendererIds.Clear();
+            cachedScrollingRenderers.Clear();
+            RemixScrollingTextureDetector.ClearCache();
             lock (persistentStaticLock)
             {
                 persistentStaticInstances.Clear();
@@ -690,6 +709,10 @@ namespace UnityRemix
             cachedSkinnedRendererIds.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            cachedScrollingMeshes.Clear();
+            scrollingRendererIds.Clear();
+            cachedScrollingRenderers.Clear();
+            RemixScrollingTextureDetector.ClearCache();
             skinnedRoundRobinIndex = 0;
             
             var allStatic = UnityCompat.FindSceneComponentsIncludingInactive<MeshRenderer>();
@@ -698,6 +721,11 @@ namespace UnityRemix
                 var r = allStatic[i];
                 if (r != null && cachedRendererIds.Add(r.GetInstanceID()))
                 {
+                    if (RemixScrollingTextureDetector.IsScrollingRenderer(r))
+                    {
+                        scrollingRendererIds.Add(r.GetInstanceID());
+                        cachedScrollingRenderers.Add(r);
+                    }
                     cachedRenderers.Add(r);
                 }
             }
@@ -952,6 +980,7 @@ namespace UnityRemix
                 if (mainCam != null)
                 {
                     CaptureCameraViewModelMeshes(state, mainCam);
+                    CaptureAllScrollingMeshes(state, frameCount, camPos);
                     skyboxManager?.EmitSkyboxInstance(state, mainCam);
                 }
                 return;
@@ -999,6 +1028,22 @@ namespace UnityRemix
                 int rendererInstanceId = renderer.GetInstanceID();
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
 
+                // Animated / scrolling UV meshes (water, lava, conveyor belts, scrolling textures)
+                // must be rendered dynamically via state.skinned with live UV offsets every frame.
+                if (scrollingRendererIds.Contains(rendererInstanceId) || RemixScrollingTextureDetector.IsScrollingRenderer(renderer))
+                {
+                    if (scrollingRendererIds.Add(rendererInstanceId))
+                    {
+                        cachedScrollingRenderers.Add(renderer);
+                    }
+                    lock (persistentStaticLock)
+                    {
+                        persistentStaticInstances.Remove(rendererInstanceId);
+                    }
+                    CaptureScrollingMesh(renderer, mesh, state, frameCount);
+                    continue;
+                }
+
                 if (ShouldPreferSceneScan(renderer, mesh))
                 {
                     lock (persistentStaticLock)
@@ -1017,10 +1062,28 @@ namespace UnityRemix
 
                 if (sharedStaticMpb == null)
                     sharedStaticMpb = new MaterialPropertyBlock();
+                else
+                    sharedStaticMpb.Clear();
 
                 if (renderer.HasPropertyBlock())
                 {
                     renderer.GetPropertyBlock(sharedStaticMpb);
+
+                    Vector4 sOff = sharedStaticMpb.GetVector(PropScrollOffset);
+                    if (sOff.x != 0f || sOff.y != 0f)
+                    {
+                        if (scrollingRendererIds.Add(rendererInstanceId))
+                        {
+                            cachedScrollingRenderers.Add(renderer);
+                        }
+                        lock (persistentStaticLock)
+                        {
+                            persistentStaticInstances.Remove(rendererInstanceId);
+                        }
+                        CaptureScrollingMesh(renderer, mesh, state, frameCount);
+                        continue;
+                    }
+
                     Texture tex = sharedStaticMpb.GetTexture("_MainTex");
                     if (tex == null) tex = sharedStaticMpb.GetTexture("_BaseMap");
                     if (tex == null) tex = sharedStaticMpb.GetTexture("_Diffuse");
@@ -1387,6 +1450,176 @@ namespace UnityRemix
                     rendererInstanceId = rendererInstanceId,
                     dedupeKey = dedupeKey
                 });
+            }
+        }
+
+        /// <summary>
+        /// Retrieves or extracts cached base geometry for a scrolling UV mesh.
+        /// Base geometry (positions, normals, base UVs, indices) is read only once.
+        /// </summary>
+        private CachedScrollingMesh GetOrCreateScrollingMesh(Mesh mesh)
+        {
+            if (mesh == null) return null;
+            int meshId = mesh.GetInstanceID();
+            if (cachedScrollingMeshes.TryGetValue(meshId, out var cached))
+                return cached;
+
+            Vector3[] vertices = null;
+            Vector3[] normals = null;
+            Vector2[] uvs = null;
+            Color32[] colors = null;
+            var submeshTriangles = new List<int[]>();
+
+            if (mesh.isReadable)
+            {
+                try
+                {
+                    vertices = mesh.vertices;
+                    normals = mesh.normals;
+                    uvs = mesh.uv;
+                    colors = mesh.colors32;
+                    if (colors != null && colors.Length == 0) colors = null;
+
+                    for (int s = 0; s < mesh.subMeshCount; s++)
+                    {
+                        if (mesh.GetTopology(s) != MeshTopology.Triangles)
+                            continue;
+                        var tris = mesh.GetTriangles(s);
+                        if (tris != null && tris.Length > 0 && tris.Length % 3 == 0)
+                        {
+                            submeshTriangles.Add(tris);
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            if (vertices == null || vertices.Length == 0 || submeshTriangles.Count == 0)
+            {
+                try
+                {
+                    if (NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out int[][] subTris))
+                    {
+                        submeshTriangles.Clear();
+                        for (int s = 0; s < subTris.Length; s++)
+                        {
+                            var tris = subTris[s];
+                            if (tris != null && tris.Length > 0 && tris.Length % 3 == 0)
+                            {
+                                submeshTriangles.Add(tris);
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            if (vertices == null || vertices.Length == 0 || submeshTriangles.Count == 0)
+                return null;
+
+            if (uvs == null || uvs.Length != vertices.Length)
+                uvs = new Vector2[vertices.Length];
+
+            if (normals == null || normals.Length != vertices.Length)
+                normals = RemixMeshConverter.ComputeFaceNormals(vertices, submeshTriangles[0]);
+
+            cached = new CachedScrollingMesh
+            {
+                vertices = vertices,
+                normals = normals,
+                baseUVs = uvs,
+                colors = colors,
+                submeshTriangles = submeshTriangles
+            };
+
+            cachedScrollingMeshes[meshId] = cached;
+            return cached;
+        }
+
+        /// <summary>
+        /// Captures a renderer with scrolling UVs and submits it to state.skinned with live animated UV coordinates.
+        /// </summary>
+        private void CaptureScrollingMesh(MeshRenderer renderer, Mesh mesh, FrameState state, int frameCount)
+        {
+            var cachedMesh = GetOrCreateScrollingMesh(mesh);
+            if (cachedMesh == null)
+                return;
+
+            if (!RemixScrollingTextureDetector.TryGetAnimatedUVTransform(renderer, sharedStaticMpb, out Vector4 uvST))
+            {
+                uvST = new Vector4(1f, 1f, 0f, 0f);
+            }
+
+            var materials = renderer.sharedMaterials;
+            int rendererId = renderer.GetInstanceID();
+            Matrix4x4 localToWorld = renderer.transform.localToWorldMatrix;
+
+            for (int s = 0; s < cachedMesh.submeshTriangles.Count; s++)
+            {
+                var tris = cachedMesh.submeshTriangles[s];
+                if (tris == null || tris.Length == 0) continue;
+
+                Material mat = (materials != null && s < materials.Length) ? materials[s] : null;
+                int matId = mat != null ? mat.GetInstanceID() : 0;
+                if (mat != null)
+                {
+                    materialManager.CaptureMaterialTextures(mat, matId);
+                }
+
+                uint catFlags = 0;
+                if (mat != null)
+                {
+                    string mName = mat.name;
+                    if (!string.IsNullOrEmpty(mName) && mName.IndexOf("water", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        catFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_ANIMATED_WATER;
+                    }
+                }
+
+                ulong remixMeshHash = 0x5343524CUL << 32 | ((uint)rendererId ^ ((uint)s * 0x9E3779B9U));
+
+                state.skinned.Add(new SkinnedMeshData
+                {
+                    meshId = rendererId ^ (s * 10007),
+                    remixMeshHash = remixMeshHash,
+                    materialId = matId,
+                    vertices = cachedMesh.vertices,
+                    normals = cachedMesh.normals,
+                    uvs = cachedMesh.baseUVs,
+                    colors = cachedMesh.colors,
+                    triangles = tris,
+                    localToWorld = localToWorld,
+                    boneTransforms = null,
+                    skinningData = null,
+                    categoryFlags = catFlags,
+                    uvST = uvST
+                });
+            }
+        }
+
+        /// <summary>
+        /// On frames where static geometry is skipped (StaticMeshFrameSkip > 1), captures all active
+        /// scrolling UV meshes so animated water, lava, and conveyors continue moving smoothly.
+        /// </summary>
+        private void CaptureAllScrollingMeshes(FrameState state, int frameCount, Vector3 camPos)
+        {
+            for (int i = 0; i < cachedScrollingRenderers.Count; i++)
+            {
+                var r = cachedScrollingRenderers[i];
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
+                if (r.transform.lossyScale.sqrMagnitude < 0.0001f) continue;
+                if (IsLayerDisabled(r.gameObject.layer) || IsRendererDisabled(r.GetInstanceID())) continue;
+                if (configUseVisibilityCulling.Value && !r.isVisible) continue;
+                if (configUseDistanceCulling.Value)
+                {
+                    float maxDist = configMaxRenderDistance.Value;
+                    if ((r.bounds.center - camPos).sqrMagnitude > maxDist * maxDist) continue;
+                }
+                var mf = r.GetComponent<MeshFilter>();
+                if (mf != null && mf.sharedMesh != null)
+                {
+                    CaptureScrollingMesh(r, mf.sharedMesh, state, frameCount);
+                }
             }
         }
         

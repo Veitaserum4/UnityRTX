@@ -638,6 +638,10 @@ namespace UnityRemix
             if (isCombinedMesh)
                 return false;
 
+            // Skip scrolling / animated UV renderers — they are captured dynamically per-frame with live UV offsets
+            if (RemixScrollingTextureDetector.IsScrollingRenderer(renderer))
+                return true;
+
             try
             {
                 var types = GetIgnoredDynamicTypes();

@@ -44,7 +44,7 @@ namespace UnityRemix
         /// <summary>
         /// Compute per-vertex normals by averaging face normals of adjacent triangles.
         /// </summary>
-        private static Vector3[] ComputeFaceNormals(Vector3[] verts, int[] triangles)
+        public static Vector3[] ComputeFaceNormals(Vector3[] verts, int[] triangles)
         {
             var normals = new Vector3[verts.Length];
             for (int i = 0; i + 2 < triangles.Length; i += 3)
@@ -533,7 +533,8 @@ namespace UnityRemix
             int[] triangles, 
             int frameHash,
             int materialId = 0,
-            Color32[] colors = null)
+            Color32[] colors = null,
+            Vector4? uvST = null)
         {
             if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0)
                 return IntPtr.Zero;
@@ -577,8 +578,12 @@ namespace UnityRemix
             
             poolData.EnsureCapacity(vertices.Length, triangles.Length);
             
-            // Fill data (Y-up to Z-up conversion), applying _MainTex_ST tiling/offset
-            Vector4 st = materialManager.GetMainTexST(materialId);
+            // Fill data (Y-up to Z-up conversion), applying UV tiling/offset
+            Vector4 st = uvST.HasValue && (uvST.Value.x != 0f || uvST.Value.y != 0f || uvST.Value.z != 0f || uvST.Value.w != 0f)
+                ? uvST.Value
+                : materialManager.GetMainTexST(materialId);
+            if (st.x == 0f) st.x = 1f;
+            if (st.y == 0f) st.y = 1f;
             bool hasColors = colors != null && colors.Length == vertices.Length;
             for (int i = 0; i < vertices.Length; i++)
             {
