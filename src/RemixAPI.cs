@@ -100,6 +100,8 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT = 27,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO = 28,
             REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT = 0x7fff1002,
+            REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT = 0x7fff1008,
+            REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
         }
 
         public enum remixapi_InstanceClassEXT : uint
@@ -327,6 +329,22 @@ namespace UnityRemix
             public ulong instanceId;
             public uint classification;
             public uint rasterVisible;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MeshInfoUpdateEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public uint enabled;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MeshInfoMotionEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public uint enabled;
         }
 
         [StructLayout(LayoutKind.Sequential)]

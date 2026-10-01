@@ -618,17 +618,46 @@ namespace UnityRemix
             };
             
             GCHandle surfaceHandle = GCHandle.Alloc(surface, GCHandleType.Pinned);
+            GCHandle updateHandle = default;
+            GCHandle motionHandle = default;
             
             try
             {
-                // Generate a frame-unique hash so RTX Remix treats dynamic geometry as fresh data each frame
-                ulong dynamicMeshHash = meshHash ^ ((ulong)(uint)frameHash * 1099511628211UL);
-                if (dynamicMeshHash == 0) dynamicMeshHash = 1;
+                ulong dynamicMeshHash = meshHash;
+                IntPtr pNext = IntPtr.Zero;
+
+                if (RemixAPI.IsOpenRemix)
+                {
+                    // OpenRemix: Use the same mesh hash across frames to enable Vulkan in-place BLAS refits
+                    // and provide temporal correspondence for motion vectors and Reblur denoiser history.
+                    var motionExt = new RemixAPI.remixapi_MeshInfoMotionEXT
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT,
+                        pNext = IntPtr.Zero,
+                        enabled = 1
+                    };
+                    motionHandle = GCHandle.Alloc(motionExt, GCHandleType.Pinned);
+
+                    var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
+                        pNext = motionHandle.AddrOfPinnedObject(),
+                        enabled = 1
+                    };
+                    updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
+                    pNext = updateHandle.AddrOfPinnedObject();
+                }
+                else
+                {
+                    // Legacy DXVK-Remix: Generate frame-unique hash to force mesh recreation
+                    dynamicMeshHash = meshHash ^ ((ulong)(uint)frameHash * 1099511628211UL);
+                    if (dynamicMeshHash == 0) dynamicMeshHash = 1;
+                }
 
                 var meshInfo = new RemixAPI.remixapi_MeshInfo
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_INFO,
-                    pNext = IntPtr.Zero,
+                    pNext = pNext,
                     hash = dynamicMeshHash,
                     surfaces_values = surfaceHandle.AddrOfPinnedObject(),
                     surfaces_count = 1
@@ -650,6 +679,8 @@ namespace UnityRemix
             }
             finally
             {
+                if (updateHandle.IsAllocated) updateHandle.Free();
+                if (motionHandle.IsAllocated) motionHandle.Free();
                 surfaceHandle.Free();
             }
         }
@@ -657,7 +688,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -680,13 +711,14 @@ namespace UnityRemix
             
             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
             bool hasIdentity = false;
-            if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
+            ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
+            if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
             {
                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                     pNext = IntPtr.Zero,
-                    instanceId = (ulong)objectPickingValue,
+                    instanceId = targetInstanceId,
                     classification = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0 ? 1u : 0u,
                     rasterVisible = 1
                 };
@@ -848,7 +880,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw a GPU-skinned mesh instance with bone transforms via pNext chain.
         /// </summary>
-        public unsafe void DrawSkinnedInstance(IntPtr meshHandle, Matrix4x4 localToWorld, Matrix4x4[] boneTransforms, uint objectPickingValue)
+        public unsafe void DrawSkinnedInstance(IntPtr meshHandle, Matrix4x4 localToWorld, Matrix4x4[] boneTransforms, uint objectPickingValue, ulong persistentInstanceId = 0)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero || boneTransforms == null)
                 return;
@@ -888,13 +920,14 @@ namespace UnityRemix
                 
                 GCHandle identityHandle = default;
                 bool hasIdentity = false;
-                if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
+                ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
+                if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
                 {
                     var identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                     {
                         sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                         pNext = IntPtr.Zero,
-                        instanceId = (ulong)objectPickingValue,
+                        instanceId = targetInstanceId,
                         classification = 1u, // Skinned meshes are dynamic
                         rasterVisible = 1
                     };

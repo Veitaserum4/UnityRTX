@@ -16,6 +16,12 @@ namespace UnityRemix
         private RemixAPI.PFN_remixapi_dxvk_CreateD3D9 createD3D9Func;
         private RemixAPI.PFN_remixapi_SetConfigVariable setConfigVariableFunc;
         private readonly BepInEx.Configuration.ConfigEntry<string> configNativeBackend;
+        private readonly BepInEx.Configuration.ConfigEntry<bool> configOpenRemixAsyncPresent;
+        private readonly BepInEx.Configuration.ConfigEntry<bool> configOpenRemixShadowEarlyOut;
+        private readonly BepInEx.Configuration.ConfigEntry<bool> configOpenRemixKeepCompressed;
+        private readonly BepInEx.Configuration.ConfigEntry<bool> configOpenRemixRefreshInPlace;
+        private readonly BepInEx.Configuration.ConfigEntry<int> configOpenRemixBounces;
+        private readonly BepInEx.Configuration.ConfigEntry<int> configOpenRemixSamples;
         private RemixAPI.PFN_remixapi_Startup startupFunc;
         private RemixAPI.PFN_remixapi_GetUIState getUIStateFunc;
         private RemixAPI.PFN_remixapi_SetUIState setUIStateFunc;
@@ -806,12 +812,24 @@ namespace UnityRemix
             ManualLogSource logger,
             RemixAPI.remixapi_Interface remixInterface,
             BepInEx.Configuration.ConfigEntry<bool> singleWindow = null,
-            BepInEx.Configuration.ConfigEntry<string> nativeBackend = null)
+            BepInEx.Configuration.ConfigEntry<string> nativeBackend = null,
+            BepInEx.Configuration.ConfigEntry<bool> asyncPresent = null,
+            BepInEx.Configuration.ConfigEntry<bool> shadowEarlyOut = null,
+            BepInEx.Configuration.ConfigEntry<bool> keepCompressed = null,
+            BepInEx.Configuration.ConfigEntry<bool> refreshInPlace = null,
+            BepInEx.Configuration.ConfigEntry<int> bounces = null,
+            BepInEx.Configuration.ConfigEntry<int> samples = null)
         {
             instance = this;
             this.logger = logger;
             this.configSingleWindow = singleWindow;
             this.configNativeBackend = nativeBackend;
+            this.configOpenRemixAsyncPresent = asyncPresent;
+            this.configOpenRemixShadowEarlyOut = shadowEarlyOut;
+            this.configOpenRemixKeepCompressed = keepCompressed;
+            this.configOpenRemixRefreshInPlace = refreshInPlace;
+            this.configOpenRemixBounces = bounces;
+            this.configOpenRemixSamples = samples;
             if (remixInterface.SetConfigVariable != IntPtr.Zero)
                 setConfigVariableFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetConfigVariable>(remixInterface.SetConfigVariable);
             if (RemixAPI.IsOpenRemix)
@@ -1213,8 +1231,36 @@ namespace UnityRemix
             if (RemixAPI.IsOpenRemix && setConfigVariableFunc != null)
             {
                 string backend = configNativeBackend?.Value ?? "raster";
-                var backendResult = setConfigVariableFunc("rtx.native.backend", backend);
-                logger.LogInfo($"openremix backend '{backend}': {backendResult}");
+                bool asyncPresent = configOpenRemixAsyncPresent?.Value ?? true;
+                bool shadowEarlyOut = configOpenRemixShadowEarlyOut?.Value ?? true;
+                bool keepCompressed = configOpenRemixKeepCompressed?.Value ?? true;
+                bool refreshInPlace = configOpenRemixRefreshInPlace?.Value ?? true;
+                int bounces = configOpenRemixBounces?.Value ?? 2;
+                int samples = configOpenRemixSamples?.Value ?? 1;
+
+                var settings = new (string key, string value)[]
+                {
+                    ("rtx.native.backend", backend),
+                    ("rtx.native.vsync", "false"),
+                    ("rtx.native.asyncPresent", asyncPresent ? "true" : "false"),
+                    ("rtx.native.pathtrace.shadowEarlyOut", shadowEarlyOut ? "true" : "false"),
+                    ("rtx.native.textures.keepCompressed", keepCompressed ? "true" : "false"),
+                    ("rtx.native.meshes.refreshInPlace", refreshInPlace ? "true" : "false"),
+                    ("rtx.native.pathtrace.samples", samples.ToString()),
+                    ("rtx.native.pathtrace.bounces", bounces.ToString()),
+                    ("rtx.native.pathtrace.accumulate", "false"),
+                    ("rtx.native.pathtrace.taa", "true"),
+                    ("rtx.native.pathtrace.denoiser", "reblur-sh"),
+                    ("rtx.native.pathtrace.sharc", "false"),
+                    ("rtx.native.pathtrace.sigma", "false"),
+                    ("rtx.native.gpuPassTimers", "true")
+                };
+
+                foreach (var (key, val) in settings)
+                {
+                    var res = setConfigVariableFunc(key, val);
+                    logger.LogInfo($"[OpenRemix Config] {key} = {val} -> {res}");
+                }
                 logger.LogInfo("openremix settings: press F12 in the game or openremix window; choose Backend > Path trace.");
             }
             return true;

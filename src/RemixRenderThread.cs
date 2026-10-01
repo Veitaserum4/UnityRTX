@@ -46,6 +46,7 @@ namespace UnityRemix
         // Frame state
         private volatile RemixFrameCapture.FrameState currentFrameState = new RemixFrameCapture.FrameState();
         private readonly object captureLock = new object();
+        private readonly AutoResetEvent frameReadyEvent = new AutoResetEvent(false);
         
         // Scene mesh scanner (optional)
         private SceneMeshScanner sceneMeshScanner;
@@ -107,6 +108,7 @@ namespace UnityRemix
             {
                 currentFrameState = newState;
             }
+            frameReadyEvent.Set();
         }
         
         /// <summary>
@@ -133,6 +135,7 @@ namespace UnityRemix
         public bool Stop()
         {
             renderThreadRunning = false;
+            frameReadyEvent.Set();
             return renderThread == null || !renderThread.IsAlive || renderThread.Join(5000);
         }
 
@@ -189,38 +192,29 @@ namespace UnityRemix
             {
                 try
                 {
+                    // Frame rate limiting / wait timeout
+                    int waitTimeout = configTargetFPS.Value > 0 ? (1000 / configTargetFPS.Value) : 50;
+                    
+                    RemixWatchdog.BeatRender("RenderLoop.WaitForFrame");
+                    bool frameReady = frameReadyEvent.WaitOne(waitTimeout);
+                    if (!renderThreadRunning) break;
+                    
                     RemixWatchdog.BeatRender("RenderLoop.PumpMessages");
-                    // Process messages
+                    // Process messages / SDL events
                     windowManager.PumpWindowsMessages();
                     
-                    RemixWatchdog.BeatRender("RenderLoop.RenderFrame");
-                    // Render frame
-                    RenderFrame(frameNum);
-                    frameNum++;
-                    
-                    // Frame rate limiting
-                    uint waitMs = 0;
-                    if (configTargetFPS.Value > 0)
+                    // Render frame when new capture data arrives, or continuously in test mode
+                    if (frameReady || !configUseGameGeometry.Value)
                     {
-                        waitMs = (uint)(1000 / configTargetFPS.Value);
-                    }
-                    else
-                    {
-                        waitMs = 1; // Uncapped but still responsive
-                    }
-                    
-                    RemixWatchdog.BeatRender("RenderLoop.WaitForMessages");
-                    // Wait for messages or timeout
-                    if (windowManager.WaitForMessages(waitMs))
-                    {
-                        RemixWatchdog.BeatRender("RenderLoop.PumpMessagesAfterWait");
-                        windowManager.PumpWindowsMessages();
+                        RemixWatchdog.BeatRender("RenderLoop.RenderFrame");
+                        RenderFrame(frameNum);
+                        frameNum++;
                     }
                 }
                 catch (Exception ex)
                 {
                     logger.LogError($"Render thread error: {ex}");
-                    Thread.Sleep(1000);
+                    Thread.Sleep(500);
                 }
             }
             
@@ -353,7 +347,10 @@ namespace UnityRemix
                     if (!StaticGeometryDedupe.TryClaimVisibleInstance(instance.rendererInstanceId, instance.dedupeKey, claimedRendererIds, claimedStaticKeys))
                         continue;
 
-                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags);
+                    ulong persistentId = (ulong)(uint)instance.rendererInstanceId;
+                    if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+
+                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags, persistentId);
                     if (instance.categoryFlags != 0 && (state.frameCount % 300 == 1 || state.frameCount < 5))
                     {
                         logger.LogInfo($"[RenderThread] Drawn categorized instance meshKey=0x{meshKey:X16} (category=0x{instance.categoryFlags:X})");
@@ -385,13 +382,16 @@ namespace UnityRemix
                             
                             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
                             bool hasIdentity = false;
-                            if (RemixAPI.IsOpenRemix && objectPickingValue != 0)
+                            ulong persistentId = (ulong)(uint)instance.RendererInstanceId;
+                            if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+
+                            if (RemixAPI.IsOpenRemix && persistentId != 0)
                             {
                                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                                 {
                                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                                     pNext = IntPtr.Zero,
-                                    instanceId = (ulong)objectPickingValue,
+                                    instanceId = persistentId,
                                     classification = 0u, // Scanned static scene meshes
                                     rasterVisible = 1
                                 };
@@ -482,12 +482,15 @@ namespace UnityRemix
                         }
                         
                         updatedMeshes.Add(skinned.remixMeshHash);
-                        meshConverter.DrawSkinnedInstance(meshHandle, skinned.localToWorld, skinned.boneTransforms, objectPickingValue);
+                        ulong persistentId = (ulong)(uint)skinned.meshId;
+                        if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+
+                        meshConverter.DrawSkinnedInstance(meshHandle, skinned.localToWorld, skinned.boneTransforms, objectPickingValue, persistentId);
                         objectPickingValue++;
                     }
                     else
                     {
-                        // BakeMesh fallback: recreate mesh each frame with new vertex data
+                        // BakeMesh fallback: recreate/update mesh with new vertex data
                         IntPtr meshHandle = meshConverter.CreateRemixMeshFromData(
                             skinned.remixMeshHash,
                             skinned.vertices,
@@ -504,7 +507,11 @@ namespace UnityRemix
                         
                         meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount);
                         updatedMeshes.Add(skinned.remixMeshHash);
-                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue);
+
+                        ulong persistentId = (ulong)(uint)skinned.meshId;
+                        if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+
+                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, 0, persistentId);
                         objectPickingValue++;
                     }
                 }

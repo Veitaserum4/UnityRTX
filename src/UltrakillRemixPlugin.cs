@@ -38,6 +38,12 @@ namespace UnityRemix
         private ConfigEntry<float> configLightIntensityMultiplier;
         private ConfigEntry<int> configTargetFPS;
         private ConfigEntry<string> configNativeBackend;
+        private ConfigEntry<bool> configOpenRemixAsyncPresent;
+        private ConfigEntry<bool> configOpenRemixShadowEarlyOut;
+        private ConfigEntry<bool> configOpenRemixKeepCompressed;
+        private ConfigEntry<bool> configOpenRemixRefreshInPlace;
+        private ConfigEntry<int> configOpenRemixBounces;
+        private ConfigEntry<int> configOpenRemixSamples;
 
         // Debug Toggles
         private ConfigEntry<bool> configCaptureStaticMeshes;
@@ -154,6 +160,26 @@ namespace UnityRemix
             configNativeBackend = Config.Bind("Native", "Backend", "raster",
                 new ConfigDescription("openremix rendering backend. Restart the game after changing this setting.",
                     new AcceptableValueList<string>("raster", "pathtrace")));
+
+            configOpenRemixAsyncPresent = Config.Bind("Native", "AsyncPresent", true,
+                "Decouple frame recording from GPU presentation (massive frame rate and pacing improvement).");
+
+            configOpenRemixShadowEarlyOut = Config.Bind("Native", "ShadowEarlyOut", true,
+                "Early-out path tracer visibility rays at the first occluder.");
+
+            configOpenRemixKeepCompressed = Config.Bind("Native", "KeepCompressedTextures", true,
+                "Upload and keep BC1/BC3/BC7 compressed textures on GPU (saves ~4x VRAM and PCIe bandwidth).");
+
+            configOpenRemixRefreshInPlace = Config.Bind("Native", "RefreshMeshesInPlace", true,
+                "Refit BLAS in-place for dynamic/animated meshes instead of full BVH rebuild from scratch.");
+
+            configOpenRemixBounces = Config.Bind("Native", "PathTraceBounces", 2,
+                new ConfigDescription("Number of ray bounces for path tracing.",
+                    new AcceptableValueRange<int>(1, 8)));
+
+            configOpenRemixSamples = Config.Bind("Native", "PathTraceSamples", 1,
+                new ConfigDescription("Number of samples per pixel per frame.",
+                    new AcceptableValueRange<int>(1, 4)));
 
             // Camera Settings
             configCameraName = Config.Bind("Camera", "CameraName", "",
@@ -405,7 +431,17 @@ namespace UnityRemix
             // Create all components with dependencies
             textureCategoryManager = new TextureCategoryManager();
             
-            windowManager = new RemixWindowManager(LogSource, remixInterface, configSingleWindow, configNativeBackend);
+            windowManager = new RemixWindowManager(
+                LogSource, 
+                remixInterface, 
+                configSingleWindow, 
+                configNativeBackend,
+                configOpenRemixAsyncPresent,
+                configOpenRemixShadowEarlyOut,
+                configOpenRemixKeepCompressed,
+                configOpenRemixRefreshInPlace,
+                configOpenRemixBounces,
+                configOpenRemixSamples);
             
             cameraHandler = new RemixCameraHandler(
                 LogSource,
