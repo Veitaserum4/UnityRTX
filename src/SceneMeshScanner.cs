@@ -29,6 +29,15 @@ namespace UnityRemix
             public int MaterialId;
         }
 
+        [Flags]
+        public enum InstanceFlags : byte
+        {
+            None = 0,
+            IsCombinedMesh = 1 << 0,
+            IsCheckPoint = 1 << 1,
+            IsNoPass = 1 << 2,
+        }
+
         private struct ScannedMeshData
         {
             public ulong MeshHash;
@@ -42,6 +51,7 @@ namespace UnityRemix
             public Matrix4x4 LocalToWorld;
             public int Layer;
             public Renderer SourceRenderer;
+            public InstanceFlags Flags;
         }
 
         public struct InstanceData
@@ -52,6 +62,8 @@ namespace UnityRemix
             public RemixAPI.remixapi_Transform Transform;
             public int Layer;
             public Vector3 BoundsCenter;
+            public InstanceFlags Flags;
+            public bool IsCombinedMesh => (Flags & InstanceFlags.IsCombinedMesh) != 0;
         }
 
         public struct DedupeEntry
@@ -80,8 +92,81 @@ namespace UnityRemix
         // Track which MeshFilter instance IDs we've already scanned (avoids duplicates across rescans)
         private readonly HashSet<int> scannedFilterIds = new HashSet<int>();
 
+        // Layer exclusion callback (from frameCapture)
+        private readonly Func<int, bool> isLayerDisabled;
+
         // When true, skip inactive renderers during scan (saves memory, prevents scanning ghost geometry)
-        private readonly bool scanActiveOnly;
+        private bool scanActiveOnly;
+
+        public bool ScanActiveOnly
+        {
+            get => scanActiveOnly;
+            set => scanActiveOnly = value;
+        }
+
+        public bool IsLayerExcluded(int layer)
+        {
+            if (isLayerDisabled != null && isLayerDisabled(layer))
+                return true;
+
+            // Safety fallback exclusions for standard non-rendered geometry in ULTRAKILL / Unity:
+            // Layer 5: UI
+            // Layer 16: Invisible (triggers, blockers, collision brushes)
+            // Layer 18: PlayerOnly (invisible player barriers)
+            // Layer 19: Virtual Screen
+            // Layer 20: GroundCheck
+            // Layer 28: VirtualRender
+            // Layer 30: Portal
+            if (layer == 16 || layer == 18 || layer == 20 || layer == 30 || layer == 5 || layer == 19 || layer == 28)
+                return true;
+
+            return false;
+        }
+
+        public static bool IsIntermediateAncestorDisabled(Transform t)
+        {
+            if (t == null) return false;
+            Transform curr = t.parent;
+            while (curr != null && curr.parent != null)
+            {
+                if (!curr.gameObject.activeSelf)
+                    return true;
+                curr = curr.parent;
+            }
+            return false;
+        }
+
+        public static bool IsMaterialOrShaderInvisible(Material mat)
+        {
+            if (mat == null) return false;
+
+            string matName = mat.name;
+            if (!string.IsNullOrEmpty(matName))
+            {
+                if (matName.IndexOf("Invisible", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    matName.IndexOf("NoDraw", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    matName.IndexOf("Trigger", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    matName.IndexOf("CollisionOnly", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    matName.IndexOf("ZeroStencilBuffer", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    matName.IndexOf("PortalOcclusion", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            var shader = mat.shader;
+            if (shader != null && !string.IsNullOrEmpty(shader.name))
+            {
+                string sName = shader.name;
+                if (sName.IndexOf("Invisible", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    sName.IndexOf("Clear", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         // Rescan state: async-loaded objects appear after OnSceneLoaded
         private Scene activeScene;
@@ -89,6 +174,7 @@ namespace UnityRemix
         private float rescanTimer;
         private const float RescanInterval = 1.0f;
         private const float RescanDuration = 30.0f;
+        private int visLogTimer;
 
         private const int MeshesPerFrame = 32;
 
@@ -188,12 +274,14 @@ namespace UnityRemix
             RemixMeshConverter meshConverter,
             RemixMaterialManager materialManager,
             object apiLock,
+            Func<int, bool> isLayerDisabled = null,
             bool scanActiveOnly = true)
         {
             this.logger = logger;
             this.meshConverter = meshConverter;
             this.materialManager = materialManager;
             this.apiLock = apiLock;
+            this.isLayerDisabled = isLayerDisabled;
             this.scanActiveOnly = scanActiveOnly;
             NativeMeshReader.SetLogger(logger);
         }
@@ -256,7 +344,6 @@ namespace UnityRemix
         /// <summary>
         /// Called on the render thread each frame. Drains a batch from the queue
         /// and returns the visibility-filtered snapshot built by UpdateVisibility().
-        /// Falls back to currentInstances if UpdateVisibility hasn't run yet.
         /// </summary>
         public InstanceData[] GetInstances()
         {
@@ -266,18 +353,13 @@ namespace UnityRemix
             if (snapshot != null)
                 return snapshot;
 
-            // Fallback: UpdateVisibility hasn't populated visibleInstances yet (e.g. first
-            // frames after drain, before main-thread LateUpdate runs). Return currentInstances
-            // directly so newly streamed geometry isn't invisible for multiple frames.
-            lock (instanceLock)
-            {
-                return currentInstances.Count > 0 ? currentInstances.ToArray() : null;
-            }
+            return Array.Empty<InstanceData>();
         }
 
         /// <summary>
         /// Must be called on the main thread each frame. Filters scanned instances by
-        /// active state, distance culling, and visibility culling.
+        /// active state, scale-zero, distance culling, and visibility culling,
+        /// and dynamically updates transforms for moving non-combined objects.
         /// </summary>
         public void UpdateVisibility(Vector3 cameraPosition, bool useDistanceCulling, float maxRenderDistance, bool useVisibilityCulling)
         {
@@ -285,54 +367,133 @@ namespace UnityRemix
             {
                 if (currentInstances.Count == 0)
                 {
-                    Volatile.Write(ref visibleInstances, null);
-                    return;
-                }
-
-                bool anyCulling = scanActiveOnly || useDistanceCulling || useVisibilityCulling;
-                if (!anyCulling)
-                {
-                    Volatile.Write(ref visibleInstances, currentInstances.ToArray());
+                    Volatile.Write(ref visibleInstances, Array.Empty<InstanceData>());
                     return;
                 }
 
                 var visible = new List<InstanceData>(currentInstances.Count);
                 float maxDistSqr = maxRenderDistance * maxRenderDistance;
 
+                int culledNull = 0, culledDisabled = 0, culledInactive = 0, culledLayer = 0, culledScale = 0, culledVis = 0, culledDist = 0;
+
                 for (int i = 0; i < currentInstances.Count; i++)
                 {
                     var instance = currentInstances[i];
+
+                    // 0. Excluded layer (disabled in config, or standard non-rendered layer like Invisible, PlayerOnly, etc.)
+                    if (IsLayerExcluded(instance.Layer))
+                    {
+                        culledLayer++;
+                        continue;
+                    }
 
                     if (i < instanceRenderers.Count)
                     {
                         var renderer = instanceRenderers[i];
 
-                        // Active-only filtering
-                        if (scanActiveOnly)
+                        // 1. Destroyed in Unity (e.g. shattered glass, broken crates/props)
+                        if (renderer == null)
                         {
-                            if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
-                                continue;
+                            culledNull++;
+                            continue;
                         }
 
-                        // Visibility culling (only meaningful for active renderers)
-                        if (useVisibilityCulling && renderer != null
-                            && renderer.enabled && renderer.gameObject.activeInHierarchy
-                            && !renderer.isVisible)
+                        // 2. Disabled renderer component (e.g. invisible brushes, disabled lights/props)
+                        if (!renderer.enabled)
+                        {
+                            culledDisabled++;
                             continue;
+                        }
+
+                        // 3. Hierarchical active state check:
+                        // - If activeInHierarchy is true, all ancestors are active -> fast path.
+                        // - If activeInHierarchy is false:
+                        //     a) If this object itself is deactivated (activeSelf == false) -> cull!
+                        //     b) If any intermediate parent between this object and the root is deactivated
+                        //        (e.g. prototype folders, unspawned traps, disabled UI previews) -> cull!
+                        //     c) If the ONLY inactive ancestor is the scene root (parent == null),
+                        //        this is an unvisited room deactivated by the game's room culling system.
+                        //        Allow it to render so the room remains visible through doorways!
+                        if (renderer.gameObject.activeInHierarchy)
+                        {
+                            // Fast path: fully active in hierarchy
+                        }
+                        else
+                        {
+                            if (!renderer.gameObject.activeSelf || IsIntermediateAncestorDisabled(renderer.transform))
+                            {
+                                culledInactive++;
+                                continue;
+                            }
+                        }
+
+                        // 4. Special toggleable objects that must follow activeInHierarchy (CheckPoint graphic, Door noPass skull lock)
+                        if ((instance.Flags & (InstanceFlags.IsCheckPoint | InstanceFlags.IsNoPass)) != 0)
+                        {
+                            if (!renderer.gameObject.activeInHierarchy)
+                            {
+                                culledInactive++;
+                                continue;
+                            }
+                        }
+
+                        // 5. Global active-only filtering (only if explicitly enabled by user in config)
+                        if (scanActiveOnly && !renderer.gameObject.activeInHierarchy)
+                        {
+                            culledInactive++;
+                            continue;
+                        }
+
+                        // 6. Scale-zero check (only cull when ALL axes collapsed to zero)
+                        var scale = renderer.transform.lossyScale;
+                        if (scale.sqrMagnitude < 0.0001f)
+                        {
+                            culledScale++;
+                            continue;
+                        }
+
+                        // 7. Visibility culling (only if enabled in config)
+                        if (useVisibilityCulling && !renderer.isVisible)
+                        {
+                            culledVis++;
+                            continue;
+                        }
+
+                        // 8. Dynamically update transform and bounds for non-combined meshes (moving doors, platforms, etc.)
+                        if ((instance.Flags & InstanceFlags.IsCombinedMesh) == 0)
+                        {
+                            var m = renderer.transform.localToWorldMatrix;
+                            instance.Transform = RemixAPI.remixapi_Transform.FromMatrix(
+                                m.m00, m.m02, m.m01, m.m03,
+                                m.m20, m.m22, m.m21, m.m23,
+                                m.m10, m.m12, m.m11, m.m13
+                            );
+                            instance.BoundsCenter = renderer.bounds.center;
+                            currentInstances[i] = instance;
+                        }
                     }
 
-                    // Distance culling using pre-computed bounds center
+                    // Distance culling using up-to-date bounds center
                     if (useDistanceCulling)
                     {
                         float sqrDist = (instance.BoundsCenter - cameraPosition).sqrMagnitude;
                         if (sqrDist > maxDistSqr)
+                        {
+                            culledDist++;
                             continue;
+                        }
                     }
 
                     visible.Add(instance);
                 }
 
-                Volatile.Write(ref visibleInstances, visible.Count > 0 ? visible.ToArray() : null);
+                visLogTimer++;
+                if (visLogTimer % 180 == 1)
+                {
+                    logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={visible.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
+                }
+
+                Volatile.Write(ref visibleInstances, visible.Count > 0 ? visible.ToArray() : Array.Empty<InstanceData>());
             }
         }
 
@@ -359,13 +520,181 @@ namespace UnityRemix
             activeScene = default;
         }
 
+        private static Type _checkPointType;
+        private static bool _checkPointTypeSearched;
+
+        private static Type GetCheckPointType()
+        {
+            if (!_checkPointTypeSearched)
+            {
+                _checkPointTypeSearched = true;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    var t = asm.GetType("CheckPoint");
+                    if (t != null)
+                    {
+                        _checkPointType = t;
+                        break;
+                    }
+                }
+            }
+            return _checkPointType;
+        }
+
+        private static InstanceFlags DetermineInstanceFlags(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
+        {
+            if (isCombinedMesh)
+                return InstanceFlags.IsCombinedMesh;
+
+            InstanceFlags flags = InstanceFlags.None;
+
+            try
+            {
+                var cpType = GetCheckPointType();
+                if (cpType != null && renderer.GetComponentInParent(cpType) != null)
+                {
+                    flags |= InstanceFlags.IsCheckPoint;
+                }
+                else
+                {
+                    string objName = filter.gameObject.name;
+                    if (!string.IsNullOrEmpty(objName) && objName.IndexOf("CheckPoint", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        flags |= InstanceFlags.IsCheckPoint;
+                    }
+                    else if (filter.transform.parent != null && !string.IsNullOrEmpty(filter.transform.parent.name) &&
+                             filter.transform.parent.name.IndexOf("CheckPoint", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        flags |= InstanceFlags.IsCheckPoint;
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                string objName = filter.gameObject.name;
+                if (!string.IsNullOrEmpty(objName) && objName.IndexOf("NoPass", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    flags |= InstanceFlags.IsNoPass;
+                }
+                else if (filter.transform.parent != null && !string.IsNullOrEmpty(filter.transform.parent.name) &&
+                         filter.transform.parent.name.IndexOf("NoPass", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    flags |= InstanceFlags.IsNoPass;
+                }
+                else if (renderer.sharedMaterial != null && !string.IsNullOrEmpty(renderer.sharedMaterial.name) &&
+                         renderer.sharedMaterial.name.IndexOf("NoPass", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    flags |= InstanceFlags.IsNoPass;
+                }
+            }
+            catch { }
+
+            return flags;
+        }
+
+        private static Type[] _ignoredDynamicTypes;
+        private static bool _ignoredDynamicTypesSearched;
+
+        private static Type[] GetIgnoredDynamicTypes()
+        {
+            if (!_ignoredDynamicTypesSearched)
+            {
+                _ignoredDynamicTypesSearched = true;
+                var list = new List<Type>();
+                var targetNames = new HashSet<string>
+                {
+                    "EnemyIdentifier",
+                    "SpawnEffect",
+                    "SeasonalHats",
+                    "NewMovement",
+                    "PlayerTracker",
+                    "Projectile",
+                    "Coin",
+                    "Nail",
+                    "Grenade",
+                    "ItemIdentifier",
+                    "Skull",
+                    "BloodAbsorber"
+                };
+
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    foreach (var name in targetNames)
+                    {
+                        var t = asm.GetType(name);
+                        if (t != null && !list.Contains(t))
+                            list.Add(t);
+                    }
+                }
+                _ignoredDynamicTypes = list.ToArray();
+            }
+            return _ignoredDynamicTypes;
+        }
+
+        private static bool IsDynamicOrIgnored(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
+        {
+            if (isCombinedMesh)
+                return false;
+
+            try
+            {
+                var types = GetIgnoredDynamicTypes();
+                if (types != null)
+                {
+                    for (int i = 0; i < types.Length; i++)
+                    {
+                        if (renderer.GetComponentInParent(types[i]) != null)
+                            return true;
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                string objName = filter.gameObject.name;
+                if (!string.IsNullOrEmpty(objName))
+                {
+                    if (objName.IndexOf("SpawnEffect", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        objName.IndexOf("SeasonalHats", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        objName.IndexOf("Pumpkin", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        objName.IndexOf("SantaHat", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        objName.IndexOf("EasterBunny", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return true;
+                    }
+                }
+
+                if (filter.transform.parent != null)
+                {
+                    string parentName = filter.transform.parent.name;
+                    if (!string.IsNullOrEmpty(parentName))
+                    {
+                        if (parentName.IndexOf("SpawnEffect", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            parentName.IndexOf("SeasonalHats", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            parentName.IndexOf("Halloween", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            parentName.IndexOf("Christmas", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            parentName.IndexOf("Easter", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
+
         private int ScanScene(Scene scene, bool logDiagnostics)
         {
             var filters = Resources.FindObjectsOfTypeAll<MeshFilter>();
             var combinedDataCache = new Dictionary<int, (Vector3[] verts, Vector3[] norms, Vector2[] uvs, Color32[] cols, int[][] subIndices)>();
             int queued = 0;
             int skippedAlreadyScanned = 0, skippedWrongScene = 0, skippedNoRenderer = 0;
-            int skippedInactive = 0;
+            int skippedInactive = 0, skippedDynamic = 0, skippedLayer = 0;
             int skippedNoMesh = 0, skippedNoVerts = 0, skippedNoTris = 0, skippedReadError = 0;
             int gpuReadbackCount = 0;
             int vertexColorCount = 0;
@@ -391,6 +720,14 @@ namespace UnityRemix
                 if (filter.gameObject.scene != scene && filter.gameObject.scene.name != "DontDestroyOnLoad")
                 {
                     skippedWrongScene++;
+                    continue;
+                }
+
+                // Skip non-rendered layers (Invisible collision brushes, PlayerOnly, GroundCheck, Portal, UI, etc.)
+                if (IsLayerExcluded(filter.gameObject.layer))
+                {
+                    skippedLayer++;
+                    scannedFilterIds.Add(filterId);
                     continue;
                 }
 
@@ -422,6 +759,15 @@ namespace UnityRemix
                 // pre-transformed world-space vertices. Each renderer owns a slice of submeshes
                 // at [subMeshStartIndex .. subMeshStartIndex + sharedMaterials.Length).
                 bool isCombinedMesh = mesh.name != null && mesh.name.StartsWith("Combined Mesh");
+
+                // Skip dynamic entities (enemies, spawn effects, seasonal hats, player, projectiles)
+                // SceneMeshScanner is strictly for static level geometry; dynamic objects are captured per-frame.
+                if (IsDynamicOrIgnored(filter, renderer, isCombinedMesh))
+                {
+                    skippedDynamic++;
+                    scannedFilterIds.Add(filterId);
+                    continue;
+                }
 
                 // Mark scanned before extraction — even if geometry is empty we won't retry
                 scannedFilterIds.Add(filterId);
@@ -543,8 +889,12 @@ namespace UnityRemix
                     int matId = 0;
                     if (materials != null && sub < materials.Length && materials[sub] != null)
                     {
-                        matId = materials[sub].GetInstanceID();
-                        materialManager.CaptureMaterialTextures(materials[sub], matId);
+                        var mat = materials[sub];
+                        if (IsMaterialOrShaderInvisible(mat))
+                            continue;
+
+                        matId = mat.GetInstanceID();
+                        materialManager.CaptureMaterialTextures(mat, matId);
                     }
                     surfaces.Add(new SubMeshSurface { Indices = tris, MaterialId = matId });
                 }
@@ -597,6 +947,7 @@ namespace UnityRemix
                         LocalToWorld = isCombinedMesh ? Matrix4x4.identity : filter.transform.localToWorldMatrix,
                         Layer = filter.gameObject.layer,
                         SourceRenderer = renderer,
+                        Flags = DetermineInstanceFlags(filter, renderer, isCombinedMesh),
                     });
                 }
                 queued++;
@@ -606,7 +957,7 @@ namespace UnityRemix
             {
                 logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
                     $" | skipped: {skippedWrongScene} wrong scene, {skippedAlreadyScanned} already scanned," +
-                    $" {skippedInactive} inactive, {skippedNoRenderer} no renderer, {skippedNoMesh} no mesh," +
+                    $" {skippedInactive} inactive, {skippedLayer} layer excluded, {skippedDynamic} dynamic/ignored, {skippedNoRenderer} no renderer, {skippedNoMesh} no mesh," +
                     $" {skippedReadError} read error, {skippedNoVerts} no verts, {skippedNoTris} no tris");
                 materialManager.LogMaterialStats();
             }
@@ -658,7 +1009,8 @@ namespace UnityRemix
                     RendererInstanceId = entry.RendererInstanceId,
                     Transform = transform,
                     Layer = entry.Layer,
-                    BoundsCenter = ComputeBoundsCenter(entry.Vertices, entry.LocalToWorld)
+                    BoundsCenter = ComputeBoundsCenter(entry.Vertices, entry.LocalToWorld),
+                    Flags = entry.Flags,
                 });
                 newRenderers.Add(entry.SourceRenderer);
             }
