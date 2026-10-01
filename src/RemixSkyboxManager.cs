@@ -37,6 +37,12 @@ namespace UnityRemix
         private RemixFramebufferPresenter framebufferPresenter;
 
         private Texture2D[] skyFaceTextures = new Texture2D[6];
+        private Mesh skyboxMesh = null;
+        private ulong skyboxMeshKey = 0;
+        private int skyboxMeshId = 0;
+        private ulong skyboxMeshHash = 0;
+        private Material skyMaterial = null;
+        private Texture2D skyTexture = null;
 
         private int skyboxVersion = 0;
 
@@ -146,13 +152,33 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// Emits the skybox mesh instance into the frame state, centered on the camera and tagged as SKY.
-        /// Only active in legacy CubeMesh mode. In DomeLight and Atmosphere modes, no TLAS mesh is emitted,
-        /// ensuring distant directional lights and sun shadow rays are never occluded.
+        /// Emits the skybox sphere mesh instance into the frame state, centered on origin and tagged with REMIXAPI_INSTANCE_CATEGORY_BIT_SKY.
+        /// In OpenRemix, this renders in the raster skyPass (direct to screen in raster mode, into rawSky in pathtrace mode)
+        /// without writing depth or occluding sun/directional lighting.
         /// </summary>
         public void EmitSkyboxInstance(RemixFrameCapture.FrameState state, Camera mainCam)
         {
-            // Dome Light is rendered natively via DrawSkyLight at optical infinity; no TLAS cube geometry needed.
+            if (configEnableSkybox != null && !configEnableSkybox.Value)
+                return;
+            if (skyboxMeshKey == 0 || mainCam == null || state == null)
+                return;
+
+            float rot = 0f;
+            if (lastCapturedSkyMat != null && lastCapturedSkyMat.HasProperty("_Rotation"))
+            {
+                try { rot = lastCapturedSkyMat.GetFloat("_Rotation"); } catch { }
+            }
+
+            Quaternion skyRot = Quaternion.Euler(0f, -rot, 0f);
+
+            state.instances.Add(new RemixFrameCapture.MeshInstanceData
+            {
+                meshKey = skyboxMeshKey,
+                meshId = skyboxMeshId,
+                localToWorld = Matrix4x4.TRS(Vector3.zero, skyRot, Vector3.one * 500f),
+                rendererInstanceId = -999999,
+                categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY
+            });
         }
 
         /// <summary>
@@ -336,9 +362,26 @@ namespace UnityRemix
             WriteDdsFile(ddsFullPath, dstW, dstH, ddsPixels);
             CleanupOldDdsFiles(modsDir, ddsFileName);
 
+            Color32[] texPixels = new Color32[dstW * dstH];
+            for (int y = 0; y < dstH; y++)
+            {
+                int srcRow = (dstH - 1 - y) * dstW;
+                int dstRow = y * dstW;
+                Array.Copy(ddsPixels, srcRow, texPixels, dstRow, dstW);
+            }
+            if (skyTexture != null) UnityEngine.Object.Destroy(skyTexture);
+            skyTexture = new Texture2D(dstW, dstH, TextureFormat.RGBA32, false);
+            skyTexture.name = $"RemixSkyTexture_v{skyboxVersion}";
+            skyTexture.filterMode = isClosest ? FilterMode.Point : FilterMode.Bilinear;
+            skyTexture.wrapMode = TextureWrapMode.Repeat;
+            skyTexture.SetPixels32(texPixels);
+            skyTexture.Apply(false, false);
+
+            UpdateSkyMeshAndMaterial(skyTexture, isClosest);
+
             string filterDesc = isClosest ? "Closest (Pixelated)" : "Linear (Smooth)";
-            statusText = $"Dome Light (Panoramic v{skyboxVersion}, {filterDesc})";
-            logger?.LogInfo($"[RemixSkyboxManager] Generated direct panoramic DDS: {ddsFullPath} ({filterDesc})");
+            statusText = $"Skybox (Panoramic v{skyboxVersion}, {filterDesc})";
+            logger?.LogInfo($"[RemixSkyboxManager] Generated direct panoramic DDS & mesh: {ddsFullPath} ({filterDesc})");
 
             CreateRemixDomeLight(ddsFullPath);
         }
@@ -468,19 +511,189 @@ namespace UnityRemix
 
             if (hasCubemap)
             {
-                GenerateEquirectangularDds(ddsFullPath, 2048, 1024);
-                statusText = $"Dome Light (Cubemap v{skyboxVersion}, {filterDesc})";
-                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama DDS: {ddsFullPath} ({filterDesc})");
+                Color32[] panoPixels = GenerateEquirectangularPixels(2048, 1024);
+                if (panoPixels != null)
+                {
+                    WriteDdsFile(ddsFullPath, 2048, 1024, panoPixels);
+
+                    Color32[] texPixels = new Color32[2048 * 1024];
+                    for (int y = 0; y < 1024; y++)
+                    {
+                        int srcRow = (1024 - 1 - y) * 2048;
+                        int dstRow = y * 2048;
+                        Array.Copy(panoPixels, srcRow, texPixels, dstRow, 2048);
+                    }
+                    if (skyTexture != null) UnityEngine.Object.Destroy(skyTexture);
+                    skyTexture = new Texture2D(2048, 1024, TextureFormat.RGBA32, false);
+                    skyTexture.name = $"RemixSkyTexture_v{skyboxVersion}";
+                    skyTexture.filterMode = isClosest ? FilterMode.Point : FilterMode.Bilinear;
+                    skyTexture.wrapMode = TextureWrapMode.Repeat;
+                    skyTexture.SetPixels32(texPixels);
+                    skyTexture.Apply(false, false);
+
+                    UpdateSkyMeshAndMaterial(skyTexture, isClosest);
+                }
+                statusText = $"Skybox (Cubemap v{skyboxVersion}, {filterDesc})";
+                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama DDS & mesh: {ddsFullPath} ({filterDesc})");
             }
             else
             {
-                GenerateSolidColorDds(ddsFullPath, 16, 16, bgColor);
-                statusText = $"Dome Light (Solid v{skyboxVersion})";
-                logger?.LogInfo($"[RemixSkyboxManager] Generated solid color DDS ({bgColor}): {ddsFullPath}");
+                Color32[] solidPixels = GenerateSolidColorPixels(16, 16, bgColor);
+                WriteDdsFile(ddsFullPath, 16, 16, solidPixels);
+
+                if (skyTexture != null) UnityEngine.Object.Destroy(skyTexture);
+                skyTexture = new Texture2D(16, 16, TextureFormat.RGBA32, false);
+                skyTexture.name = $"RemixSkyTexture_Solid_v{skyboxVersion}";
+                skyTexture.filterMode = FilterMode.Point;
+                skyTexture.wrapMode = TextureWrapMode.Clamp;
+                skyTexture.SetPixels32(solidPixels);
+                skyTexture.Apply(false, false);
+
+                UpdateSkyMeshAndMaterial(skyTexture, isClosest);
+
+                statusText = $"Skybox (Solid v{skyboxVersion})";
+                logger?.LogInfo($"[RemixSkyboxManager] Generated solid color DDS & mesh ({bgColor}): {ddsFullPath}");
             }
 
             CleanupOldDdsFiles(modsDir, ddsFileName);
             CreateRemixDomeLight(ddsFullPath);
+        }
+
+        private void EnsureSkyboxSphereMesh()
+        {
+            if (skyboxMesh != null) return;
+
+            skyboxMesh = new Mesh();
+            skyboxMesh.name = "RemixSkyboxSphere";
+
+            const int slices = 48; // Longitude
+            const int stacks = 24; // Latitude
+            const float radius = 1.0f;
+
+            int vertexCount = (slices + 1) * (stacks + 1);
+            Vector3[] vertices = new Vector3[vertexCount];
+            Vector3[] normals = new Vector3[vertexCount];
+            Vector2[] uvs = new Vector2[vertexCount];
+
+            for (int stack = 0; stack <= stacks; stack++)
+            {
+                float v = (float)stack / stacks; // 0 (Nadir, bottom) to 1 (Zenith, top)
+                float theta = (1.0f - v) * Mathf.PI; // theta = 0 at Zenith (top), PI at Nadir (bottom)
+                float sinTheta = Mathf.Sin(theta);
+                float cosTheta = Mathf.Cos(theta);
+
+                for (int slice = 0; slice <= slices; slice++)
+                {
+                    float u = (float)slice / slices;
+                    float phi = (u - 0.5f) * 2.0f * Mathf.PI; // phi = 0 at forward (u = 0.5)
+                    float sinPhi = Mathf.Sin(phi);
+                    float cosPhi = Mathf.Cos(phi);
+
+                    int index = stack * (slices + 1) + slice;
+
+                    // Unity coordinates: X right, Y up, Z forward
+                    float x = radius * sinTheta * sinPhi;
+                    float y = radius * cosTheta;
+                    float z = radius * sinTheta * cosPhi;
+
+                    vertices[index] = new Vector3(x, y, z);
+                    normals[index] = new Vector3(-x, -y, -z).normalized;
+                    uvs[index] = new Vector2(u, v);
+                }
+            }
+
+            int triangleCount = slices * stacks * 6;
+            int[] triangles = new int[triangleCount];
+            int triIndex = 0;
+
+            for (int stack = 0; stack < stacks; stack++)
+            {
+                for (int slice = 0; slice < slices; slice++)
+                {
+                    int i00 = stack * (slices + 1) + slice;
+                    int i01 = stack * (slices + 1) + (slice + 1);
+                    int i10 = (stack + 1) * (slices + 1) + slice;
+                    int i11 = (stack + 1) * (slices + 1) + (slice + 1);
+
+                    // Inward-facing triangles (clockwise from inside view):
+                    triangles[triIndex++] = i00;
+                    triangles[triIndex++] = i10;
+                    triangles[triIndex++] = i01;
+
+                    triangles[triIndex++] = i01;
+                    triangles[triIndex++] = i10;
+                    triangles[triIndex++] = i11;
+                }
+            }
+
+            skyboxMesh.vertices = vertices;
+            skyboxMesh.normals = normals;
+            skyboxMesh.uv = uvs;
+            skyboxMesh.triangles = triangles;
+            skyboxMesh.UploadMeshData(false);
+            skyboxMeshId = skyboxMesh.GetInstanceID();
+        }
+
+        private void UpdateSkyMeshAndMaterial(Texture2D panoTexture, bool isClosest)
+        {
+            try
+            {
+                EnsureSkyboxSphereMesh();
+
+                if (skyMaterial != null)
+                {
+                    UnityEngine.Object.Destroy(skyMaterial);
+                    skyMaterial = null;
+                }
+
+                Shader unlitShader = Shader.Find("Unlit/Texture")
+                                  ?? Shader.Find("UI/Default")
+                                  ?? Shader.Find("Standard");
+
+                skyMaterial = new Material(unlitShader);
+                skyMaterial.name = $"RemixSkyMaterial_v{skyboxVersion}";
+                skyMaterial.mainTexture = panoTexture;
+
+                int matId = -2000000 - skyboxVersion;
+
+                materialManager.CaptureMaterialTextures(
+                    skyMaterial,
+                    matId,
+                    mpbEmissiveColor: Color.white,
+                    mpbEmissiveIntensity: 1.0f,
+                    mpbMainTex: panoTexture,
+                    mpbColor: Color.white
+                );
+
+                skyboxMeshKey = 0x534B594200000000UL | (ulong)(uint)skyboxVersion;
+                skyboxMeshHash = RemixMeshConverter.GenerateMeshHash("RemixSkyboxSphere", skyboxMesh.vertexCount, (int)skyboxMesh.GetIndexCount(0), (int)skyboxMeshKey);
+
+                var submeshIndices = new List<uint[]>
+                {
+                    Array.ConvertAll(skyboxMesh.triangles, x => (uint)x)
+                };
+
+                var preparedData = new PreparedMeshData
+                {
+                    MeshKey = skyboxMeshKey,
+                    MeshId = skyboxMeshId,
+                    MeshName = $"RemixSkyboxSphere_v{skyboxVersion}",
+                    MeshHash = skyboxMeshHash,
+                    Vertices = skyboxMesh.vertices,
+                    Normals = skyboxMesh.normals,
+                    UVs = skyboxMesh.uv,
+                    SubmeshIndices = submeshIndices,
+                    SubmeshMaterials = new List<Material> { skyMaterial },
+                    SubmeshMaterialIds = new List<int> { matId }
+                };
+
+                frameCapture?.QueuePriorityMesh(preparedData);
+                logger?.LogInfo($"[RemixSkyboxManager] Queued priority skybox sphere mesh 0x{skyboxMeshKey:X16} (v{skyboxVersion})");
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[RemixSkyboxManager] Failed to create skybox sphere mesh/material: {ex.Message}");
+            }
         }
 
         private void CreateRemixDomeLight(string ddsFullPath)
@@ -503,11 +716,26 @@ namespace UnityRemix
             float cosR = Mathf.Cos(rad);
             float sinR = Mathf.Sin(rad);
 
-            var xform = RemixAPI.remixapi_Transform.FromMatrix(
-                cosR, -sinR, 0, 0,
-                sinR, cosR, 0, 0,
-                0, 0, 1, 0
-            );
+            RemixAPI.remixapi_Transform xform;
+            if (RemixAPI.IsOpenRemix)
+            {
+                // OpenRemix: d.y is Zenith (+Remix Z), d.x is Forward (+Remix Y), d.z is -Right (-Remix X)
+                // The inverse of worldToLocal rotation matrix is its transpose:
+                xform = RemixAPI.remixapi_Transform.FromMatrix(
+                     sinR, 0f, -cosR, 0f,
+                     cosR, 0f,  sinR, 0f,
+                     0f,   1f,    0f, 0f
+                );
+            }
+            else
+            {
+                // Standard DXVK-Remix: Z is Zenith
+                xform = RemixAPI.remixapi_Transform.FromMatrix(
+                    cosR, -sinR, 0f, 0f,
+                    sinR,  cosR, 0f, 0f,
+                    0f,    0f,   1f, 0f
+                );
+            }
 
             IntPtr pathPtr = Marshal.StringToHGlobalUni(ddsFullPath);
 
@@ -570,7 +798,7 @@ namespace UnityRemix
             }
         }
 
-        private void GenerateEquirectangularDds(string ddsPath, int width, int height)
+        private Color32[] GenerateEquirectangularPixels(int width, int height)
         {
             Color32[][] facePixels = new Color32[6][];
             int faceRes = 0;
@@ -586,7 +814,7 @@ namespace UnityRemix
             if (faceRes == 0 || facePixels[0] == null)
             {
                 logger?.LogWarning("[RemixSkyboxManager] Cannot generate equirectangular: face textures missing");
-                return;
+                return null;
             }
 
             bool isClosest = (configSkyboxFiltering != null && configSkyboxFiltering.Value == SkyboxFiltering.Closest);
@@ -666,16 +894,16 @@ namespace UnityRemix
 
                         byte r = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.r, c10.r, s), Mathf.Lerp(c01.r, c11.r, s), t)), 0, 255);
                         byte g = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.g, c10.g, s), Mathf.Lerp(c01.g, c10.g, s), t)), 0, 255);
-                        byte b = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.b, c10.b, s), Mathf.Lerp(c01.b, c11.b, s), t)), 0, 255);
+                        byte b = (byte)Mathf.Clamp(Mathf.RoundToInt(Mathf.Lerp(Mathf.Lerp(c00.b, c10.b, s), Mathf.Lerp(c01.b, c10.b, s), t)), 0, 255);
                         panoPixels[rowOffset + x] = new Color32(r, g, b, 255);
                     }
                 }
             });
 
-            WriteDdsFile(ddsPath, width, height, panoPixels);
+            return panoPixels;
         }
 
-        private void GenerateSolidColorDds(string ddsPath, int width, int height, Color color)
+        private static Color32[] GenerateSolidColorPixels(int width, int height, Color color)
         {
             Color32 c32 = color;
             c32.a = 255;
@@ -684,7 +912,7 @@ namespace UnityRemix
             {
                 solidPixels[i] = c32;
             }
-            WriteDdsFile(ddsPath, width, height, solidPixels);
+            return solidPixels;
         }
 
         private static void WriteDdsFile(string filePath, int width, int height, Color32[] pixels)
@@ -976,6 +1204,24 @@ namespace UnityRemix
                     UnityEngine.Object.Destroy(skyFaceTextures[i]);
                     skyFaceTextures[i] = null;
                 }
+            }
+
+            if (skyTexture != null)
+            {
+                UnityEngine.Object.Destroy(skyTexture);
+                skyTexture = null;
+            }
+
+            if (skyMaterial != null)
+            {
+                UnityEngine.Object.Destroy(skyMaterial);
+                skyMaterial = null;
+            }
+
+            if (skyboxMesh != null)
+            {
+                UnityEngine.Object.Destroy(skyboxMesh);
+                skyboxMesh = null;
             }
         }
     }

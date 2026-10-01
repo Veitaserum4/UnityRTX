@@ -336,6 +336,39 @@ namespace UnityRemix
             {
                 paramHandle.Free();
             }
+
+            // Also setup REMIXAPI_CAMERA_TYPE_SKY (centered at origin with same orientation and projection)
+            var skyParamCamera = new RemixAPI.remixapi_CameraInfoParameterizedEXT
+            {
+                sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT,
+                pNext = IntPtr.Zero,
+                position = new RemixAPI.remixapi_Float3D(0f, 0f, 0f),
+                forward = new RemixAPI.remixapi_Float3D(forward.x, forward.z, forward.y),
+                up = new RemixAPI.remixapi_Float3D(up.x, up.z, up.y),
+                right = new RemixAPI.remixapi_Float3D(right.x, right.z, right.y),
+                fovYInDegrees = fov,
+                aspect = aspect,
+                nearPlane = 0.1f,
+                farPlane = 1000.0f
+            };
+
+            GCHandle skyParamHandle = GCHandle.Alloc(skyParamCamera, GCHandleType.Pinned);
+            try
+            {
+                var skyCameraInfo = new RemixAPI.remixapi_CameraInfo
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_INFO,
+                    pNext = skyParamHandle.AddrOfPinnedObject(),
+                    type = RemixAPI.remixapi_CameraType.REMIXAPI_CAMERA_TYPE_SKY
+                };
+
+                setupCameraFunc(ref skyCameraInfo);
+            }
+            catch { }
+            finally
+            {
+                skyParamHandle.Free();
+            }
         }
         
         /// <summary>

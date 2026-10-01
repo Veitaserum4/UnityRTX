@@ -1253,6 +1253,7 @@ namespace UnityRemix
                     ("rtx.native.pathtrace.denoiser", "reblur-sh"),
                     ("rtx.native.pathtrace.sharc", "false"),
                     ("rtx.native.pathtrace.sigma", "false"),
+                    ("rtx.native.pathtrace.sky", "true"),
                     ("rtx.native.gpuPassTimers", "true")
                 };
 
