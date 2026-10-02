@@ -103,9 +103,10 @@ namespace UnityRemix
                 }
             }
 
-            // Check parent hierarchy
+            // Check immediate parent only (1 level) to catch compound visual child meshes,
+            // but NEVER walk recursively up to the scene root (which causes whole rooms/levels to match)
             Transform parent = go.transform.parent;
-            while (parent != null)
+            if (parent != null)
             {
                 var parentComps = parent.GetComponents<MonoBehaviour>();
                 if (parentComps != null)
@@ -116,7 +117,6 @@ namespace UnityRemix
                             return true;
                     }
                 }
-                parent = parent.parent;
             }
 
             return false;
@@ -127,15 +127,26 @@ namespace UnityRemix
             if (c == null) return false;
             string typeName = c.GetType().Name;
 
-            // 1. Direct positive match for known scrollers — evaluated FIRST to prevent false exclusion
+            // Explicitly exclude known non-scroller management and UI scripts FIRST
+            if (typeName.StartsWith("Disable", StringComparison.OrdinalIgnoreCase) ||
+                typeName.StartsWith("Menu", StringComparison.OrdinalIgnoreCase) ||
+                typeName.StartsWith("UI", StringComparison.OrdinalIgnoreCase) ||
+                typeName.Contains("Check") ||
+                typeName.Contains("Tracker") ||
+                typeName.Contains("Controller") ||
+                typeName.Contains("Manager"))
+            {
+                return false;
+            }
+
+            // 1. Direct positive match for known scrollers
             if (typeName.Equals("ScrollingTexture", StringComparison.OrdinalIgnoreCase) ||
                 typeName.Equals("UVScroller", StringComparison.OrdinalIgnoreCase) ||
                 typeName.Equals("TextureScroller", StringComparison.OrdinalIgnoreCase) ||
                 typeName.Equals("ScrollUV", StringComparison.OrdinalIgnoreCase) ||
                 typeName.Equals("AnimateUV", StringComparison.OrdinalIgnoreCase) ||
                 typeName.Equals("ScrollTexture", StringComparison.OrdinalIgnoreCase) ||
-                typeName.Equals("MaterialScroller", StringComparison.OrdinalIgnoreCase) ||
-                typeName.Equals("DisableChildScrollingTexturesOnPref", StringComparison.OrdinalIgnoreCase))
+                typeName.Equals("MaterialScroller", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -145,10 +156,7 @@ namespace UnityRemix
             if ((typeName.EndsWith("Scroller", StringComparison.OrdinalIgnoreCase) ||
                  typeName.EndsWith("UVScroll", StringComparison.OrdinalIgnoreCase) ||
                  typeName.EndsWith("TextureScroll", StringComparison.OrdinalIgnoreCase)) &&
-                !typeName.StartsWith("Text", StringComparison.OrdinalIgnoreCase) &&
-                !typeName.Contains("Check") &&
-                !typeName.Contains("Tracker") &&
-                !typeName.Contains("Controller"))
+                !typeName.StartsWith("Text", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -170,8 +178,9 @@ namespace UnityRemix
                 }
             }
 
+            // Check immediate parent only (1 level)
             Transform parent = go.transform.parent;
-            while (parent != null)
+            if (parent != null)
             {
                 var parentComps = parent.GetComponents<MonoBehaviour>();
                 if (parentComps != null)
@@ -182,7 +191,6 @@ namespace UnityRemix
                             return parentComps[i];
                     }
                 }
-                parent = parent.parent;
             }
 
             return null;

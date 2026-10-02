@@ -779,7 +779,7 @@ namespace UnityRemix
             
             rendererCacheFrame = frameCount;
             
-            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static, {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles");
+            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static ({cachedScrollingRenderers.Count} scrolling UV), {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles");
             
             if (configDebugLogInterval.Value > 0)
             {
@@ -1035,6 +1035,7 @@ namespace UnityRemix
                     if (scrollingRendererIds.Add(rendererInstanceId))
                     {
                         cachedScrollingRenderers.Add(renderer);
+                        logger.LogInfo($"[ScrollingTexture] Registered scrolling renderer '{renderer.gameObject.name}' (id={rendererInstanceId}, mesh='{mesh.name}') - total scrolling: {scrollingRendererIds.Count}");
                     }
                     lock (persistentStaticLock)
                     {
