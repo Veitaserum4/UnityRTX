@@ -46,6 +46,14 @@ Write-Host "Build successful!" -ForegroundColor Green
 if ($Deploy -and $UnityPath -ne "") {
     $pluginPath = Join-Path $UnityPath "BepInEx\plugins"
     $dllSource = "bin\Release\netstandard2.1\UnityRemix.dll"
+    $managedDir = Get-ChildItem -Path $UnityPath -Directory -Filter "*_Data" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($managedDir -and -not (Test-Path (Join-Path $managedDir.FullName "Managed\netstandard.dll"))) {
+        $net472Source = "bin\Release\net472\UnityRemix.dll"
+        if (Test-Path $net472Source) {
+            $dllSource = $net472Source
+            Write-Host "Target game runs .NET 4.x (no netstandard.dll) - selecting net472 build" -ForegroundColor Cyan
+        }
+    }
     
     if (-not (Test-Path $pluginPath)) {
         Write-Host "BepInEx plugins folder not found at: $pluginPath" -ForegroundColor Red

@@ -286,7 +286,7 @@ namespace UnityRemix
             }
 
             // Find known canvases and their worldCameras
-            var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
+            var canvases = UnityCompat.FindSceneComponentsIncludingInactive<Canvas>();
             var canvasCameras = new HashSet<Camera>();
 
             foreach (var canvas in canvases)
@@ -573,7 +573,7 @@ namespace UnityRemix
             Camera uiCamera = targetCam ?? DedicatedUICamera ?? (uiCameras.Count > 0 ? uiCameras[0] : null);
             if (uiCamera == null) return;
 
-            var canvases = UnityEngine.Object.FindObjectsOfType<Canvas>(true);
+            var canvases = UnityCompat.FindSceneComponentsIncludingInactive<Canvas>();
             foreach (var canvas in canvases)
             {
                 if (canvas == null) continue;

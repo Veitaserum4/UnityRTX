@@ -46,6 +46,13 @@ namespace UnityRemix
             return result.ToArray();
         }
 
+        public static T[] FindActiveSceneComponents<T>() where T : Component
+        {
+            if (SceneFinder<T>.Find != null)
+                return SceneFinder<T>.Find(false);
+            return UnityEngine.Object.FindObjectsOfType<T>();
+        }
+
         private static readonly Func<CanvasRenderer, Mesh> canvasGetMesh = CreateCanvasGetMesh();
 
         private static Func<CanvasRenderer, Mesh> CreateCanvasGetMesh()

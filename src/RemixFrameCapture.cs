@@ -745,7 +745,7 @@ namespace UnityRemix
                 }
             }
 
-            var allParticles = UnityEngine.Object.FindObjectsOfType<ParticleSystemRenderer>(false);
+            var allParticles = UnityCompat.FindActiveSceneComponents<ParticleSystemRenderer>();
             for (int i = 0; i < allParticles.Length; i++)
             {
                 var pr = allParticles[i];
@@ -2251,7 +2251,7 @@ namespace UnityRemix
             float maxParticleDistSqr = maxParticleDist * maxParticleDist;
 
             // Check active particle renderers every frame to capture transient particles immediately (bullet impacts, sparks, newly spawned systems)
-            var activeRenderers = UnityEngine.Object.FindObjectsOfType<ParticleSystemRenderer>(false);
+            var activeRenderers = UnityCompat.FindActiveSceneComponents<ParticleSystemRenderer>();
             for (int a = 0; a < activeRenderers.Length; a++)
             {
                 var ar = activeRenderers[a];
@@ -2822,7 +2822,7 @@ namespace UnityRemix
             if (mainCam == null || !mainCam.gameObject.activeInHierarchy || !mainCam.enabled || Time.frameCount < 10)
                 return;
 
-            var activeTrails = UnityEngine.Object.FindObjectsOfType<TrailRenderer>(false);
+            var activeTrails = UnityCompat.FindActiveSceneComponents<TrailRenderer>();
             if (activeTrails == null || activeTrails.Length == 0)
                 return;
 
