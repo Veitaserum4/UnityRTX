@@ -50,7 +50,6 @@ namespace UnityRemix
         private ConfigEntry<bool> configCaptureSkinnedMeshes;
         private ConfigEntry<bool> configCaptureParticles;
         private ConfigEntry<bool> configHardwareSkinning;
-        private ConfigEntry<bool> configDynamicTLASRefit;
         private ConfigEntry<bool> configCaptureTextures;
         private ConfigEntry<bool> configCaptureMaterials;
         private ConfigEntry<bool> configVerboseTextureLogging;
@@ -252,9 +251,6 @@ namespace UnityRemix
             
             configHardwareSkinning = Config.Bind("Performance", "HardwareSkinning", false,
                 "Use GPU hardware skinning for animated meshes. When off, uses CPU BakeMesh fallback.");
-            
-            configDynamicTLASRefit = Config.Bind("Performance", "DynamicTLASRefit", true,
-                "Classify static meshes as dynamic in OpenRemix (classification = 1) to enable hardware BVH refits instead of full rebuilds every frame. Dramatically improves path tracing performance in scenes with moving geometry (e.g. Cybergrind).");
             
             configCaptureTextures = Config.Bind("Debug", "CaptureTextures", true,
                 "Enable texture capturing and uploading.");
@@ -542,8 +538,7 @@ namespace UnityRemix
                 configDebugLogInterval,
                 configEnableLights,
                 configUseGameGeometry,
-                remixInterface,
-                configDynamicTLASRefit
+                remixInterface
             );
             
             sceneMeshScanner = new SceneMeshScanner(
@@ -880,7 +875,6 @@ namespace UnityRemix
                 case "CaptureParticles": return configCaptureParticles.Value;
                 case "EnableParticleDistanceCulling": return configEnableParticleDistanceCulling.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
-                case "DynamicTLASRefit": return configDynamicTLASRefit.Value;
                 case "CaptureTextures": return configCaptureTextures.Value;
                 case "CaptureMaterials": return configCaptureMaterials.Value;
                 case "EnableSceneScan": return configEnableSceneScan.Value;
@@ -956,7 +950,6 @@ namespace UnityRemix
                 case "CaptureParticles": configCaptureParticles.Value = value; break;
                 case "EnableParticleDistanceCulling": configEnableParticleDistanceCulling.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;
-                case "DynamicTLASRefit": configDynamicTLASRefit.Value = value; break;
                 case "CaptureTextures": configCaptureTextures.Value = value; break;
                 case "CaptureMaterials": configCaptureMaterials.Value = value; break;
                 case "EnableSceneScan": configEnableSceneScan.Value = value; break;
