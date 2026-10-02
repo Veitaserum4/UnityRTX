@@ -693,7 +693,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, uint classification = 1u)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -719,12 +719,16 @@ namespace UnityRemix
             ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
             if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
             {
+                uint effectiveClassification = classification;
+                if ((categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0)
+                    effectiveClassification = 1u;
+
                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                     pNext = IntPtr.Zero,
                     instanceId = targetInstanceId,
-                    classification = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0 ? 1u : 0u,
+                    classification = effectiveClassification,
                     rasterVisible = 1
                 };
                 hasIdentity = true;

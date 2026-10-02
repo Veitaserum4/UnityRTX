@@ -23,6 +23,7 @@ namespace UnityRemix
         private readonly ConfigEntry<int> configDebugLogInterval;
         private readonly ConfigEntry<bool> configEnableLights;
         private readonly ConfigEntry<bool> configUseGameGeometry;
+        private readonly ConfigEntry<bool> configDynamicTLASRefit;
         
         // Cached delegates
         private RemixAPI.PFN_remixapi_Present presentFunc;
@@ -68,7 +69,8 @@ namespace UnityRemix
             ConfigEntry<int> debugLogInterval,
             ConfigEntry<bool> enableLights,
             ConfigEntry<bool> useGameGeometry,
-            RemixAPI.remixapi_Interface remixInterface)
+            RemixAPI.remixapi_Interface remixInterface,
+            ConfigEntry<bool> dynamicTLASRefit = null)
         {
             this.logger = logger;
             this.windowManager = windowManager;
@@ -80,6 +82,7 @@ namespace UnityRemix
             this.configDebugLogInterval = debugLogInterval;
             this.configEnableLights = enableLights;
             this.configUseGameGeometry = useGameGeometry;
+            this.configDynamicTLASRefit = dynamicTLASRefit;
             
             // Cache delegate
             if (remixInterface.Present != IntPtr.Zero)
@@ -338,6 +341,7 @@ namespace UnityRemix
             uint objectPickingValue = 1;
             var claimedRendererIds = new HashSet<int>();
             var claimedStaticKeys = new HashSet<StaticGeometryKey>();
+            uint staticClassification = (configDynamicTLASRefit != null && !configDynamicTLASRefit.Value) ? 0u : 1u;
             
             foreach (var instance in state.instances)
             {
@@ -350,7 +354,7 @@ namespace UnityRemix
                     ulong persistentId = (ulong)(uint)instance.rendererInstanceId;
                     if (persistentId == 0) persistentId = (ulong)objectPickingValue;
 
-                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags, persistentId);
+                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags, persistentId, staticClassification);
                     if (instance.categoryFlags != 0 && (state.frameCount % 300 == 1 || state.frameCount < 5))
                     {
                         logger.LogInfo($"[RenderThread] Drawn categorized instance meshKey=0x{meshKey:X16} (category=0x{instance.categoryFlags:X})");
@@ -392,7 +396,7 @@ namespace UnityRemix
                                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                                     pNext = IntPtr.Zero,
                                     instanceId = persistentId,
-                                    classification = 0u, // Scanned static scene meshes
+                                    classification = staticClassification,
                                     rasterVisible = 1
                                 };
                                 hasIdentity = true;
@@ -512,7 +516,7 @@ namespace UnityRemix
                         ulong persistentId = (ulong)(uint)skinned.meshId;
                         if (persistentId == 0) persistentId = (ulong)objectPickingValue;
 
-                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId);
+                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId, 1u);
                         objectPickingValue++;
                     }
                 }

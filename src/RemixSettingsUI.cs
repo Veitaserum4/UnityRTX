@@ -30,6 +30,7 @@ namespace UnityRemix
         private bool _captureSkinnedMeshes;
         private bool _captureParticles;
         private bool _hardwareSkinning;
+        private bool _dynamicTLASRefit;
         private bool _captureTextures;
         private bool _captureMaterials;
         private bool _enableSceneScan;
@@ -465,6 +466,11 @@ namespace UnityRemix
             if (RemixImGui.Checkbox("Hardware Skinning", ref _hardwareSkinning))
                 _plugin.SetConfig("HardwareSkinning", _hardwareSkinning);
 
+            if (RemixImGui.Checkbox("Dynamic TLAS Refit", ref _dynamicTLASRefit))
+                _plugin.SetConfig("DynamicTLASRefit", _dynamicTLASRefit);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Classifies static meshes as dynamic in OpenRemix (classification = 1).\nAllows hardware BVH refits instead of full rebuilds when geometry moves\n(crucial for Cybergrind arena and moving platforms in path tracing).");
+
             RemixImGui.Text("Requires scene reload to apply");
         }
 
@@ -505,6 +511,7 @@ namespace UnityRemix
             _captureSkinnedMeshes = _plugin.GetConfigBool("CaptureSkinnedMeshes");
             _captureParticles = _plugin.GetConfigBool("CaptureParticles");
             _hardwareSkinning = _plugin.GetConfigBool("HardwareSkinning");
+            _dynamicTLASRefit = _plugin.GetConfigBool("DynamicTLASRefit");
             _captureTextures = _plugin.GetConfigBool("CaptureTextures");
             _captureMaterials = _plugin.GetConfigBool("CaptureMaterials");
             _singleWindow = _plugin.GetConfigBool("SingleWindow");
