@@ -605,7 +605,8 @@ namespace UnityRemix
             public Vector3[] bindNormals;
             public Vector2[] uvs;
             public Color32[] colors;
-            public int[] triangles;
+            public int[] triangles;             // merged all-submesh triangles (legacy / BakeMesh fallback)
+            public int[][] submeshTriangles;    // per-submesh triangle arrays for multi-material rendering
             public float[] blendWeights;    // bonesPerVertex * vertexCount
             public uint[] blendIndices;     // bonesPerVertex * vertexCount
             public int bonesPerVertex;
@@ -1822,6 +1823,13 @@ namespace UnityRemix
                 
                 int skinnedId = HashUtils.GetHierarchyHashInt(skinned.transform);
                 validSkinnedIds.Add(skinnedId);
+                // Also register per-submesh sub-keys so they survive the stale-pruning pass
+                var smMatsEarly = skinned.sharedMaterials;
+                if (smMatsEarly != null)
+                {
+                    for (int sub = 1; sub < smMatsEarly.Length; sub++)
+                        validSkinnedIds.Add((int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u)));
+                }
                 
                 // Compute unscaled transform (sign-only scale preserves winding)
                 Vector3 ls = skinned.transform.lossyScale;
@@ -1887,29 +1895,63 @@ namespace UnityRemix
                             logger.LogInfo($"[HashDebug-GPU] '{skinned.name}' meshName='{meshName}' cleanedName='{cleanedName}' verts={vertCount} tris={triCount} baseMeshHash=0x{baseMeshHash:X16} combinedMeshHash=0x{combinedMeshHash:X16} matId={matId} bones=[{boneNames}]");
                         }
                         
-                        persistentSkinnedData[skinnedId] = new SkinnedMeshData
+                        // Emit one SkinnedMeshData per submesh so each submesh gets its correct material
+                        // (fixes ATLYSS face/body/hair UV + color mismatch)
+                        var smMaterials = skinned.sharedMaterials;
+                        int subCount = (skinData.submeshTriangles != null) ? skinData.submeshTriangles.Length : 1;
+                        for (int sub = 0; sub < subCount; sub++)
                         {
-                            meshId = skinnedId,
-                            remixMeshHash = combinedMeshHash,
-                        materialId = matId,
-                        vertices = skinData.bindVertices,
-                        normals = skinData.bindNormals,
-                        uvs = skinData.uvs,
-                        colors = skinData.colors,
-                        triangles = skinData.triangles,
-                        localToWorld = unscaledMatrix,
-                        boneTransforms = boneMatrices,
-                        skinningData = skinData
-                    };
+                            int[] subTris = (skinData.submeshTriangles != null && sub < skinData.submeshTriangles.Length)
+                                ? skinData.submeshTriangles[sub]
+                                : skinData.triangles;
+                            if (subTris == null || subTris.Length == 0) continue;
+                            
+                            // Resolve per-submesh material
+                            int subMatId = matId; // default to renderer-best material
+                            if (smMaterials != null && sub < smMaterials.Length && smMaterials[sub] != null)
+                            {
+                                var subMat = smMaterials[sub];
+                                subMatId = subMat.GetInstanceID();
+                                // Re-capture material for this specific submesh with MPB overrides
+                                // (MPB overrides apply to all submeshes of the renderer identically)
+                                materialManager.CaptureMaterialTextures(subMat, subMatId);
+                            }
+                            
+                            // Unique key per submesh: xor with Knuth multiplied submesh index
+                            int subSkinnedId = (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
+                            ulong subMeshHash = combinedMeshHash ^ ((ulong)(uint)(sub + 1) * 2654435761UL);
+                            
+                            persistentSkinnedData[subSkinnedId] = new SkinnedMeshData
+                            {
+                                meshId = subSkinnedId,
+                                remixMeshHash = subMeshHash,
+                                materialId = subMatId,
+                                vertices = skinData.bindVertices,
+                                normals = skinData.bindNormals,
+                                uvs = skinData.uvs,
+                                colors = skinData.colors,
+                                triangles = subTris,
+                                localToWorld = unscaledMatrix,
+                                boneTransforms = boneMatrices,
+                                skinningData = skinData
+                            };
+                            validSkinnedIds.Add(subSkinnedId);
+                        }
                     gpuSkinned++;
                     continue;
                 }
                 
-                // Update transform on existing persistent data
-                if (persistentSkinnedData.TryGetValue(skinnedId, out var existing))
+                // Update transform on existing persistent data (for all submesh entries of this renderer)
+                var smMatsForUpdate = skinned.sharedMaterials;
+                int subCountForUpdate = (smMatsForUpdate != null) ? smMatsForUpdate.Length : 1;
+                for (int sub = 0; sub < subCountForUpdate; sub++)
                 {
-                    existing.localToWorld = unscaledMatrix;
-                    persistentSkinnedData[skinnedId] = existing;
+                    int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
+                    if (persistentSkinnedData.TryGetValue(subKey, out var existing))
+                    {
+                        existing.localToWorld = unscaledMatrix;
+                        persistentSkinnedData[subKey] = existing;
+                    }
                 }
                 
                 // Queue for BakeMesh fallback
@@ -1931,7 +1973,17 @@ namespace UnityRemix
                     var (idx, skinned, skinnedId, matrix, matId) = bakeFallbackQueue[fi];
                     
                     if (BakeSingleMesh(skinned, skinnedId, matId, matrix, doLog))
+                    {
                         baked++;
+                        // Register all per-submesh keys as valid so they aren't pruned
+                        var smMatsForBake = skinned.sharedMaterials;
+                        int subCntBake = (smMatsForBake != null) ? smMatsForBake.Length : 1;
+                        for (int sub = 0; sub < subCntBake; sub++)
+                        {
+                            int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
+                            validSkinnedIds.Add(subKey);
+                        }
+                    }
                     
                     if (bakeSw.Elapsed.TotalMilliseconds > bakeMaxMs)
                     {
@@ -3138,6 +3190,7 @@ namespace UnityRemix
                 Vector2[] uvs;
                 Color32[] colors = null;
                 int[] triangles;
+                int[][] perSubTrisLocal = null;
                 
                 if (mesh.isReadable)
                 {
@@ -3148,15 +3201,22 @@ namespace UnityRemix
                     if (colors != null && colors.Length == 0) colors = null;
                     
                     var allTris = new List<int>();
+                    var perSubTris = new int[mesh.subMeshCount][];
                     for (int s = 0; s < mesh.subMeshCount; s++)
                     {
                         if (mesh.GetTopology(s) != MeshTopology.Triangles)
+                        {
+                            perSubTris[s] = new int[0];
                             continue;
+                        }
                         var sub = mesh.GetTriangles(s);
+                        perSubTris[s] = (sub != null && sub.Length > 0) ? sub : new int[0];
                         if (sub != null && sub.Length > 0)
                             allTris.AddRange(sub);
                     }
                     triangles = allTris.ToArray();
+                    // store per-submesh for multi-material rendering
+                    perSubTrisLocal = perSubTris;
                 }
                 else
                 {
@@ -3169,15 +3229,21 @@ namespace UnityRemix
                     if (colors != null && colors.Length == 0) colors = null;
                     
                     var allTris = new List<int>();
+                    var perSubTris = new int[tempMesh.subMeshCount][];
                     for (int s = 0; s < tempMesh.subMeshCount; s++)
                     {
                         if (tempMesh.GetTopology(s) != MeshTopology.Triangles)
+                        {
+                            perSubTris[s] = new int[0];
                             continue;
+                        }
                         var sub = tempMesh.GetTriangles(s);
+                        perSubTris[s] = (sub != null && sub.Length > 0) ? sub : new int[0];
                         if (sub != null && sub.Length > 0)
                             allTris.AddRange(sub);
                     }
                     triangles = allTris.ToArray();
+                    perSubTrisLocal = perSubTris;
                     
                     // Recover bind-pose vertices by inverting the per-vertex skinning transform.
                     // BakeMesh(false) returns vertices in SMR local space WITHOUT scale:
@@ -3276,6 +3342,7 @@ namespace UnityRemix
                     uvs = uvs,
                     colors = colors,
                     triangles = triangles,
+                    submeshTriangles = perSubTrisLocal,
                     blendWeights = blendWeights,
                     blendIndices = blendIndices,
                     bonesPerVertex = BONES_PER_VERTEX,
@@ -3383,18 +3450,55 @@ namespace UnityRemix
                     logger.LogInfo($"[HashDebug-BakeMesh] '{skinned.name}' meshName='{meshName}' cleanedName='{cleanedName}' verts={vertCount} tris={triCount} baseMeshHash=0x{baseMeshHash:X16} combinedMeshHash=0x{combinedMeshHash:X16} matId={matId} bones=[{boneNames}]");
                 }
                 
-                persistentSkinnedData[skinnedId] = new SkinnedMeshData
+                // Build per-submesh triangle arrays from bakedMesh
+                int subMeshCount = bakedMesh.subMeshCount;
+                var perSubTrisBake = new int[subMeshCount][];
+                for (int i = 0; i < subMeshCount; i++)
                 {
-                    meshId = skinnedId,
-                    remixMeshHash = combinedMeshHash,
-                    materialId = matId,
-                    vertices = verts,
-                    normals = norms,
-                    uvs = uvCoords,
-                    colors = colors,
-                    triangles = tris,
-                    localToWorld = localToWorld
-                };
+                    if (bakedMesh.GetTopology(i) != MeshTopology.Triangles) { perSubTrisBake[i] = new int[0]; continue; }
+                    var st = bakedMesh.GetTriangles(i);
+                    perSubTrisBake[i] = (st != null && st.Length > 0) ? st : new int[0];
+                }
+                
+                // Fallback: if no valid per-sub triangles, use merged
+                bool anySubValid = false;
+                foreach (var st in perSubTrisBake) if (st != null && st.Length > 0) { anySubValid = true; break; }
+                if (!anySubValid)
+                {
+                    if (tris.Length == 0 || tris.Length % 3 != 0) return false;
+                    perSubTrisBake = new int[][] { tris };
+                }
+                
+                var smMaterialsBake = skinned.sharedMaterials;
+                
+                for (int sub = 0; sub < perSubTrisBake.Length; sub++)
+                {
+                    int[] subTris = perSubTrisBake[sub];
+                    if (subTris == null || subTris.Length == 0 || subTris.Length % 3 != 0) continue;
+                    
+                    int subMatId = matId;
+                    if (smMaterialsBake != null && sub < smMaterialsBake.Length && smMaterialsBake[sub] != null)
+                    {
+                        subMatId = smMaterialsBake[sub].GetInstanceID();
+                        materialManager.CaptureMaterialTextures(smMaterialsBake[sub], subMatId);
+                    }
+                    
+                    int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
+                    ulong subMeshHash = combinedMeshHash ^ ((ulong)(uint)(sub + 1) * 2654435761UL);
+                    
+                    persistentSkinnedData[subKey] = new SkinnedMeshData
+                    {
+                        meshId = subKey,
+                        remixMeshHash = (sub == 0) ? combinedMeshHash : subMeshHash,
+                        materialId = subMatId,
+                        vertices = verts,
+                        normals = norms,
+                        uvs = uvCoords,
+                        colors = colors,
+                        triangles = subTris,
+                        localToWorld = localToWorld
+                    };
+                }
 
                 // Complete topology from baked mesh if triangles were unavailable (non-readable mesh)
                 if (cachedTopology.TryGetValue(sharedMeshId2, out var pendingTopo) && !pendingTopo.valid)
@@ -3472,6 +3576,7 @@ namespace UnityRemix
                 matId = bestMaterial.GetInstanceID();
                 
                 // Check for MaterialPropertyBlock overrides (used by games for dynamic per-renderer colors/emission)
+                Color? mpbColor = null;
                 Color? mpbEmissiveColor = null;
                 float? mpbEmissiveIntensity = null;
                 try
@@ -3480,14 +3585,37 @@ namespace UnityRemix
                     skinned.GetPropertyBlock(mpb);
                     if (!mpb.isEmpty)
                     {
+                        // Capture albedo/diffuse color overrides (ATLYSS character skin/hair/eye colors)
+                        string[] colorProps = { "_Color", "_BaseColor", "_TintColor", "_Tint", "_Color1", "_Color2" };
+                        foreach (var cp in colorProps)
+                        {
+                            if (bestMaterial.HasProperty(cp))
+                            {
+                                var c = mpb.GetColor(cp);
+                                // Non-white means an intentional override
+                                if (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f)
+                                {
+                                    mpbColor = c;
+                                    // Generate unique material ID for this renderer's color override
+                                    Color32 c32 = c;
+                                    int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
+                                    matId = HashCombine(bestMaterial.GetInstanceID(), HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                    break;
+                                }
+                            }
+                        }
+
                         if (bestMaterial.HasProperty("_EmissiveColor"))
                         {
                             var c = mpb.GetColor("_EmissiveColor");
                             if (c.r != 0 || c.g != 0 || c.b != 0)
                             {
                                 mpbEmissiveColor = c;
-                                // Generate unique material ID for this renderer's override
-                                matId = HashCombine(bestMaterial.GetInstanceID(), HashUtils.GetHierarchyHashInt(skinned.transform));
+                                if (matId == bestMaterial.GetInstanceID())
+                                {
+                                    // Only update matId if albedo wasn't already overriding it
+                                    matId = HashCombine(bestMaterial.GetInstanceID(), HashUtils.GetHierarchyHashInt(skinned.transform));
+                                }
                             }
                         }
                         if (bestMaterial.HasProperty("_EmissiveIntensity"))
@@ -3499,7 +3627,7 @@ namespace UnityRemix
                 }
                 catch { }
                 
-                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity);
+                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, null, mpbColor);
                 
                 if (doLog)
                 {
@@ -3507,7 +3635,12 @@ namespace UnityRemix
                     if (!loggedSkinnedMaterials.Contains(logKey))
                     {
                         loggedSkinnedMaterials.Add(logKey);
-                        if (mpbEmissiveColor.HasValue)
+                        if (mpbColor.HasValue)
+                        {
+                            var c = mpbColor.Value;
+                            logger.LogInfo($"  Skinned mesh '{skinned.name}' using material '{bestMaterial.name}' (ID: {matId}) [MPB _Color=({c.r:F3},{c.g:F3},{c.b:F3},{c.a:F3})]");
+                        }
+                        else if (mpbEmissiveColor.HasValue)
                         {
                             var c = mpbEmissiveColor.Value;
                             logger.LogInfo($"  Skinned mesh '{skinned.name}' using material '{bestMaterial.name}' (ID: {matId}) [MPB _EmissiveColor=({c.r:F3},{c.g:F3},{c.b:F3})");
