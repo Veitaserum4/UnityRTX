@@ -294,37 +294,6 @@ namespace UnityRemix
                 }
             }
 
-            // Pass 2: Check for stylized Hue/Saturation/Brightness/Contrast shaders (ATLYSS character creator, armor dye, fur)
-            try
-            {
-                if (material.HasProperty("_Hue") || material.HasProperty("_Saturation") || material.HasProperty("_Brightness"))
-                {
-                    float hue = material.HasProperty("_Hue") ? material.GetFloat("_Hue") : 0f;
-                    float sat = material.HasProperty("_Saturation") ? material.GetFloat("_Saturation") : 1f;
-                    float bright = material.HasProperty("_Brightness") ? material.GetFloat("_Brightness") : 0f;
-
-                    // If non-default values are detected (hue shifted, desaturated, saturated, or brightness adjusted)
-                    if (Mathf.Abs(hue) > 0.5f || Mathf.Abs(sat - 1f) > 0.05f || Mathf.Abs(bright) > 0.05f)
-                    {
-                        // Map hue (-180..180 or 0..360) to 0..1
-                        float hNorm = (hue / 360f) % 1f;
-                        if (hNorm < 0f) hNorm += 1f;
-                        float sNorm = Mathf.Clamp01(sat);
-                        float vNorm = Mathf.Clamp01(1f + bright);
-
-                        Color hsvColor = Color.HSVToRGB(hNorm, sNorm, vNorm);
-                        if (material.HasProperty("_ColorTint"))
-                        {
-                            Color ct = material.GetColor("_ColorTint");
-                            if (ct.a > 0f)
-                                hsvColor = new Color(hsvColor.r * ct.r, hsvColor.g * ct.g, hsvColor.b * ct.b, 1f);
-                        }
-                        if (IsSaturatedColor(hsvColor) || hsvColor.r < 0.95f || hsvColor.g < 0.95f || hsvColor.b < 0.95f)
-                            return hsvColor;
-                    }
-                }
-            }
-            catch { }
 
             // Pass 3: fallback to first non-black candidate property
             for (int i = 0; i < candidates.Length; i++)
@@ -339,6 +308,63 @@ namespace UnityRemix
             }
 
             return Color.white;
+        }
+
+        /// <summary>
+        /// Apply Hue, Saturation, Brightness, Contrast (HSBC) adjustments to a color.
+        /// Standard HSBC color transformation using Rodrigues rotation formula for hue.
+        /// </summary>
+        private static Color ApplyHsbcToColor(Color col, Vector4 hsbc)
+        {
+            float r = col.r;
+            float g = col.g;
+            float b = col.b;
+
+            float h = hsbc.x;
+            float br = hsbc.y;
+            float c = hsbc.z;
+            float s = hsbc.w;
+
+            if (Mathf.Abs(h) > 0.001f)
+            {
+                float angleDeg = Mathf.Abs(h) <= 1.0f ? h * 360f : h;
+                float angleRad = angleDeg * Mathf.Deg2Rad;
+                float cosA = Mathf.Cos(angleRad);
+                float sinA = Mathf.Sin(angleRad);
+                const float k = 0.577350269f;
+                float dotKV = (r + g + b) * k;
+                float omc = 1.0f - cosA;
+                float nr = r * cosA + k * (b - g) * sinA + k * dotKV * omc;
+                float ng = g * cosA + k * (r - b) * sinA + k * dotKV * omc;
+                float nb = b * cosA + k * (g - r) * sinA + k * dotKV * omc;
+                r = nr;
+                g = ng;
+                b = nb;
+            }
+
+            if (Mathf.Abs(c - 1f) > 0.001f)
+            {
+                r = (r - 0.5f) * c + 0.5f;
+                g = (g - 0.5f) * c + 0.5f;
+                b = (b - 0.5f) * c + 0.5f;
+            }
+
+            if (Mathf.Abs(br) > 0.001f)
+            {
+                r += br;
+                g += br;
+                b += br;
+            }
+
+            if (Mathf.Abs(s - 1f) > 0.001f)
+            {
+                float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+                r = lum + (r - lum) * s;
+                g = lum + (g - lum) * s;
+                b = lum + (b - lum) * s;
+            }
+
+            return new Color(Mathf.Clamp01(r), Mathf.Clamp01(g), Mathf.Clamp01(b), col.a);
         }
 
         /// <summary>
@@ -465,6 +491,41 @@ namespace UnityRemix
                 }
             }
 
+            // Check for HSV / Brightness / Contrast adjustments (e.g. Unlit/ColorAdjust, stylized character customization)
+            Vector4? hsbc = null;
+            try
+            {
+                float hue = 0f;
+                float brightness = 0f;
+                float contrast = 1f;
+                float saturation = 1f;
+                bool hasHsbcProp = false;
+
+                if (material.HasProperty("_Hue")) { hue = material.GetFloat("_Hue"); hasHsbcProp = true; }
+                else if (material.HasProperty("_HueShift")) { hue = material.GetFloat("_HueShift"); hasHsbcProp = true; }
+                else if (material.HasProperty("_HueAdjust")) { hue = material.GetFloat("_HueAdjust"); hasHsbcProp = true; }
+
+                if (material.HasProperty("_Brightness")) { brightness = material.GetFloat("_Brightness"); hasHsbcProp = true; }
+                if (material.HasProperty("_Contrast")) { contrast = material.GetFloat("_Contrast"); hasHsbcProp = true; }
+                if (material.HasProperty("_Saturation")) { saturation = material.GetFloat("_Saturation"); hasHsbcProp = true; }
+
+                if (material.HasProperty("_HSBC"))
+                {
+                    Vector4 v = material.GetVector("_HSBC");
+                    hue = v.x;
+                    saturation = v.y;
+                    brightness = v.z;
+                    contrast = v.w;
+                    hasHsbcProp = true;
+                }
+
+                if (hasHsbcProp && (Mathf.Abs(hue) > 0.001f || Mathf.Abs(brightness) > 0.001f || Mathf.Abs(contrast - 1f) > 0.001f || Mathf.Abs(saturation - 1f) > 0.001f))
+                {
+                    hsbc = new Vector4(hue, brightness, contrast, saturation);
+                }
+            }
+            catch { }
+
             // Get albedo color if not overridden by MPB (smart priority aligned with matched texture)
             if (!mpbColor.HasValue)
             {
@@ -576,11 +637,12 @@ namespace UnityRemix
 
                 Color effectiveTint = mpbColor ?? matData.albedoColor;
                 bool isTinted = effectiveTint.r < 0.98f || effectiveTint.g < 0.98f || effectiveTint.b < 0.98f;
-                if (isTinted || remap.HasValue)
+                if (isTinted || remap.HasValue || hsbc.HasValue)
                 {
-                    var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap);
+                    var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap, hsbc);
                     matData.albedoHandle = tintedHandle;
                     matData.albedoTextureHash = tintedHash;
+                    matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
                 }
                 else
                 {
@@ -653,8 +715,12 @@ namespace UnityRemix
 
             // Fallback: no albedo texture but material has a color — create a 1x1 solid-color texture
             // so Remix renders the surface with the correct color instead of the debug checkerboard.
-            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_Tint") || material.HasProperty("_TintColor") || material.HasProperty("_Color1")))
+            if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_Tint") || material.HasProperty("_TintColor") || material.HasProperty("_Color1") || hsbc.HasValue))
             {
+                if (hsbc.HasValue)
+                {
+                    matData.albedoColor = ApplyHsbcToColor(matData.albedoColor, hsbc.Value);
+                }
                 matData.albedoHandle = GetOrCreateSolidColorTexture(matData.albedoColor);
                 if (matData.albedoHandle != IntPtr.Zero)
                 {
@@ -1331,13 +1397,13 @@ namespace UnityRemix
         /// so we bake the color multiplication (and greyscale remapping) into the texture pixels.
         /// Returns (handle, hash) for the uploaded texture.
         /// </summary>
-        private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap)
+        private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap, Vector4? hsbc = null)
         {
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
 
-            // If color is white and no remap, fast path to standard upload
-            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue)
+            // If color is white, no remap, and no hsbc, fast path to standard upload
+            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue && !hsbc.HasValue)
             {
                 var handle = UploadUnityTexture(tex);
                 int texId = tex.GetInstanceID();
@@ -1353,7 +1419,16 @@ namespace UnityRemix
 
             int tintKey = ((int)(tintR * 255f) << 16) | ((int)(tintG * 255f) << 8) | (int)(tintB * 255f);
             int remapKey = remap.HasValue ? (((int)(remap.Value.x * 100f) << 8) | (int)(remap.Value.y * 100f)) : 0;
-            long cacheKey = unchecked((long)0x4100000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)remapKey << 20) ^ (uint)tintKey);
+            int hsbcKey = 0;
+            if (hsbc.HasValue)
+            {
+                int hInt = Mathf.RoundToInt(hsbc.Value.x * 10f) & 0xFFFF;
+                int bInt = (Mathf.RoundToInt(hsbc.Value.y * 100f) + 128) & 0xFF;
+                int cInt = Mathf.RoundToInt(hsbc.Value.z * 100f) & 0xFF;
+                int sInt = Mathf.RoundToInt(hsbc.Value.w * 100f) & 0xFF;
+                hsbcKey = (hInt << 16) | (bInt << 8) | (cInt ^ sInt);
+            }
+            long cacheKey = unchecked((long)0x4100000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)remapKey << 20) ^ (uint)tintKey ^ ((long)hsbcKey << 32));
 
             lock (pendingTextureLock)
             {
@@ -1389,37 +1464,91 @@ namespace UnityRemix
                 byte tR = (byte)(tintR * 255f);
                 byte tG = (byte)(tintG * 255f);
                 byte tB = (byte)(tintB * 255f);
+                bool hasTint = (tintR < 0.98f || tintG < 0.98f || tintB < 0.98f);
+                bool hasRemap = remap.HasValue;
+                bool hasHsbc = hsbc.HasValue;
+
+                float hsbcH = hasHsbc ? hsbc.Value.x : 0f;
+                float hsbcBr = hasHsbc ? hsbc.Value.y : 0f;
+                float hsbcC = hasHsbc ? hsbc.Value.z : 1f;
+                float hsbcS = hasHsbc ? hsbc.Value.w : 1f;
+
+                bool doHue = hasHsbc && Mathf.Abs(hsbcH) > 0.001f;
+                float cosA = 1f, sinA = 0f, omc = 0f;
+                if (doHue)
+                {
+                    float angleDeg = Mathf.Abs(hsbcH) <= 1.0f ? hsbcH * 360f : hsbcH;
+                    float angleRad = angleDeg * Mathf.Deg2Rad;
+                    cosA = Mathf.Cos(angleRad);
+                    sinA = Mathf.Sin(angleRad);
+                    omc = 1.0f - cosA;
+                }
+                const float k = 0.577350269f;
+                bool doContrast = hasHsbc && Mathf.Abs(hsbcC - 1f) > 0.001f;
+                bool doBrightness = hasHsbc && Mathf.Abs(hsbcBr) > 0.001f;
+                bool doSaturation = hasHsbc && Mathf.Abs(hsbcS - 1f) > 0.001f;
+
+                float rMin = remap.HasValue ? remap.Value.x : 0f;
+                float rMax = remap.HasValue ? remap.Value.y : 1f;
 
                 byte[] pixelData = new byte[pixels.Length * 4];
-                if (remap.HasValue)
+                for (int i = 0; i < pixels.Length; i++)
                 {
-                    float rMin = remap.Value.x;
-                    float rMax = remap.Value.y;
-                    for (int i = 0; i < pixels.Length; i++)
-                    {
-                        float normR = pixels[i].r / 255f;
-                        float normG = pixels[i].g / 255f;
-                        float normB = pixels[i].b / 255f;
+                    float r = pixels[i].r / 255f;
+                    float g = pixels[i].g / 255f;
+                    float b = pixels[i].b / 255f;
 
-                        byte remappedR = (byte)(Mathf.Clamp01(Mathf.Lerp(rMin, rMax, normR)) * 255f);
-                        byte remappedG = (byte)(Mathf.Clamp01(Mathf.Lerp(rMin, rMax, normG)) * 255f);
-                        byte remappedB = (byte)(Mathf.Clamp01(Mathf.Lerp(rMin, rMax, normB)) * 255f);
-
-                        pixelData[i * 4 + 0] = (byte)((remappedR * tR) / 255);
-                        pixelData[i * 4 + 1] = (byte)((remappedG * tG) / 255);
-                        pixelData[i * 4 + 2] = (byte)((remappedB * tB) / 255);
-                        pixelData[i * 4 + 3] = pixels[i].a;
-                    }
-                }
-                else
-                {
-                    for (int i = 0; i < pixels.Length; i++)
+                    if (hasRemap)
                     {
-                        pixelData[i * 4 + 0] = (byte)((pixels[i].r * tR) / 255);
-                        pixelData[i * 4 + 1] = (byte)((pixels[i].g * tG) / 255);
-                        pixelData[i * 4 + 2] = (byte)((pixels[i].b * tB) / 255);
-                        pixelData[i * 4 + 3] = pixels[i].a;
+                        r = Mathf.Clamp01(Mathf.Lerp(rMin, rMax, r));
+                        g = Mathf.Clamp01(Mathf.Lerp(rMin, rMax, g));
+                        b = Mathf.Clamp01(Mathf.Lerp(rMin, rMax, b));
                     }
+
+                    if (doHue)
+                    {
+                        float dotKV = (r + g + b) * k;
+                        float nr = r * cosA + k * (b - g) * sinA + k * dotKV * omc;
+                        float ng = g * cosA + k * (r - b) * sinA + k * dotKV * omc;
+                        float nb = b * cosA + k * (g - r) * sinA + k * dotKV * omc;
+                        r = nr;
+                        g = ng;
+                        b = nb;
+                    }
+
+                    if (doContrast)
+                    {
+                        r = (r - 0.5f) * hsbcC + 0.5f;
+                        g = (g - 0.5f) * hsbcC + 0.5f;
+                        b = (b - 0.5f) * hsbcC + 0.5f;
+                    }
+
+                    if (doBrightness)
+                    {
+                        r += hsbcBr;
+                        g += hsbcBr;
+                        b += hsbcBr;
+                    }
+
+                    if (doSaturation)
+                    {
+                        float lum = 0.299f * r + 0.587f * g + 0.114f * b;
+                        r = lum + (r - lum) * hsbcS;
+                        g = lum + (g - lum) * hsbcS;
+                        b = lum + (g - lum) * hsbcS;
+                    }
+
+                    if (hasTint)
+                    {
+                        r *= tintR;
+                        g *= tintG;
+                        b *= tintB;
+                    }
+
+                    pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r) * 255f);
+                    pixelData[i * 4 + 1] = (byte)(Mathf.Clamp01(g) * 255f);
+                    pixelData[i * 4 + 2] = (byte)(Mathf.Clamp01(b) * 255f);
+                    pixelData[i * 4 + 3] = pixels[i].a;
                 }
 
                 // Check alpha channel for cutout transparency
@@ -1433,7 +1562,7 @@ namespace UnityRemix
                 if (hash == 0) hash = 1;
 
                 if (verboseTextureLogging.Value)
-                    logger.LogInfo($"Computed tinted albedo hash for '{tex.name}' tint=({tintR:F2},{tintG:F2},{tintB:F2}) remap={(remap.HasValue ? remap.Value.ToString() : "none")}: 0x{hash:X16}");
+                    logger.LogInfo($"Computed tinted albedo hash for '{tex.name}' tint=({tintR:F2},{tintG:F2},{tintB:F2}) remap={(remap.HasValue ? remap.Value.ToString() : "none")} hsbc={(hsbc.HasValue ? hsbc.Value.ToString() : "none")}: 0x{hash:X16}");
 
                 lock (pendingTextureLock)
                 {

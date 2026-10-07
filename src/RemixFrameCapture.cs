@@ -1246,6 +1246,37 @@ namespace UnityRemix
                                 {
                                     matId = HashCombine(matId, mpbHash);
                                 }
+                                try
+                                {
+                                    var mMat = materials[m];
+                                    if (mMat.HasProperty("_Hue") || mMat.HasProperty("_HueShift") || mMat.HasProperty("_HueAdjust") ||
+                                        mMat.HasProperty("_Brightness") || mMat.HasProperty("_Contrast") || mMat.HasProperty("_Saturation") ||
+                                        mMat.HasProperty("_HSBC"))
+                                    {
+                                        float h = mMat.HasProperty("_Hue") ? mMat.GetFloat("_Hue") :
+                                                  (mMat.HasProperty("_HueShift") ? mMat.GetFloat("_HueShift") :
+                                                  (mMat.HasProperty("_HueAdjust") ? mMat.GetFloat("_HueAdjust") : 0f));
+                                        float b = mMat.HasProperty("_Brightness") ? mMat.GetFloat("_Brightness") : 0f;
+                                        float c = mMat.HasProperty("_Contrast") ? mMat.GetFloat("_Contrast") : 1f;
+                                        float s = mMat.HasProperty("_Saturation") ? mMat.GetFloat("_Saturation") : 1f;
+                                        if (mMat.HasProperty("_HSBC"))
+                                        {
+                                            Vector4 v = mMat.GetVector("_HSBC");
+                                            h = v.x; s = v.y; b = v.z; c = v.w;
+                                        }
+
+                                        if (Mathf.Abs(h) > 0.001f || Mathf.Abs(b) > 0.001f || Mathf.Abs(c - 1f) > 0.001f || Mathf.Abs(s - 1f) > 0.001f)
+                                        {
+                                            int hInt = Mathf.RoundToInt(h * 1000f);
+                                            int bInt = Mathf.RoundToInt(b * 1000f);
+                                            int cInt = Mathf.RoundToInt(c * 1000f);
+                                            int sInt = Mathf.RoundToInt(s * 1000f);
+                                            int hsbcHash = HashCombine(HashCombine(hInt, bInt), HashCombine(cInt, sInt));
+                                            matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(renderer.transform), hsbcHash));
+                                        }
+                                    }
+                                }
+                                catch { }
                                 submeshMaterialIds.Add(matId);
                                 materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor);
                             }
@@ -3570,7 +3601,7 @@ namespace UnityRemix
                 }
                 catch { }
 
-                // Check for per-material HSV or ColorTint customizations (ATLYSS character customization & dyes)
+                // Check for per-material HSV or ColorTint customizations
                 if (!mpbColor.HasValue)
                 {
                     try
@@ -3586,6 +3617,32 @@ namespace UnityRemix
                             }
                         }
 
+                        if (bestMaterial.HasProperty("_Hue") || bestMaterial.HasProperty("_HueShift") || bestMaterial.HasProperty("_HueAdjust") ||
+                            bestMaterial.HasProperty("_Brightness") || bestMaterial.HasProperty("_Contrast") || bestMaterial.HasProperty("_Saturation") ||
+                            bestMaterial.HasProperty("_HSBC"))
+                        {
+                            float h = bestMaterial.HasProperty("_Hue") ? bestMaterial.GetFloat("_Hue") :
+                                      (bestMaterial.HasProperty("_HueShift") ? bestMaterial.GetFloat("_HueShift") :
+                                      (bestMaterial.HasProperty("_HueAdjust") ? bestMaterial.GetFloat("_HueAdjust") : 0f));
+                            float b = bestMaterial.HasProperty("_Brightness") ? bestMaterial.GetFloat("_Brightness") : 0f;
+                            float c = bestMaterial.HasProperty("_Contrast") ? bestMaterial.GetFloat("_Contrast") : 1f;
+                            float s = bestMaterial.HasProperty("_Saturation") ? bestMaterial.GetFloat("_Saturation") : 1f;
+                            if (bestMaterial.HasProperty("_HSBC"))
+                            {
+                                Vector4 v = bestMaterial.GetVector("_HSBC");
+                                h = v.x; s = v.y; b = v.z; c = v.w;
+                            }
+
+                            if (Mathf.Abs(h) > 0.001f || Mathf.Abs(b) > 0.001f || Mathf.Abs(c - 1f) > 0.001f || Mathf.Abs(s - 1f) > 0.001f)
+                            {
+                                int hInt = Mathf.RoundToInt(h * 1000f);
+                                int bInt = Mathf.RoundToInt(b * 1000f);
+                                int cInt = Mathf.RoundToInt(c * 1000f);
+                                int sInt = Mathf.RoundToInt(s * 1000f);
+                                int hsbcHash = HashCombine(HashCombine(hInt, bInt), HashCombine(cInt, sInt));
+                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), hsbcHash));
+                            }
+                        }
                     }
                     catch { }
                 }
