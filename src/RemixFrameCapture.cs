@@ -3531,19 +3531,6 @@ namespace UnityRemix
                         if (tex == null) tex = mpb.GetTexture("_BaseMap");
                         if (tex == null) tex = mpb.GetTexture("_Diffuse");
                         if (tex == null) tex = mpb.GetTexture("_Texture");
-                        // ATLYSS custom clothing/body part textures
-                        if (tex == null) tex = mpb.GetTexture("_textureArms");
-                        if (tex == null) tex = mpb.GetTexture("_robeSkirtTexture");
-                        if (tex == null) tex = mpb.GetTexture("_chestRenderTexture");
-                        if (tex == null) tex = mpb.GetTexture("_legTexture");
-                        if (tex == null) tex = mpb.GetTexture("_neckCollarTexture");
-                        if (tex == null) tex = mpb.GetTexture("_hipMeshTexture");
-                        if (tex == null) tex = mpb.GetTexture("_tailTexture");
-                        if (tex == null) tex = mpb.GetTexture("_earTexture");
-                        if (tex == null) tex = mpb.GetTexture("_headTexture");
-                        if (tex == null) tex = mpb.GetTexture("_textureFeet");
-                        if (tex == null) tex = mpb.GetTexture("_textureUpperLegOnly");
-                        
                         if (tex != null && tex is Texture2D t2d)
                         {
                             mpbMainTex = t2d;
@@ -3556,7 +3543,8 @@ namespace UnityRemix
                         {
                             var c = mpb.GetColor(cp);
                             // GetColor returns Color.clear (0,0,0,0) if the property is missing from the MPB.
-                            if (c.a > 0.0f)
+                            // Ignore missing properties, and ignore pure white (no tint).
+                            if (c.a > 0.0f && (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f))
                             {
                                 mpbColor = c;
                                 // Generate unique material ID for this renderer's color override
