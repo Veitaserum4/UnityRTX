@@ -1824,11 +1824,12 @@ namespace UnityRemix
                 int skinnedId = HashUtils.GetHierarchyHashInt(skinned.transform);
                 validSkinnedIds.Add(skinnedId);
                 // Also register per-submesh sub-keys so they survive the stale-pruning pass
+                // Formula: sub0 = skinnedId, sub>0 = skinnedId ^ (sub * KNUTH_PRIME)
                 var smMatsEarly = skinned.sharedMaterials;
                 if (smMatsEarly != null)
                 {
                     for (int sub = 1; sub < smMatsEarly.Length; sub++)
-                        validSkinnedIds.Add((int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u)));
+                        validSkinnedIds.Add((int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u)));
                 }
                 
                 // Compute unscaled transform (sign-only scale preserves winding)
@@ -1918,8 +1919,8 @@ namespace UnityRemix
                             }
                             
                             // Unique key per submesh: xor with Knuth multiplied submesh index
-                            int subSkinnedId = (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
-                            ulong subMeshHash = combinedMeshHash ^ ((ulong)(uint)(sub + 1) * 2654435761UL);
+                            int subSkinnedId = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
+                            ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
                             
                             persistentSkinnedData[subSkinnedId] = new SkinnedMeshData
                             {
@@ -1946,7 +1947,7 @@ namespace UnityRemix
                 int subCountForUpdate = (smMatsForUpdate != null) ? smMatsForUpdate.Length : 1;
                 for (int sub = 0; sub < subCountForUpdate; sub++)
                 {
-                    int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
+                    int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                     if (persistentSkinnedData.TryGetValue(subKey, out var existing))
                     {
                         existing.localToWorld = unscaledMatrix;
@@ -1980,7 +1981,7 @@ namespace UnityRemix
                         int subCntBake = (smMatsForBake != null) ? smMatsForBake.Length : 1;
                         for (int sub = 0; sub < subCntBake; sub++)
                         {
-                            int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
+                            int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                             validSkinnedIds.Add(subKey);
                         }
                     }
@@ -3483,8 +3484,8 @@ namespace UnityRemix
                         materialManager.CaptureMaterialTextures(smMaterialsBake[sub], subMatId);
                     }
                     
-                    int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)(sub + 1) * 0x9E3779B9u));
-                    ulong subMeshHash = combinedMeshHash ^ ((ulong)(uint)(sub + 1) * 2654435761UL);
+                    int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
+                    ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
                     
                     persistentSkinnedData[subKey] = new SkinnedMeshData
                     {
