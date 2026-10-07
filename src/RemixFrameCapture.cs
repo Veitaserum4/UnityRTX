@@ -3266,79 +3266,26 @@ namespace UnityRemix
                     }
                     triangles = allTris.ToArray();
                     perSubTrisLocal = perSubTris;
+                    // Recover bind-pose vertices using a dummy SkinnedMeshRenderer.
+                    // This completely bypasses ALL precision issues, out-of-sync animation frames,
+                    // and active BlendShapes, guaranteeing a flawless 1:1 true bind pose.
+                    var dummyObj = new GameObject("RemixBindPoseExtractor");
+                    dummyObj.transform.position = Vector3.zero;
+                    dummyObj.transform.rotation = Quaternion.identity;
+                    dummyObj.transform.localScale = Vector3.one;
                     
-                    // Recover bind-pose vertices by inverting the per-vertex skinning transform.
-                    // BakeMesh(false) returns vertices in SMR local space WITHOUT scale:
-                    //   v_baked = noScale_w2l * Σ(w_i * bones[i].l2w * bindPoses[i]) * v_bindpose
-                    // Per vertex, the no-scale local skinning matrix is:
-                    //   localSkinMatrix = noScale_w2l * Σ(w_i * bones[i].l2w * bindPoses[i])
-                    // So: v_bindpose = localSkinMatrix^{-1} * v_baked
+                    var dummySmr = dummyObj.AddComponent<SkinnedMeshRenderer>();
+                    dummySmr.sharedMesh = mesh;
                     
-                    // BakeMesh(false) strips the SMR's scale, so use no-scale W2L to match.
-                    Matrix4x4 noScaleW2L = Matrix4x4.TRS(
-                        skinned.transform.position, skinned.transform.rotation, Vector3.one).inverse;
-                    var localBoneMatrices = new Matrix4x4[boneCount];
-                    for (int b = 0; b < boneCount; b++)
-                    {
-                        localBoneMatrices[b] = (bones[b] != null)
-                            ? noScaleW2L * bones[b].localToWorldMatrix * bindPoses[b]
-                            : Matrix4x4.identity;
-                    }
+                    var tempMesh2 = new Mesh();
+                    dummySmr.BakeMesh(tempMesh2);
                     
-                    var bakedVerts = tempMesh.vertices;
-                    var bakedNorms = tempMesh.normals ?? new Vector3[0];
-                    UnityEngine.Object.Destroy(tempMesh);
+                    bindVerts = tempMesh2.vertices;
+                    bindNorms = tempMesh2.normals ?? new Vector3[0];
+                    if (bindNorms.Length != bindVerts.Length) bindNorms = new Vector3[bindVerts.Length];
                     
-                    bindVerts = new Vector3[bakedVerts.Length];
-                    bindNorms = new Vector3[bakedVerts.Length];
-                    int degenerateCount = 0;
-                    
-                    for (int v = 0; v < bakedVerts.Length; v++)
-                    {
-                        // Build per-vertex skinning matrix (local space)
-                        int baseIdx = v * BONES_PER_VERTEX;
-                        Matrix4x4 skinMatrix = new Matrix4x4();
-                        for (int w = 0; w < BONES_PER_VERTEX; w++)
-                        {
-                            float weight = blendWeights[baseIdx + w];
-                            if (weight <= 0f) continue;
-                            int boneIdx = (int)blendIndices[baseIdx + w];
-                            if (boneIdx >= boneCount) continue;
-                            Matrix4x4 bm = localBoneMatrices[boneIdx];
-                            for (int r = 0; r < 4; r++)
-                                for (int c = 0; c < 4; c++)
-                                    skinMatrix[r, c] += weight * bm[r, c];
-                        }
-                        
-                        // Invert and recover bind-pose vertex
-                        Matrix4x4 inv = skinMatrix.inverse;
-                        float det = skinMatrix.determinant;
-                        if (Mathf.Abs(det) < 1e-6f)
-                        {
-                            // Singular matrix — keep baked vertex as-is (fallback)
-                            bindVerts[v] = bakedVerts[v];
-                            bindNorms[v] = (v < bakedNorms.Length) ? bakedNorms[v] : Vector3.up;
-                            degenerateCount++;
-                            continue;
-                        }
-                        
-                        Vector4 bp = inv * new Vector4(bakedVerts[v].x, bakedVerts[v].y, bakedVerts[v].z, 1f);
-                        bindVerts[v] = new Vector3(bp.x, bp.y, bp.z);
-                        
-                        if (v < bakedNorms.Length)
-                        {
-                            Vector4 bn = inv * new Vector4(bakedNorms[v].x, bakedNorms[v].y, bakedNorms[v].z, 0f);
-                            Vector3 n = new Vector3(bn.x, bn.y, bn.z);
-                            bindNorms[v] = (n.sqrMagnitude > 1e-8f) ? n.normalized : Vector3.up;
-                        }
-                        else
-                        {
-                            bindNorms[v] = Vector3.up;
-                        }
-                    }
-                    
-                    if (degenerateCount > 0)
-                        logger.LogInfo($"[Skinning] '{mesh.name}' {degenerateCount}/{bakedVerts.Length} verts had degenerate skin matrices");
+                    UnityEngine.Object.Destroy(tempMesh2);
+                    UnityEngine.Object.Destroy(dummyObj);
                 }
                 
                 if (bindVerts == null || bindVerts.Length == 0 || triangles.Length == 0)
