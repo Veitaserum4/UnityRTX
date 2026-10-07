@@ -3593,8 +3593,9 @@ namespace UnityRemix
                             if (bestMaterial.HasProperty(cp))
                             {
                                 var c = mpb.GetColor(cp);
-                                // Non-white means an intentional override
-                                if (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f)
+                                // GetColor returns Color.clear (0,0,0,0) if the property is missing from the MPB.
+                                // Ignore missing properties, and ignore pure white (no tint).
+                                if (c.a > 0.0f && (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f))
                                 {
                                     mpbColor = c;
                                     // Generate unique material ID for this renderer's color override
