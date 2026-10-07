@@ -3275,6 +3275,12 @@ namespace UnityRemix
                     var dummySmr = dummyObj.AddComponent<SkinnedMeshRenderer>();
                     dummySmr.sharedMesh = mesh;
                     
+                    // Copy BlendShapes from original renderer to dummy so that hidden/shrunk clothing stays hidden
+                    for (int i = 0; i < mesh.blendShapeCount; i++)
+                    {
+                        dummySmr.SetBlendShapeWeight(i, skinned.GetBlendShapeWeight(i));
+                    }
+                    
                     // Create dummy bones that exactly match the bind pose inverse.
                     // This forces the skinning matrix to Identity, yielding flawless v_bind.
                     var dummyBones = new Transform[boneCount];
@@ -3567,12 +3573,24 @@ namespace UnityRemix
                 Color? mpbColor = null;
                 Color? mpbEmissiveColor = null;
                 float? mpbEmissiveIntensity = null;
+                Texture2D mpbMainTex = null;
                 try
                 {
                     var mpb = new MaterialPropertyBlock();
                     skinned.GetPropertyBlock(mpb);
                     if (!mpb.isEmpty)
                     {
+                        // Check for main texture override
+                        Texture tex = mpb.GetTexture("_MainTex");
+                        if (tex == null) tex = mpb.GetTexture("_BaseMap");
+                        if (tex == null) tex = mpb.GetTexture("_Diffuse");
+                        if (tex == null) tex = mpb.GetTexture("_Texture");
+                        if (tex != null && tex is Texture2D t2d)
+                        {
+                            mpbMainTex = t2d;
+                            matId = HashCombine(matId, tex.GetInstanceID());
+                        }
+
                         // Capture albedo/diffuse color overrides (ATLYSS character skin/hair/eye colors)
                         string[] colorProps = { "_Color", "_BaseColor", "_TintColor", "_Tint", "_Color1", "_Color2" };
                         foreach (var cp in colorProps)
@@ -3588,7 +3606,7 @@ namespace UnityRemix
                                     // Generate unique material ID for this renderer's color override
                                     Color32 c32 = c;
                                     int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
-                                    matId = HashCombine(bestMaterial.GetInstanceID(), HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                    matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
                                     break;
                                 }
                             }
@@ -3600,11 +3618,7 @@ namespace UnityRemix
                             if (c.r != 0 || c.g != 0 || c.b != 0)
                             {
                                 mpbEmissiveColor = c;
-                                if (matId == bestMaterial.GetInstanceID())
-                                {
-                                    // Only update matId if albedo wasn't already overriding it
-                                    matId = HashCombine(bestMaterial.GetInstanceID(), HashUtils.GetHierarchyHashInt(skinned.transform));
-                                }
+                                matId = HashCombine(matId, HashUtils.GetHierarchyHashInt(skinned.transform));
                             }
                         }
                         if (bestMaterial.HasProperty("_EmissiveIntensity"))
@@ -3616,7 +3630,7 @@ namespace UnityRemix
                 }
                 catch { }
                 
-                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, null, mpbColor);
+                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor);
                 
                 if (doLog)
                 {
