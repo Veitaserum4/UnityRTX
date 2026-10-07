@@ -3267,8 +3267,6 @@ namespace UnityRemix
                     triangles = allTris.ToArray();
                     perSubTrisLocal = perSubTris;
                     // Recover bind-pose vertices using a dummy SkinnedMeshRenderer.
-                    // This completely bypasses ALL precision issues, out-of-sync animation frames,
-                    // and active BlendShapes, guaranteeing a flawless 1:1 true bind pose.
                     var dummyObj = new GameObject("RemixBindPoseExtractor");
                     dummyObj.transform.position = Vector3.zero;
                     dummyObj.transform.rotation = Quaternion.identity;
@@ -3276,6 +3274,25 @@ namespace UnityRemix
                     
                     var dummySmr = dummyObj.AddComponent<SkinnedMeshRenderer>();
                     dummySmr.sharedMesh = mesh;
+                    
+                    // Create dummy bones that exactly match the bind pose inverse.
+                    // This forces the skinning matrix to Identity, yielding flawless v_bind.
+                    var dummyBones = new Transform[boneCount];
+                    for (int i = 0; i < boneCount; i++)
+                    {
+                        var b = new GameObject("DummyBone" + i);
+                        b.transform.parent = dummyObj.transform;
+                        Matrix4x4 inv = bindPoses[i].inverse;
+                        b.transform.localPosition = new Vector3(inv.m03, inv.m13, inv.m23);
+                        b.transform.localRotation = inv.rotation;
+                        b.transform.localScale = new Vector3(
+                            inv.GetColumn(0).magnitude,
+                            inv.GetColumn(1).magnitude,
+                            inv.GetColumn(2).magnitude
+                        );
+                        dummyBones[i] = b.transform;
+                    }
+                    dummySmr.bones = dummyBones;
                     
                     var tempMesh2 = new Mesh();
                     dummySmr.BakeMesh(tempMesh2);
@@ -3285,6 +3302,8 @@ namespace UnityRemix
                     if (bindNorms.Length != bindVerts.Length) bindNorms = new Vector3[bindVerts.Length];
                     
                     UnityEngine.Object.Destroy(tempMesh2);
+                    for (int i = 0; i < boneCount; i++)
+                        UnityEngine.Object.Destroy(dummyBones[i].gameObject);
                     UnityEngine.Object.Destroy(dummyObj);
                 }
                 
