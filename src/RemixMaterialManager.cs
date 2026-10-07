@@ -105,6 +105,7 @@ namespace UnityRemix
         private readonly Queue<PendingTextureUpload> pendingTextureUploads = new Queue<PendingTextureUpload>();
         private readonly HashSet<int> pendingTextureIds = new HashSet<int>();
         private readonly HashSet<long> pendingTintedKeys = new HashSet<long>();
+        private readonly Dictionary<long, ulong> pendingTintedHashes = new Dictionary<long, ulong>();
         private readonly object pendingTextureLock = new object();
         
         // Alpha handling modes detected from Unity materials
@@ -273,13 +274,13 @@ namespace UnityRemix
         {
             string[] candidates;
             if (matchedTexProp == "_Texture1" || matchedTexProp == "_TextureSample1")
-                candidates = new string[] { "_Color1", "_BaseColor", "_Tint", "_Color", "_TintColor" };
+                candidates = new string[] { "_Color1", "_BaseColor", "_Tint", "_Color", "_TintColor", "_ColorTint" };
             else if (matchedTexProp == "_Texture2" || matchedTexProp == "_TextureSample2")
-                candidates = new string[] { "_Color2", "_Color1", "_BaseColor", "_Tint", "_Color" };
+                candidates = new string[] { "_Color2", "_Color1", "_BaseColor", "_Tint", "_Color", "_ColorTint" };
             else if (matchedTexProp == "_Texture3" || matchedTexProp == "_TextureSample3")
-                candidates = new string[] { "_Color3", "_Color1", "_BaseColor", "_Tint", "_Color" };
+                candidates = new string[] { "_Color3", "_Color1", "_BaseColor", "_Tint", "_Color", "_ColorTint" };
             else
-                candidates = new string[] { "_Tint", "_BaseColor", "_Color", "_Color1", "_TintColor" };
+                candidates = new string[] { "_Tint", "_BaseColor", "_Color", "_Color1", "_TintColor", "_ColorTint", "_ColorTint2", "_ColorTint3" };
 
             // Pass 1: find first saturated / non-neutral color
             for (int i = 0; i < candidates.Length; i++)
@@ -293,7 +294,39 @@ namespace UnityRemix
                 }
             }
 
-            // Pass 2: fallback to first non-black candidate property
+            // Pass 2: Check for stylized Hue/Saturation/Brightness/Contrast shaders (ATLYSS character creator, armor dye, fur)
+            try
+            {
+                if (material.HasProperty("_Hue") || material.HasProperty("_Saturation") || material.HasProperty("_Brightness"))
+                {
+                    float hue = material.HasProperty("_Hue") ? material.GetFloat("_Hue") : 0f;
+                    float sat = material.HasProperty("_Saturation") ? material.GetFloat("_Saturation") : 1f;
+                    float bright = material.HasProperty("_Brightness") ? material.GetFloat("_Brightness") : 0f;
+
+                    // If non-default values are detected (hue shifted, desaturated, saturated, or brightness adjusted)
+                    if (Mathf.Abs(hue) > 0.5f || Mathf.Abs(sat - 1f) > 0.05f || Mathf.Abs(bright) > 0.05f)
+                    {
+                        // Map hue (-180..180 or 0..360) to 0..1
+                        float hNorm = (hue / 360f) % 1f;
+                        if (hNorm < 0f) hNorm += 1f;
+                        float sNorm = Mathf.Clamp01(sat);
+                        float vNorm = Mathf.Clamp01(1f + bright);
+
+                        Color hsvColor = Color.HSVToRGB(hNorm, sNorm, vNorm);
+                        if (material.HasProperty("_ColorTint"))
+                        {
+                            Color ct = material.GetColor("_ColorTint");
+                            if (ct.a > 0f)
+                                hsvColor = new Color(hsvColor.r * ct.r, hsvColor.g * ct.g, hsvColor.b * ct.b, 1f);
+                        }
+                        if (IsSaturatedColor(hsvColor) || hsvColor.r < 0.95f || hsvColor.g < 0.95f || hsvColor.b < 0.95f)
+                            return hsvColor;
+                    }
+                }
+            }
+            catch { }
+
+            // Pass 3: fallback to first non-black candidate property
             for (int i = 0; i < candidates.Length; i++)
             {
                 string p = candidates[i];
@@ -1218,8 +1251,8 @@ namespace UnityRemix
             {
                 if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
                     return cached;
-                if (pendingTintedKeys.Contains(cacheKey))
-                    return (IntPtr.Zero, 0); // Will be available after render thread processes it
+                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
+                    return (new IntPtr((long)pHash), pHash);
             }
             
             try
@@ -1280,6 +1313,7 @@ namespace UnityRemix
                         format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
                     });
                     pendingTintedKeys.Add(cacheKey);
+                    pendingTintedHashes[cacheKey] = hash;
                 }
                 
                 return (new IntPtr((long)hash), hash);
@@ -1325,8 +1359,8 @@ namespace UnityRemix
             {
                 if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
                     return cached;
-                if (pendingTintedKeys.Contains(cacheKey))
-                    return (IntPtr.Zero, 0);
+                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
+                    return (new IntPtr((long)pHash), pHash);
             }
 
             try
@@ -1415,6 +1449,7 @@ namespace UnityRemix
                         format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
                     });
                     pendingTintedKeys.Add(cacheKey);
+                    pendingTintedHashes[cacheKey] = hash;
                 }
 
                 return (new IntPtr((long)hash), hash);
@@ -1449,8 +1484,8 @@ namespace UnityRemix
             {
                 if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
                     return cached;
-                if (pendingTintedKeys.Contains(cacheKey))
-                    return (IntPtr.Zero, 0);
+                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
+                    return (new IntPtr((long)pHash), pHash);
             }
             
             try
@@ -1509,6 +1544,7 @@ namespace UnityRemix
                         format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
                     });
                     pendingTintedKeys.Add(cacheKey);
+                    pendingTintedHashes[cacheKey] = hash;
                 }
                 
                 return (new IntPtr((long)hash), hash);
@@ -2056,6 +2092,7 @@ namespace UnityRemix
                             {
                                 tintedTextureCache[upload.tintedCacheKey] = (handle, upload.hash);
                                 pendingTintedKeys.Remove(upload.tintedCacheKey);
+                                pendingTintedHashes.Remove(upload.tintedCacheKey);
                             }
                         }
                     }
@@ -2065,7 +2102,11 @@ namespace UnityRemix
                         lock (pendingTextureLock)
                         {
                             if (upload.texId >= 0) pendingTextureIds.Remove(upload.texId);
-                            if (upload.tintedCacheKey != 0) pendingTintedKeys.Remove(upload.tintedCacheKey);
+                            if (upload.tintedCacheKey != 0)
+                            {
+                                pendingTintedKeys.Remove(upload.tintedCacheKey);
+                                pendingTintedHashes.Remove(upload.tintedCacheKey);
+                            }
                         }
                     }
                 }
@@ -2164,6 +2205,7 @@ namespace UnityRemix
                 pendingTextureUploads.Clear();
                 pendingTextureIds.Clear();
                 pendingTintedKeys.Clear();
+                pendingTintedHashes.Clear();
             }
             
             if (destroyTextureFunc != null)

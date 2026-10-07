@@ -545,8 +545,8 @@ namespace UnityRemix
         }
         private Dictionary<int, CachedMeshTopology> cachedTopology = new Dictionary<int, CachedMeshTopology>(); // keyed by sharedMesh instance ID
         
-        // Cached GPU skinning data per sharedMesh (bind-pose vertices + bone weights)
-        private Dictionary<int, CachedSkinningData> cachedSkinning = new Dictionary<int, CachedSkinningData>(); // keyed by sharedMesh instance ID
+        // Cached GPU skinning data per sharedMesh + blendshape signature (bind-pose vertices + bone weights)
+        private Dictionary<long, CachedSkinningData> cachedSkinning = new Dictionary<long, CachedSkinningData>(); // keyed by (sharedMeshId << 32) | blendShapeHash
         
         private HashSet<string> loggedHashDebugMeshes = new HashSet<string>();
         
@@ -1801,11 +1801,18 @@ namespace UnityRemix
                     logger.LogInfo($"[DEBUG] {skinned.gameObject.name}: enabled={skinned.enabled}, active={skinned.gameObject.activeInHierarchy}, scale={scale.sqrMagnitude}, layer={IsLayerDisabled(skinned.gameObject.layer)}, vis={skinned.isVisible}, dist={configUseDistanceCulling.Value}");
                 }
                 
+                // Skinned meshes must NOT use Unity's isVisible frustum culling.
+                // Unity's SMR frustum culling frequently returns false for player/animated models
+                // with dynamic cameras or third-person views, which immediately prunes them from
+                // persistentSkinnedData and causes character parts to vanish or flicker.
+                // Remix performs native GPU occlusion and frustum culling.
+                /*
                 if (configUseVisibilityCulling.Value && !skinned.isVisible)
                 {
                     skipVis++;
                     continue;
                 }
+                */
                 
                 if (configUseDistanceCulling.Value)
                 {
@@ -1845,16 +1852,31 @@ namespace UnityRemix
                     new Vector3(Mathf.Sign(ls.x), Mathf.Sign(ls.y), Mathf.Sign(ls.z))
                 );
                 
-                int matId = ResolveMaterial(skinned, doLog);
+                Material primaryMat = (skinned.sharedMaterials != null && skinned.sharedMaterials.Length > 0) ? skinned.sharedMaterials[0] : null;
+                int matId = ResolveMaterial(skinned, primaryMat, doLog);
                 int sharedMeshId = skinned.sharedMesh.GetInstanceID();
+
+                // Compute BlendShape hash from active weights to support custom character creator proportions (belly, torso, etc.)
+                uint bsHash = 0;
+                int bsCount = skinned.sharedMesh.blendShapeCount;
+                if (bsCount > 0)
+                {
+                    bsHash = 2166136261u;
+                    for (int bsi = 0; bsi < bsCount; bsi++)
+                    {
+                        int wInt = Mathf.RoundToInt(skinned.GetBlendShapeWeight(bsi) * 10f);
+                        bsHash = (bsHash ^ (uint)wInt) * 16777619u;
+                    }
+                }
+                long skinCacheKey = ((long)sharedMeshId << 32) | (uint)bsHash;
                 
                 // Try GPU skinning path: extract bone weights once, compute bone transforms each frame
                 var skinData = (CachedSkinningData)null;
                 if (configHardwareSkinning.Value)
                 {
-                    if (!cachedSkinning.ContainsKey(sharedMeshId))
-                        CacheSkinningData(skinned, sharedMeshId);
-                    skinData = cachedSkinning.TryGetValue(sharedMeshId, out var sd) ? sd : null;
+                    if (!cachedSkinning.ContainsKey(skinCacheKey))
+                        CacheSkinningData(skinned, skinCacheKey);
+                    skinData = cachedSkinning.TryGetValue(skinCacheKey, out var sd) ? sd : null;
                 }
                 if (skinData != null && skinned.bones != null && skinned.bones.Length > 0)
                 {
@@ -1885,6 +1907,11 @@ namespace UnityRemix
                                     combinedMeshHash ^= HashUtils.HashStringFNV(b.name);
                                 combinedMeshHash *= 1099511628211UL;
                             }
+                        }
+                        if (bsHash != 0)
+                        {
+                            combinedMeshHash ^= (ulong)bsHash;
+                            combinedMeshHash *= 1099511628211UL;
                         }
                         
                         // Debug: log hash components once per unique mesh name
@@ -1917,10 +1944,8 @@ namespace UnityRemix
                             if (smMaterials != null && sub < smMaterials.Length && smMaterials[sub] != null)
                             {
                                 var subMat = smMaterials[sub];
-                                subMatId = subMat.GetInstanceID();
-                                // Re-capture material for this specific submesh with MPB overrides
-                                // (MPB overrides apply to all submeshes of the renderer identically)
-                                materialManager.CaptureMaterialTextures(subMat, subMatId);
+                                subMatId = ResolveMaterial(skinned, subMat, doLog);
+                                if (subMatId == 0) subMatId = matId;
                             }
                             
                             // Unique key per submesh: xor with Knuth multiplied submesh index
@@ -3113,9 +3138,9 @@ namespace UnityRemix
 
         /// <summary>
         /// Extract bind-pose geometry and bone weights from a SkinnedMeshRenderer's sharedMesh.
-        /// Stores result in cachedSkinning. Called once per unique sharedMesh. Returns null on failure.
+        /// Stores result in cachedSkinning. Called once per unique sharedMesh + blendshape combination. Returns null on failure.
         /// </summary>
-        private void CacheSkinningData(SkinnedMeshRenderer skinned, int sharedMeshId)
+        private void CacheSkinningData(SkinnedMeshRenderer skinned, long skinCacheKey)
         {
             var mesh = skinned.sharedMesh;
             try
@@ -3126,7 +3151,7 @@ namespace UnityRemix
                 if (bindPoses == null || bindPoses.Length == 0 || bones == null || bones.Length == 0)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has no bones/bindposes — BakeMesh fallback");
-                    cachedSkinning[sharedMeshId] = null;
+                    cachedSkinning[skinCacheKey] = null;
                     return;
                 }
                 
@@ -3134,7 +3159,7 @@ namespace UnityRemix
                 if (boneCount > MAX_REMIX_BONES)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has {boneCount} bones (>{MAX_REMIX_BONES}) — BakeMesh fallback");
-                    cachedSkinning[sharedMeshId] = null;
+                    cachedSkinning[skinCacheKey] = null;
                     return;
                 }
                 
@@ -3165,7 +3190,7 @@ namespace UnityRemix
                         if (legacyWeights == null || legacyWeights.Length == 0)
                         {
                             logger.LogInfo($"[Skinning] '{mesh.name}' bone weights not accessible — BakeMesh fallback");
-                            cachedSkinning[sharedMeshId] = null;
+                            cachedSkinning[skinCacheKey] = null;
                             return;
                         }
                         
@@ -3186,7 +3211,7 @@ namespace UnityRemix
                     catch (Exception ex2)
                     {
                         logger.LogInfo($"[Skinning] '{mesh.name}' legacy bone weights failed: {ex2.Message} — BakeMesh fallback");
-                        cachedSkinning[sharedMeshId] = null;
+                        cachedSkinning[skinCacheKey] = null;
                         return;
                     }
                 }
@@ -3198,7 +3223,7 @@ namespace UnityRemix
                 int[] triangles;
                 int[][] perSubTrisLocal = null;
                 
-                if (mesh.isReadable)
+                if (mesh.isReadable && mesh.blendShapeCount == 0)
                 {
                     bindVerts = mesh.vertices;
                     bindNorms = mesh.normals;
@@ -3226,25 +3251,9 @@ namespace UnityRemix
                 }
                 else
                 {
-                    // Non-readable: bake once, then recover bind-pose vertices
-                    // by inverting the per-vertex skinning transform.
-                    // Zero out blendshapes before BakeMesh so they don't corrupt the bind pose!
-                    int blendShapeCount = mesh.blendShapeCount;
-                    float[] originalBlendWeights = new float[blendShapeCount];
-                    for (int i = 0; i < blendShapeCount; i++)
-                    {
-                        originalBlendWeights[i] = skinned.GetBlendShapeWeight(i);
-                        skinned.SetBlendShapeWeight(i, 0f);
-                    }
-                    
+                    // Non-readable mesh or mesh with BlendShapes:
                     var tempMesh = new Mesh();
                     skinned.BakeMesh(tempMesh);
-                    
-                    // Restore blendshapes
-                    for (int i = 0; i < blendShapeCount; i++)
-                    {
-                        skinned.SetBlendShapeWeight(i, originalBlendWeights[i]);
-                    }
                     
                     uvs = tempMesh.uv;
                     colors = tempMesh.colors32;
@@ -3266,6 +3275,8 @@ namespace UnityRemix
                     }
                     triangles = allTris.ToArray();
                     perSubTrisLocal = perSubTris;
+                    UnityEngine.Object.DestroyImmediate(tempMesh);
+
                     // Recover bind-pose vertices using a dummy SkinnedMeshRenderer.
                     var dummyObj = new GameObject("RemixBindPoseExtractor");
                     dummyObj.transform.position = Vector3.zero;
@@ -3275,11 +3286,10 @@ namespace UnityRemix
                     var dummySmr = dummyObj.AddComponent<SkinnedMeshRenderer>();
                     dummySmr.sharedMesh = mesh;
                     
-                    // Zero out all BlendShapes! Games use BlendShapes to shrink the base body under clothes,
-                    // which causes the torso and head to vanish into 0-size points. We must restore full un-shrunk geometry!
+                    // Copy active BlendShapes from original renderer to preserve custom character proportions (belly, bottom, torso, muzzle, thighs)!
                     for (int i = 0; i < mesh.blendShapeCount; i++)
                     {
-                        dummySmr.SetBlendShapeWeight(i, 0f);
+                        dummySmr.SetBlendShapeWeight(i, skinned.GetBlendShapeWeight(i));
                     }
                     
                     // Create dummy bones that exactly match the bind pose inverse.
@@ -3308,16 +3318,16 @@ namespace UnityRemix
                     bindNorms = tempMesh2.normals ?? new Vector3[0];
                     if (bindNorms.Length != bindVerts.Length) bindNorms = new Vector3[bindVerts.Length];
                     
-                    UnityEngine.Object.Destroy(tempMesh2);
+                    UnityEngine.Object.DestroyImmediate(tempMesh2);
                     for (int i = 0; i < boneCount; i++)
-                        UnityEngine.Object.Destroy(dummyBones[i].gameObject);
-                    UnityEngine.Object.Destroy(dummyObj);
+                        UnityEngine.Object.DestroyImmediate(dummyBones[i].gameObject);
+                    UnityEngine.Object.DestroyImmediate(dummyObj);
                 }
                 
                 if (bindVerts == null || bindVerts.Length == 0 || triangles.Length == 0)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' empty geometry — BakeMesh fallback");
-                    cachedSkinning[sharedMeshId] = null;
+                    cachedSkinning[skinCacheKey] = null;
                     return;
                 }
                 
@@ -3330,7 +3340,7 @@ namespace UnityRemix
                 if (uvs == null || uvs.Length != bindVerts.Length)
                     uvs = new Vector2[bindVerts.Length];
                 
-                cachedSkinning[sharedMeshId] = new CachedSkinningData
+                cachedSkinning[skinCacheKey] = new CachedSkinningData
                 {
                     bindVertices = bindVerts,
                     bindNormals = bindNorms,
@@ -3351,7 +3361,7 @@ namespace UnityRemix
             catch (Exception ex)
             {
                 logger.LogWarning($"[Skinning] '{mesh.name}' extraction failed: {ex.Message} — BakeMesh fallback");
-                cachedSkinning[sharedMeshId] = null;
+                cachedSkinning[skinCacheKey] = null;
             }
         }
         
@@ -3474,8 +3484,9 @@ namespace UnityRemix
                     int subMatId = matId;
                     if (smMaterialsBake != null && sub < smMaterialsBake.Length && smMaterialsBake[sub] != null)
                     {
-                        subMatId = smMaterialsBake[sub].GetInstanceID();
-                        materialManager.CaptureMaterialTextures(smMaterialsBake[sub], subMatId);
+                        var subMat = smMaterialsBake[sub];
+                        subMatId = ResolveMaterial(skinned, subMat, doLog);
+                        if (subMatId == 0) subMatId = matId;
                     }
                     
                     int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
@@ -3526,43 +3537,46 @@ namespace UnityRemix
         /// <summary>
         /// Resolve the best material for a skinned mesh renderer. Returns material instance ID.
         /// </summary>
-        private int ResolveMaterial(SkinnedMeshRenderer skinned, bool doLog)
+        private int ResolveMaterial(SkinnedMeshRenderer skinned, Material targetMat = null, bool doLog = false)
         {
             int matId = 0;
-            Material bestMaterial = null;
-            
-            var materials = skinned.sharedMaterials;
-            if (materials == null || materials.Length == 0)
-                return 0;
-            
-            string[] textureProps = { "_MainTex", "_BaseMap", "_BaseTexture", "_Texture1", "_Texture", "_BaseColorMap", "_AlbedoTex", "_Albedo", "_Diffuse", "_TopTex" };
-            
-            foreach (var mat in materials)
-            {
-                if (mat == null) continue;
-                bool hasTexture = false;
-                try
-                {
-                    if (mat.HasProperty("_MainTex"))
-                        hasTexture = mat.mainTexture != null;
-                    if (!hasTexture)
-                    {
-                        foreach (var prop in textureProps)
-                        {
-                            if (mat.HasProperty(prop) && mat.GetTexture(prop) != null)
-                            { hasTexture = true; break; }
-                        }
-                    }
-                }
-                catch { }
-                if (hasTexture) { bestMaterial = mat; break; }
-            }
+            Material bestMaterial = targetMat;
             
             if (bestMaterial == null)
             {
+                var materials = skinned.sharedMaterials;
+                if (materials == null || materials.Length == 0)
+                    return 0;
+                
+                string[] textureProps = { "_MainTex", "_BaseMap", "_BaseTexture", "_Texture1", "_Texture", "_BaseColorMap", "_AlbedoTex", "_Albedo", "_Diffuse", "_TopTex" };
+                
                 foreach (var mat in materials)
                 {
-                    if (mat != null) { bestMaterial = mat; break; }
+                    if (mat == null) continue;
+                    bool hasTexture = false;
+                    try
+                    {
+                        if (mat.HasProperty("_MainTex"))
+                            hasTexture = mat.mainTexture != null;
+                        if (!hasTexture)
+                        {
+                            foreach (var prop in textureProps)
+                            {
+                                if (mat.HasProperty(prop) && mat.GetTexture(prop) != null)
+                                { hasTexture = true; break; }
+                            }
+                        }
+                    }
+                    catch { }
+                    if (hasTexture) { bestMaterial = mat; break; }
+                }
+                
+                if (bestMaterial == null)
+                {
+                    foreach (var mat in materials)
+                    {
+                        if (mat != null) { bestMaterial = mat; break; }
+                    }
                 }
             }
             
@@ -3593,34 +3607,28 @@ namespace UnityRemix
                         }
 
                         // Capture albedo/diffuse color overrides (ATLYSS character skin/hair/eye colors)
-                        string[] colorProps = { "_Color", "_BaseColor", "_TintColor", "_Tint", "_Color1", "_Color2" };
+                        string[] colorProps = { "_Color", "_BaseColor", "_TintColor", "_Tint", "_Color1", "_Color2", "_ColorTint", "_BodyColor", "_SkinColor", "_FurColor", "_HairColor", "_ClothColor", "_ClothingColor", "_EyeColor" };
                         foreach (var cp in colorProps)
                         {
-                            if (bestMaterial.HasProperty(cp))
+                            var c = mpb.GetColor(cp);
+                            // GetColor returns Color.clear (0,0,0,0) if the property is missing from the MPB.
+                            // Ignore missing properties, and ignore pure white (no tint).
+                            if (c.a > 0.0f && (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f))
                             {
-                                var c = mpb.GetColor(cp);
-                                // GetColor returns Color.clear (0,0,0,0) if the property is missing from the MPB.
-                                // Ignore missing properties, and ignore pure white (no tint).
-                                if (c.a > 0.0f && (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f))
-                                {
-                                    mpbColor = c;
-                                    // Generate unique material ID for this renderer's color override
-                                    Color32 c32 = c;
-                                    int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
-                                    matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
-                                    break;
-                                }
+                                mpbColor = c;
+                                // Generate unique material ID for this renderer's color override
+                                Color32 c32 = c;
+                                int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
+                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                break;
                             }
                         }
 
-                        if (bestMaterial.HasProperty("_EmissiveColor"))
+                        var emC = mpb.GetColor("_EmissiveColor");
+                        if (emC.a > 0.0f && (emC.r > 0.01f || emC.g > 0.01f || emC.b > 0.01f))
                         {
-                            var c = mpb.GetColor("_EmissiveColor");
-                            if (c.r != 0 || c.g != 0 || c.b != 0)
-                            {
-                                mpbEmissiveColor = c;
-                                matId = HashCombine(matId, HashUtils.GetHierarchyHashInt(skinned.transform));
-                            }
+                            mpbEmissiveColor = emC;
+                            matId = HashCombine(matId, HashUtils.GetHierarchyHashInt(skinned.transform));
                         }
                         if (bestMaterial.HasProperty("_EmissiveIntensity"))
                         {
@@ -3630,7 +3638,40 @@ namespace UnityRemix
                     }
                 }
                 catch { }
-                
+
+                // Check for per-material HSV or ColorTint customizations (ATLYSS character customization & dyes)
+                if (!mpbColor.HasValue)
+                {
+                    try
+                    {
+                        if (bestMaterial.HasProperty("_ColorTint"))
+                        {
+                            Color ct = bestMaterial.GetColor("_ColorTint");
+                            if (ct.a > 0f && (ct.r < 0.98f || ct.g < 0.98f || ct.b < 0.98f))
+                            {
+                                Color32 c32 = ct;
+                                int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
+                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                            }
+                        }
+                        else if (bestMaterial.HasProperty("_Hue") || bestMaterial.HasProperty("_Saturation") || bestMaterial.HasProperty("_Brightness"))
+                        {
+                            float hue = bestMaterial.HasProperty("_Hue") ? bestMaterial.GetFloat("_Hue") : 0f;
+                            float sat = bestMaterial.HasProperty("_Saturation") ? bestMaterial.GetFloat("_Saturation") : 1f;
+                            float bright = bestMaterial.HasProperty("_Brightness") ? bestMaterial.GetFloat("_Brightness") : 0f;
+                            if (Mathf.Abs(hue) > 0.5f || Mathf.Abs(sat - 1f) > 0.05f || Mathf.Abs(bright) > 0.05f)
+                            {
+                                int hBits = Mathf.RoundToInt(hue * 10f);
+                                int sBits = Mathf.RoundToInt(sat * 100f);
+                                int bBits = Mathf.RoundToInt(bright * 100f);
+                                int hsvHash = (hBits * 397 ^ sBits) * 397 ^ bBits;
+                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), hsvHash));
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
                 materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor);
                 
                 if (doLog)
