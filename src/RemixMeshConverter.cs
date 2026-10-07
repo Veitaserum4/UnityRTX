@@ -777,7 +777,10 @@ namespace UnityRemix
             Color32[] colors = null)
         {
             if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length < 3 || (triangles.Length % 3) != 0)
+            {
+                logger.LogWarning($"CreateSkinnedMeshWithBones failed for hash={meshHash:X16}: verts={(vertices?.Length ?? 0)} tris={(triangles?.Length ?? 0)}");
                 return IntPtr.Zero;
+            }
             
             if (normals == null || normals.Length != vertices.Length)
             {
@@ -819,7 +822,13 @@ namespace UnityRemix
             {
                 IntPtr materialHandle = IntPtr.Zero;
                 if (materialId != 0)
+                {
                     materialHandle = materialManager.GetOrCreateMaterial(materialId);
+                    if (materialHandle == IntPtr.Zero)
+                    {
+                        logger.LogWarning($"CreateSkinnedMeshWithBones: materialHandle is Zero for matId={materialId} on hash={meshHash:X16}");
+                    }
+                }
                 
                 var skinning = new RemixAPI.remixapi_MeshInfoSkinning
                 {
@@ -842,6 +851,12 @@ namespace UnityRemix
                 };
                 
                 GCHandle surfaceHandle = GCHandle.Alloc(surface, GCHandleType.Pinned);
+                
+                if (vertices.Length == 1261) // poon_body has 1261 verts
+                {
+                    logger.LogInfo($"[DUMP] poon_body hash={meshHash:X16} v0={vertices[0]} v1={vertices[1]} t0={triangles[0]},{triangles[1]},{triangles[2]}");
+                }
+                
                 try
                 {
                     var meshInfo = new RemixAPI.remixapi_MeshInfo

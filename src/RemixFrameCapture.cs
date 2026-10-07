@@ -1796,6 +1796,11 @@ namespace UnityRemix
                     continue;
                 }
                 
+                if (skinned.gameObject.name.Contains("poon_body") || skinned.gameObject.name.Contains("poon_robeSkirtRender"))
+                {
+                    logger.LogInfo($"[DEBUG] {skinned.gameObject.name}: enabled={skinned.enabled}, active={skinned.gameObject.activeInHierarchy}, scale={scale.sqrMagnitude}, layer={IsLayerDisabled(skinned.gameObject.layer)}, vis={skinned.isVisible}, dist={configUseDistanceCulling.Value}");
+                }
+                
                 if (configUseVisibilityCulling.Value && !skinned.isVisible)
                 {
                     skipVis++;
@@ -2027,7 +2032,7 @@ namespace UnityRemix
             // Capture world-space weapon UI screens (e.g. Nailgun ammo counter/heat, Shotgun slider, Rocket Launcher timer)
             CaptureWeaponCanvasScreens(state, frameCount);
             
-            if (doLog && total > 0)
+            if (frameCount % 60 == 0) // Force log every 60 frames
             {
                 logger.LogInfo($"CaptureSkinnedMeshes: gpuSkinned={gpuSkinned}, baked={baked}, " +
                     $"skip(null={skipNull},layer={skipLayer},vis={skipVis},dist={skipDist},mesh={skipNoMesh}), " +
@@ -3223,8 +3228,24 @@ namespace UnityRemix
                 {
                     // Non-readable: bake once, then recover bind-pose vertices
                     // by inverting the per-vertex skinning transform.
+                    // Zero out blendshapes before BakeMesh so they don't corrupt the bind pose!
+                    int blendShapeCount = mesh.blendShapeCount;
+                    float[] originalBlendWeights = new float[blendShapeCount];
+                    for (int i = 0; i < blendShapeCount; i++)
+                    {
+                        originalBlendWeights[i] = skinned.GetBlendShapeWeight(i);
+                        skinned.SetBlendShapeWeight(i, 0f);
+                    }
+                    
                     var tempMesh = new Mesh();
                     skinned.BakeMesh(tempMesh);
+                    
+                    // Restore blendshapes
+                    for (int i = 0; i < blendShapeCount; i++)
+                    {
+                        skinned.SetBlendShapeWeight(i, originalBlendWeights[i]);
+                    }
+                    
                     uvs = tempMesh.uv;
                     colors = tempMesh.colors32;
                     if (colors != null && colors.Length == 0) colors = null;
