@@ -1756,7 +1756,7 @@ namespace UnityRemix
             
             // BakeMesh fallback budget
             var bakeSw = System.Diagnostics.Stopwatch.StartNew();
-            const float bakeMaxMs = 5.0f;
+            const float bakeMaxMs = 100.0f;
             if (skinnedRoundRobinIndex >= total) skinnedRoundRobinIndex = 0;
             var bakeFallbackQueue = new List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)>();
             
@@ -1882,7 +1882,7 @@ namespace UnityRemix
                 {
                     // Compute bone transforms for Remix GPU skinning
                     var bones = skinned.bones;
-                    int boneCount = Mathf.Min(bones.Length, skinData.boneCount);
+                    int boneCount = skinData.boneCount;
                     var boneMatrices = new Matrix4x4[boneCount];
                     
                     // Bone transforms relative to instance transform:
@@ -1892,7 +1892,7 @@ namespace UnityRemix
                     Matrix4x4 invInstance = unscaledMatrix.inverse;
                     for (int b = 0; b < boneCount; b++)
                     {
-                        boneMatrices[b] = (bones[b] != null)
+                        boneMatrices[b] = (b < bones.Length && bones[b] != null)
                             ? invInstance * bones[b].localToWorldMatrix * skinData.bindPoses[b]
                             : Matrix4x4.identity;
                     }
@@ -3155,7 +3155,7 @@ namespace UnityRemix
                     return;
                 }
                 
-                int boneCount = Mathf.Min(bindPoses.Length, bones.Length);
+                int boneCount = bindPoses.Length;
                 if (boneCount > MAX_REMIX_BONES)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has {boneCount} bones (>{MAX_REMIX_BONES}) — BakeMesh fallback");
@@ -3246,82 +3246,13 @@ namespace UnityRemix
                             allTris.AddRange(sub);
                     }
                     triangles = allTris.ToArray();
-                    // store per-submesh for multi-material rendering
                     perSubTrisLocal = perSubTris;
                 }
                 else
                 {
-                    // Non-readable mesh or mesh with BlendShapes:
-                    var tempMesh = new Mesh();
-                    skinned.BakeMesh(tempMesh);
-                    
-                    uvs = tempMesh.uv;
-                    colors = tempMesh.colors32;
-                    if (colors != null && colors.Length == 0) colors = null;
-                    
-                    var allTris = new List<int>();
-                    var perSubTris = new int[tempMesh.subMeshCount][];
-                    for (int s = 0; s < tempMesh.subMeshCount; s++)
-                    {
-                        if (tempMesh.GetTopology(s) != MeshTopology.Triangles)
-                        {
-                            perSubTris[s] = new int[0];
-                            continue;
-                        }
-                        var sub = tempMesh.GetTriangles(s);
-                        perSubTris[s] = (sub != null && sub.Length > 0) ? sub : new int[0];
-                        if (sub != null && sub.Length > 0)
-                            allTris.AddRange(sub);
-                    }
-                    triangles = allTris.ToArray();
-                    perSubTrisLocal = perSubTris;
-                    UnityEngine.Object.DestroyImmediate(tempMesh);
-
-                    // Recover bind-pose vertices using a dummy SkinnedMeshRenderer.
-                    var dummyObj = new GameObject("RemixBindPoseExtractor");
-                    dummyObj.transform.position = Vector3.zero;
-                    dummyObj.transform.rotation = Quaternion.identity;
-                    dummyObj.transform.localScale = Vector3.one;
-                    
-                    var dummySmr = dummyObj.AddComponent<SkinnedMeshRenderer>();
-                    dummySmr.sharedMesh = mesh;
-                    
-                    // Copy active BlendShapes from original renderer to preserve custom character proportions (belly, bottom, torso, muzzle, thighs)!
-                    for (int i = 0; i < mesh.blendShapeCount; i++)
-                    {
-                        dummySmr.SetBlendShapeWeight(i, skinned.GetBlendShapeWeight(i));
-                    }
-                    
-                    // Create dummy bones that exactly match the bind pose inverse.
-                    // This forces the skinning matrix to Identity, yielding flawless v_bind.
-                    var dummyBones = new Transform[boneCount];
-                    for (int i = 0; i < boneCount; i++)
-                    {
-                        var b = new GameObject("DummyBone" + i);
-                        b.transform.parent = dummyObj.transform;
-                        Matrix4x4 inv = bindPoses[i].inverse;
-                        b.transform.localPosition = new Vector3(inv.m03, inv.m13, inv.m23);
-                        b.transform.localRotation = inv.rotation;
-                        b.transform.localScale = new Vector3(
-                            inv.GetColumn(0).magnitude,
-                            inv.GetColumn(1).magnitude,
-                            inv.GetColumn(2).magnitude
-                        );
-                        dummyBones[i] = b.transform;
-                    }
-                    dummySmr.bones = dummyBones;
-                    
-                    var tempMesh2 = new Mesh();
-                    dummySmr.BakeMesh(tempMesh2);
-                    
-                    bindVerts = tempMesh2.vertices;
-                    bindNorms = tempMesh2.normals ?? new Vector3[0];
-                    if (bindNorms.Length != bindVerts.Length) bindNorms = new Vector3[bindVerts.Length];
-                    
-                    UnityEngine.Object.DestroyImmediate(tempMesh2);
-                    for (int i = 0; i < boneCount; i++)
-                        UnityEngine.Object.DestroyImmediate(dummyBones[i].gameObject);
-                    UnityEngine.Object.DestroyImmediate(dummyObj);
+                    logger.LogInfo($"[Skinning] '{mesh.name}' is non-readable or has blendshapes — BakeMesh fallback");
+                    cachedSkinning[skinCacheKey] = null;
+                    return;
                 }
                 
                 if (bindVerts == null || bindVerts.Length == 0 || triangles.Length == 0)
@@ -3654,20 +3585,7 @@ namespace UnityRemix
                                 matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
                             }
                         }
-                        else if (bestMaterial.HasProperty("_Hue") || bestMaterial.HasProperty("_Saturation") || bestMaterial.HasProperty("_Brightness"))
-                        {
-                            float hue = bestMaterial.HasProperty("_Hue") ? bestMaterial.GetFloat("_Hue") : 0f;
-                            float sat = bestMaterial.HasProperty("_Saturation") ? bestMaterial.GetFloat("_Saturation") : 1f;
-                            float bright = bestMaterial.HasProperty("_Brightness") ? bestMaterial.GetFloat("_Brightness") : 0f;
-                            if (Mathf.Abs(hue) > 0.5f || Mathf.Abs(sat - 1f) > 0.05f || Mathf.Abs(bright) > 0.05f)
-                            {
-                                int hBits = Mathf.RoundToInt(hue * 10f);
-                                int sBits = Mathf.RoundToInt(sat * 100f);
-                                int bBits = Mathf.RoundToInt(bright * 100f);
-                                int hsvHash = (hBits * 397 ^ sBits) * 397 ^ bBits;
-                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), hsvHash));
-                            }
-                        }
+
                     }
                     catch { }
                 }
