@@ -1986,7 +1986,7 @@ namespace UnityRemix
                 }
                 
                 // Queue for BakeMesh fallback
-                bakeFallbackQueue.Add((i, skinned, skinnedId, unscaledMatrix, matId));
+                bakeFallbackQueue.Add((i, skinned, skinnedId, skinned.transform.localToWorldMatrix, matId));
             }
             
             // Process BakeMesh fallback queue with round-robin + time budget
@@ -3542,15 +3542,13 @@ namespace UnityRemix
                         foreach (var cp in colorProps)
                         {
                             var c = mpb.GetColor(cp);
-                            // GetColor returns Color.clear (0,0,0,0) if the property is missing from the MPB.
-                            // Ignore missing properties, and ignore pure white (no tint).
-                            if (c.a > 0.0f && (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f))
+                            if (c.a > 0.0f)
                             {
                                 mpbColor = c;
                                 // Generate unique material ID for this renderer's color override
                                 Color32 c32 = c;
                                 int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
-                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                matId = HashCombine(matId, colInt);
                                 break;
                             }
                         }
@@ -3559,7 +3557,8 @@ namespace UnityRemix
                         if (emC.a > 0.0f && (emC.r > 0.01f || emC.g > 0.01f || emC.b > 0.01f))
                         {
                             mpbEmissiveColor = emC;
-                            matId = HashCombine(matId, HashUtils.GetHierarchyHashInt(skinned.transform));
+                            Color32 ec32 = emC;
+                            matId = HashCombine(matId, (ec32.r << 24) | (ec32.g << 16) | (ec32.b << 8) | ec32.a);
                         }
                         if (bestMaterial.HasProperty("_EmissiveIntensity"))
                         {
@@ -3582,7 +3581,7 @@ namespace UnityRemix
                             {
                                 Color32 c32 = ct;
                                 int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
-                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                matId = HashCombine(matId, colInt);
                             }
                         }
 
