@@ -548,11 +548,8 @@ namespace UnityRemix
         // Cached GPU skinning data per sharedMesh + blendshape signature (bind-pose vertices + bone weights)
         private Dictionary<long, CachedSkinningData> cachedSkinning = new Dictionary<long, CachedSkinningData>(); // keyed by (sharedMeshId << 32) | blendShapeHash
         
-        private HashSet<string> loggedHashDebugMeshes = new HashSet<string>();
-        
-        // Track logged skinned mesh materials to avoid spam
-        private HashSet<string> loggedSkinnedMaterials = new HashSet<string>();
-        
+
+
         // Frame state structures
         public struct CameraData
         {
@@ -682,10 +679,8 @@ namespace UnityRemix
                 meshesInQueue.Clear();
                 failedMeshKeys.Clear();
             }
-            loggedSkinnedMaterials.Clear();
             skinnedRoundRobinIndex = 0;
             persistentSkinnedData.Clear();
-            loggedHashDebugMeshes.Clear();
             cachedTopology.Clear();
             cachedSkinning.Clear();
             cachedScrollingMeshes.Clear();
@@ -797,20 +792,7 @@ namespace UnityRemix
                 }
                 logger.LogInfo($"  breakdown: grid={gridCount} combined={combinedCount} disabled={disabledCount} noMesh={noMeshCount}");
                 
-                if (cachedSkinnedRenderers.Count > 0)
-                {
-                    var sb = new System.Text.StringBuilder();
-                    sb.AppendLine($"[SkinnedDump] All {cachedSkinnedRenderers.Count} SkinnedMeshRenderers:");
-                    for (int i = 0; i < cachedSkinnedRenderers.Count; i++)
-                    {
-                        var sr = cachedSkinnedRenderers[i];
-                        if (sr == null) { sb.AppendLine($"  [{i}] NULL"); continue; }
-                        string meshName = sr.sharedMesh != null ? sr.sharedMesh.name : "NULL_MESH";
-                        int boneCount = sr.bones != null ? sr.bones.Length : 0;
-                        sb.AppendLine($"  [{i}] '{sr.gameObject.name}' mesh='{meshName}' layer={sr.gameObject.layer}({LayerMask.LayerToName(sr.gameObject.layer)}) enabled={sr.enabled} active={sr.gameObject.activeInHierarchy} bones={boneCount} id={sr.GetInstanceID()}");
-                    }
-                    logger.LogInfo(sb.ToString());
-                }
+
             }
             
             RefreshRendererSnapshots();
@@ -1827,10 +1809,7 @@ namespace UnityRemix
                     continue;
                 }
                 
-                if (skinned.gameObject.name.Contains("poon_body") || skinned.gameObject.name.Contains("poon_robeSkirtRender"))
-                {
-                    logger.LogInfo($"[DEBUG] {skinned.gameObject.name}: enabled={skinned.enabled}, active={skinned.gameObject.activeInHierarchy}, scale={scale.sqrMagnitude}, layer={IsLayerDisabled(skinned.gameObject.layer)}, vis={skinned.isVisible}, dist={configUseDistanceCulling.Value}");
-                }
+
                 
                 // Skinned meshes must NOT use Unity's isVisible frustum culling.
                 // Unity's SMR frustum culling frequently returns false for player/animated models
@@ -1945,19 +1924,7 @@ namespace UnityRemix
                             combinedMeshHash *= 1099511628211UL;
                         }
                         
-                        // Debug: log hash components once per unique mesh name
-                        string meshDebugKey = skinned.sharedMesh.name + "_gpu";
-                        if (!loggedHashDebugMeshes.Contains(meshDebugKey))
-                        {
-                            loggedHashDebugMeshes.Add(meshDebugKey);
-                            string meshName = skinned.sharedMesh.name;
-                            string cleanedName = meshName.Replace(" (Instance)", "").Replace(" Instance", "").Replace("(Clone)", "").Trim();
-                            cleanedName = System.Text.RegularExpressions.Regex.Replace(cleanedName, @"[\s_-]*[0-9]+$", "");
-                            int vertCount = skinned.sharedMesh.vertexCount;
-                            int triCount = (skinned.sharedMesh != null && skinned.sharedMesh.isReadable) ? skinned.sharedMesh.triangles.Length : 0;
-                            string boneNames = skinned.bones != null ? string.Join(",", System.Linq.Enumerable.Select(skinned.bones, b => b != null ? b.name : "null")) : "none";
-                            logger.LogInfo($"[HashDebug-GPU] '{skinned.name}' meshName='{meshName}' cleanedName='{cleanedName}' verts={vertCount} tris={triCount} baseMeshHash=0x{baseMeshHash:X16} combinedMeshHash=0x{combinedMeshHash:X16} matId={matId} bones=[{boneNames}]");
-                        }
+
                         
                         // Emit one SkinnedMeshData per submesh so each submesh gets its correct material
                         // (fixes ATLYSS face/body/hair UV + color mismatch)
@@ -3403,19 +3370,7 @@ namespace UnityRemix
                     }
                 }
                 
-                // Debug: log hash components once per unique mesh name
-                string meshDebugKey = skinned.sharedMesh.name + "_bake";
-                if (!loggedHashDebugMeshes.Contains(meshDebugKey))
-                {
-                    loggedHashDebugMeshes.Add(meshDebugKey);
-                    string meshName = skinned.sharedMesh.name;
-                    string cleanedName = meshName.Replace(" (Instance)", "").Replace(" Instance", "").Replace("(Clone)", "").Trim();
-                    cleanedName = System.Text.RegularExpressions.Regex.Replace(cleanedName, @"[\s_-]*[0-9]+$", "");
-                    int vertCount = skinned.sharedMesh.vertexCount;
-                    int triCount = (skinned.sharedMesh != null && skinned.sharedMesh.isReadable) ? skinned.sharedMesh.triangles.Length : 0;
-                    string boneNames = skinned.bones != null ? string.Join(",", System.Linq.Enumerable.Select(skinned.bones, b => b != null ? b.name : "null")) : "none";
-                    logger.LogInfo($"[HashDebug-BakeMesh] '{skinned.name}' meshName='{meshName}' cleanedName='{cleanedName}' verts={vertCount} tris={triCount} baseMeshHash=0x{baseMeshHash:X16} combinedMeshHash=0x{combinedMeshHash:X16} matId={matId} bones=[{boneNames}]");
-                }
+
                 
                 // Build per-submesh triangle arrays from bakedMesh
                 int subMeshCount = bakedMesh.subMeshCount;
@@ -3649,28 +3604,7 @@ namespace UnityRemix
 
                 materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor);
                 
-                if (doLog)
-                {
-                    string logKey = $"{skinned.name}:{bestMaterial.name}:{matId}";
-                    if (!loggedSkinnedMaterials.Contains(logKey))
-                    {
-                        loggedSkinnedMaterials.Add(logKey);
-                        if (mpbColor.HasValue)
-                        {
-                            var c = mpbColor.Value;
-                            logger.LogInfo($"  Skinned mesh '{skinned.name}' using material '{bestMaterial.name}' (ID: {matId}) [MPB _Color=({c.r:F3},{c.g:F3},{c.b:F3},{c.a:F3})]");
-                        }
-                        else if (mpbEmissiveColor.HasValue)
-                        {
-                            var c = mpbEmissiveColor.Value;
-                            logger.LogInfo($"  Skinned mesh '{skinned.name}' using material '{bestMaterial.name}' (ID: {matId}) [MPB _EmissiveColor=({c.r:F3},{c.g:F3},{c.b:F3})");
-                        }
-                        else
-                        {
-                            logger.LogInfo($"  Skinned mesh '{skinned.name}' using material '{bestMaterial.name}' (ID: {matId})");
-                        }
-                    }
-                }
+
             }
             
             return matId;
