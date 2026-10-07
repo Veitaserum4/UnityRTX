@@ -3275,10 +3275,11 @@ namespace UnityRemix
                     var dummySmr = dummyObj.AddComponent<SkinnedMeshRenderer>();
                     dummySmr.sharedMesh = mesh;
                     
-                    // Copy BlendShapes from original renderer to dummy so that hidden/shrunk clothing stays hidden
+                    // Zero out all BlendShapes! Games use BlendShapes to shrink the base body under clothes,
+                    // which causes the torso and head to vanish into 0-size points. We must restore full un-shrunk geometry!
                     for (int i = 0; i < mesh.blendShapeCount; i++)
                     {
-                        dummySmr.SetBlendShapeWeight(i, skinned.GetBlendShapeWeight(i));
+                        dummySmr.SetBlendShapeWeight(i, 0f);
                     }
                     
                     // Create dummy bones that exactly match the bind pose inverse.
