@@ -91,6 +91,36 @@ namespace UnityRemix
         private readonly HashSet<int> _capturedParticleMatIds = new HashSet<int>();
         private readonly Dictionary<int, Color> _materialTintCache = new Dictionary<int, Color>();
 
+        public class ParticleStatsSnapshot
+        {
+            public int TotalTrackedSystems;
+            public int ActiveSystems;
+            public int InactiveSystems;
+            public int DistanceCulledSystems;
+            public int EmittingSystems;
+            public int RenderedParticles;
+            public int CulledParticles;
+            public int BatchedDrawCalls;
+            public int BakedMeshes;
+            public float FurthestSystemDistance;
+            public string FurthestSystemName;
+            public int TotalTrackedTrails;
+            public int ActiveTrails;
+            public int DistanceCulledTrails;
+            public ParticleEmitterInfo[] Emitters = Array.Empty<ParticleEmitterInfo>();
+        }
+
+        public struct ParticleEmitterInfo
+        {
+            public string Name;
+            public float Distance;
+            public int ParticleCount;
+            public string Status;
+        }
+
+        private ParticleStatsSnapshot _latestParticleStats = new ParticleStatsSnapshot();
+        public ParticleStatsSnapshot LatestParticleStats => _latestParticleStats;
+
         // TrailRenderer caching
         private struct TrackedTrailRenderer
         {
@@ -2380,7 +2410,27 @@ namespace UnityRemix
         public void CaptureParticleSystems(FrameState state, int frameCount)
         {
             if (configCaptureParticles != null && !configCaptureParticles.Value)
+            {
+                if (frameCount % 30 == 0 || _latestParticleStats == null || _latestParticleStats.TotalTrackedSystems == 0)
+                {
+                    int totalPs = trackedParticleSystems.Count;
+                    int activePs = 0;
+                    for (int s = 0; s < trackedParticleSystems.Count; s++)
+                    {
+                        var trk = trackedParticleSystems[s];
+                        if (trk.renderer != null && trk.renderer.enabled && trk.renderer.gameObject.activeInHierarchy)
+                            activePs++;
+                    }
+                    _latestParticleStats = new ParticleStatsSnapshot
+                    {
+                        TotalTrackedSystems = totalPs,
+                        ActiveSystems = activePs,
+                        InactiveSystems = totalPs - activePs,
+                        TotalTrackedTrails = trackedTrailRenderers.Count
+                    };
+                }
                 return;
+            }
 
             Camera mainCam = cameraHandler?.GetPreferredCamera() ?? Camera.main;
             if (mainCam == null || !mainCam.gameObject.activeInHierarchy || !mainCam.enabled || Time.frameCount < 10)
@@ -2471,6 +2521,20 @@ namespace UnityRemix
                 }
             }
 
+            int totalTracked = trackedParticleSystems.Count;
+            int activeCount = 0;
+            int inactiveCount = 0;
+            int distanceCulled = 0;
+            int emittingCount = 0;
+            int renderedParticles = 0;
+            int culledParticles = 0;
+            int bakedMeshes = 0;
+            float furthestDist = 0f;
+            string furthestName = null;
+
+            bool collectEmitters = (frameCount % 30 == 0);
+            List<ParticleEmitterInfo> emitterDetails = collectEmitters ? new List<ParticleEmitterInfo>(Math.Min(totalTracked, 256)) : null;
+
             for (int i = 0; i < trackedParticleSystems.Count; i++)
             {
                 var tracked = trackedParticleSystems[i];
@@ -2478,14 +2542,65 @@ namespace UnityRemix
                 var ps = tracked.system;
 
                 if (pr == null || ps == null) continue;
-                if (!pr.enabled || !pr.gameObject.activeInHierarchy) continue;
-
-                // Distance culling: skip particle systems whose emitter transform is beyond max render distance
-                if (configEnableParticleDistanceCulling != null && configEnableParticleDistanceCulling.Value && (pr.transform.position - camPos).sqrMagnitude > maxParticleDistSqr)
+                if (!pr.enabled || !pr.gameObject.activeInHierarchy)
+                {
+                    inactiveCount++;
+                    if (collectEmitters && emitterDetails.Count < 200)
+                    {
+                        emitterDetails.Add(new ParticleEmitterInfo
+                        {
+                            Name = pr.name,
+                            Distance = 0f,
+                            ParticleCount = 0,
+                            Status = "Inactive"
+                        });
+                    }
                     continue;
+                }
+
+                activeCount++;
+                float distSqr = (pr.transform.position - camPos).sqrMagnitude;
+                float dist = Mathf.Sqrt(distSqr);
+                if (dist > furthestDist)
+                {
+                    furthestDist = dist;
+                    furthestName = pr.name;
+                }
 
                 int numAlive = ps.particleCount;
-                if (numAlive <= 0) continue;
+
+                // Distance culling: skip particle systems whose emitter transform is beyond max render distance
+                if (configEnableParticleDistanceCulling != null && configEnableParticleDistanceCulling.Value && distSqr > maxParticleDistSqr)
+                {
+                    distanceCulled++;
+                    culledParticles += numAlive;
+                    if (collectEmitters && emitterDetails.Count < 200)
+                    {
+                        emitterDetails.Add(new ParticleEmitterInfo
+                        {
+                            Name = pr.name,
+                            Distance = dist,
+                            ParticleCount = numAlive,
+                            Status = "Culled"
+                        });
+                    }
+                    continue;
+                }
+
+                if (numAlive <= 0)
+                {
+                    if (collectEmitters && emitterDetails.Count < 200)
+                    {
+                        emitterDetails.Add(new ParticleEmitterInfo
+                        {
+                            Name = pr.name,
+                            Distance = dist,
+                            ParticleCount = 0,
+                            Status = "Idle (0)"
+                        });
+                    }
+                    continue;
+                }
 
                 // Expand buffer if needed
                 if (_particleBuffer.Length < numAlive)
@@ -2494,7 +2609,22 @@ namespace UnityRemix
                 }
 
                 int actualAlive = ps.GetParticles(_particleBuffer);
-                if (actualAlive <= 0) continue;
+                if (actualAlive <= 0)
+                {
+                    if (collectEmitters && emitterDetails.Count < 200)
+                    {
+                        emitterDetails.Add(new ParticleEmitterInfo
+                        {
+                            Name = pr.name,
+                            Distance = dist,
+                            ParticleCount = 0,
+                            Status = "Idle (0)"
+                        });
+                    }
+                    continue;
+                }
+
+                emittingCount++;
 
                 Material mat = pr.sharedMaterial;
                 if (mat == null)
@@ -2617,15 +2747,52 @@ namespace UnityRemix
                     if (!BakeMeshParticleSystem(pr, mainCam, tintedMatId, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
+                        renderedParticles += particlesToDraw;
                         var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
                         AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, isSurfaceAligned);
+                        if (collectEmitters && emitterDetails.Count < 200)
+                        {
+                            emitterDetails.Add(new ParticleEmitterInfo
+                            {
+                                Name = pr.name,
+                                Distance = dist,
+                                ParticleCount = particlesToDraw,
+                                Status = "Rendered (Batch)"
+                            });
+                        }
+                    }
+                    else
+                    {
+                        bakedMeshes++;
+                        renderedParticles += actualAlive;
+                        if (collectEmitters && emitterDetails.Count < 200)
+                        {
+                            emitterDetails.Add(new ParticleEmitterInfo
+                            {
+                                Name = pr.name,
+                                Distance = dist,
+                                ParticleCount = actualAlive,
+                                Status = "Rendered (Bake)"
+                            });
+                        }
                     }
                 }
                 else
                 {
                     int particlesToDraw = Math.Min(actualAlive, 4096);
+                    renderedParticles += particlesToDraw;
                     var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
                     AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, isSurfaceAligned);
+                    if (collectEmitters && emitterDetails.Count < 200)
+                    {
+                        emitterDetails.Add(new ParticleEmitterInfo
+                        {
+                            Name = pr.name,
+                            Distance = dist,
+                            ParticleCount = particlesToDraw,
+                            Status = "Rendered (Batch)"
+                        });
+                    }
                 }
 
                 // Capture trails if enabled on this particle system
@@ -2660,6 +2827,31 @@ namespace UnityRemix
                     categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
                 });
             }
+
+            if (emitterDetails != null)
+            {
+                emitterDetails.Sort((a, b) => b.Distance.CompareTo(a.Distance));
+            }
+
+            var prevStats = _latestParticleStats;
+            _latestParticleStats = new ParticleStatsSnapshot
+            {
+                TotalTrackedSystems = totalTracked,
+                ActiveSystems = activeCount,
+                InactiveSystems = inactiveCount,
+                DistanceCulledSystems = distanceCulled,
+                EmittingSystems = emittingCount,
+                RenderedParticles = renderedParticles,
+                CulledParticles = culledParticles,
+                BatchedDrawCalls = _activeParticleBatches.Count,
+                BakedMeshes = bakedMeshes,
+                FurthestSystemDistance = furthestDist,
+                FurthestSystemName = furthestName,
+                TotalTrackedTrails = prevStats != null ? prevStats.TotalTrackedTrails : 0,
+                ActiveTrails = prevStats != null ? prevStats.ActiveTrails : 0,
+                DistanceCulledTrails = prevStats != null ? prevStats.DistanceCulledTrails : 0,
+                Emitters = emitterDetails != null ? emitterDetails.ToArray() : (prevStats != null ? prevStats.Emitters : Array.Empty<ParticleEmitterInfo>())
+            };
         }
 
         private ParticleBatchBucket GetOrCreateBatchBucket(int matId, int neededParticles)
@@ -3141,6 +3333,16 @@ namespace UnityRemix
                 _reusableTrailRendererMesh = new Mesh { name = "TrailRendererBakeMesh" };
             }
 
+            Vector3 camPos = mainCam.transform.position;
+            float maxParticleDist = (configParticleMaxDistance != null && configParticleMaxDistance.Value > 0f)
+                ? configParticleMaxDistance.Value
+                : 60f;
+            float maxParticleDistSqr = maxParticleDist * maxParticleDist;
+
+            int trackedTrails = trackedTrailRenderers.Count;
+            int renderingTrails = 0;
+            int culledTrails = 0;
+
             for (int i = 0; i < trackedTrailRenderers.Count; i++)
             {
                 var t = trackedTrailRenderers[i];
@@ -3150,6 +3352,14 @@ namespace UnityRemix
 
                 if (tr.positionCount < 2)
                     continue;
+
+                if (configEnableParticleDistanceCulling != null && configEnableParticleDistanceCulling.Value && (tr.transform.position - camPos).sqrMagnitude > maxParticleDistSqr)
+                {
+                    culledTrails++;
+                    continue;
+                }
+
+                renderingTrails++;
 
                 Material mat = tr.sharedMaterial;
                 if (mat == null)
@@ -3250,6 +3460,14 @@ namespace UnityRemix
                     if (configDebugLogInterval.Value > 0)
                         logger.LogWarning($"CaptureTrailRenderers failed on '{tr.name}': {ex.Message}");
                 }
+            }
+
+            var snap = _latestParticleStats;
+            if (snap != null)
+            {
+                snap.TotalTrackedTrails = trackedTrails;
+                snap.ActiveTrails = renderingTrails;
+                snap.DistanceCulledTrails = culledTrails;
             }
         }
         

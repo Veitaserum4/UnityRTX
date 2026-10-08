@@ -216,19 +216,100 @@ namespace UnityRemix
                 RemixImGui.Unindent();
             }
 
-            if (RemixImGui.Checkbox("Particle Distance Culling", ref _enableParticleDistanceCulling))
-                _plugin.SetConfig("EnableParticleDistanceCulling", _enableParticleDistanceCulling);
+            if (RemixImGui.Checkbox("Capture Particle Systems", ref _captureParticles))
+                _plugin.SetConfig("CaptureParticles", _captureParticles);
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Culls particle systems that are farther away than Particle Max Distance.");
+                RemixImGui.SetTooltip("Enables real-time capture and rendering of Unity particle systems and trails in RTX Remix.");
 
-            if (_enableParticleDistanceCulling)
+            if (_captureParticles)
             {
                 RemixImGui.Indent();
-                if (RemixImGui.SliderFloat("Particle Max Distance", ref _particleMaxDistance, 5f, 500f))
-                    _plugin.SetConfig("ParticleMaxDistance", _particleMaxDistance);
+                if (RemixImGui.Checkbox("Particle Distance Culling", ref _enableParticleDistanceCulling))
+                    _plugin.SetConfig("EnableParticleDistanceCulling", _enableParticleDistanceCulling);
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Maximum distance from camera to capture and render particle systems.\nCulls distant particles to maximize performance.");
+                    RemixImGui.SetTooltip("Culls particle systems that are farther away than Particle Max Distance.");
+
+                if (_enableParticleDistanceCulling)
+                {
+                    RemixImGui.Indent();
+                    if (RemixImGui.SliderFloat("Particle Max Distance", ref _particleMaxDistance, 5f, 500f, "%.0f"))
+                        _plugin.SetConfig("ParticleMaxDistance", _particleMaxDistance);
+                    if (RemixImGui.IsItemHovered())
+                        RemixImGui.SetTooltip("Maximum distance from camera to capture and render particle systems.\nCulls distant particles to maximize performance.");
+                    RemixImGui.Unindent();
+                }
+
+                var pStats = _plugin.FrameCapture?.LatestParticleStats;
+                if (pStats != null)
+                {
+                    RemixImGui.Spacing();
+                    RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Particle & Trail Diagnostics:");
+                    RemixImGui.Text($"Systems: {pStats.TotalTrackedSystems} tracked ({pStats.ActiveSystems} active, {pStats.DistanceCulledSystems} distance culled)");
+                    RemixImGui.Text($"Alive Particles: {pStats.RenderedParticles:N0} rendered | {pStats.CulledParticles:N0} culled ({pStats.EmittingSystems} emitting)");
+                    RemixImGui.Text($"GPU Meshes: {pStats.BatchedDrawCalls} batched billboards, {pStats.BakedMeshes} baked");
+                    RemixImGui.Text($"Trail Ribbons: {pStats.ActiveTrails} active / {pStats.TotalTrackedTrails} tracked ({pStats.DistanceCulledTrails} culled)");
+                    if (!string.IsNullOrEmpty(pStats.FurthestSystemName))
+                    {
+                        RemixImGui.TextColored(1.0f, 0.75f, 0.3f, 1.0f, $"Furthest Active: '{pStats.FurthestSystemName}' ({pStats.FurthestSystemDistance:F1}m)");
+                    }
+
+                    if (pStats.Emitters != null && pStats.Emitters.Length > 0)
+                    {
+                        if (RemixImGui.TreeNode($"Particle Systems Inspector ({pStats.Emitters.Length})##ps_inspector"))
+                        {
+                            int tableFlags = RemixImGui.TableFlags_Borders | RemixImGui.TableFlags_RowBg | RemixImGui.TableFlags_SizingStretchProp;
+                            if (RemixImGui.BeginTable("##particle_table", 4, tableFlags, 0, 250))
+                            {
+                                RemixImGui.TableSetupColumn("Name", 0, 0.50f);
+                                RemixImGui.TableSetupColumn("Distance", 0, 0.18f);
+                                RemixImGui.TableSetupColumn("Particles", 0, 0.14f);
+                                RemixImGui.TableSetupColumn("Status", 0, 0.18f);
+                                RemixImGui.TableHeadersRow();
+
+                                for (int e = 0; e < pStats.Emitters.Length; e++)
+                                {
+                                    var em = pStats.Emitters[e];
+                                    RemixImGui.TableNextRow();
+
+                                    RemixImGui.TableSetColumnIndex(0);
+                                    RemixImGui.Text(em.Name);
+
+                                    RemixImGui.TableSetColumnIndex(1);
+                                    if (em.Distance > 200f)
+                                        RemixImGui.TextColored(1.0f, 0.4f, 0.3f, 1.0f, $"{em.Distance:F1}m (!)");
+                                    else if (em.Distance > 60f)
+                                        RemixImGui.TextColored(1.0f, 0.8f, 0.3f, 1.0f, $"{em.Distance:F1}m");
+                                    else
+                                        RemixImGui.Text($"{em.Distance:F1}m");
+
+                                    RemixImGui.TableSetColumnIndex(2);
+                                    RemixImGui.Text(em.ParticleCount > 0 ? $"{em.ParticleCount}" : "-");
+
+                                    RemixImGui.TableSetColumnIndex(3);
+                                    if (em.Status == "Culled")
+                                        RemixImGui.TextColored(1.0f, 0.4f, 0.4f, 1.0f, em.Status);
+                                    else if (em.Status.StartsWith("Rendered"))
+                                        RemixImGui.TextColored(0.4f, 1.0f, 0.4f, 1.0f, em.Status);
+                                    else
+                                        RemixImGui.TextColored(0.6f, 0.6f, 0.6f, 1.0f, em.Status);
+                                }
+                                RemixImGui.EndTable();
+                            }
+                            RemixImGui.TreePop();
+                        }
+                    }
+                }
                 RemixImGui.Unindent();
+            }
+            else
+            {
+                var pStats = _plugin.FrameCapture?.LatestParticleStats;
+                if (pStats != null && pStats.TotalTrackedSystems > 0)
+                {
+                    RemixImGui.Indent();
+                    RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"({pStats.TotalTrackedSystems} particle systems & {pStats.TotalTrackedTrails} trails loaded in scene - capture disabled)");
+                    RemixImGui.Unindent();
+                }
             }
 
             if (RemixImGui.Checkbox("Skybox Autodetection (Requires Scene Reload)", ref _enableSkybox))
