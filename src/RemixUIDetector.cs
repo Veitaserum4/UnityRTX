@@ -21,6 +21,7 @@ namespace UnityRemix
 
         private readonly List<Camera> uiCameras = new List<Camera>();
         private readonly List<Camera> worldCameras = new List<Camera>();
+        private readonly List<Camera> auxiliaryCameras = new List<Camera>();
         private readonly Dictionary<Canvas, RenderMode> originalCanvasRenderModes = new Dictionary<Canvas, RenderMode>();
         private readonly Dictionary<Canvas, Camera> originalCanvasCameras = new Dictionary<Canvas, Camera>();
         private readonly HashSet<int> loggedRoutedCanvases = new HashSet<int>();
@@ -29,6 +30,7 @@ namespace UnityRemix
         private readonly HashSet<Canvas> disabledCompositorCanvases = new HashSet<Canvas>();
         private int lastLoggedWorldCamCount = -1;
         private int lastLoggedUICamCount = -1;
+        private int lastLoggedAuxCamCount = -1;
 
         // UI keywords: checked via token matching or substring for longer keywords
         private static readonly string[] UIKeywords = new string[]
@@ -119,6 +121,7 @@ namespace UnityRemix
 
         public IReadOnlyList<Camera> UICameras => uiCameras;
         public IReadOnlyList<Camera> WorldCameras => worldCameras;
+        public IReadOnlyList<Camera> AuxiliaryCameras => auxiliaryCameras;
 
         public RemixUIDetector(
             ManualLogSource logger,
@@ -174,7 +177,8 @@ namespace UnityRemix
                 if (cam == null) continue;
                 bool isUI = uiCameras.Contains(cam);
                 bool isWorld = worldCameras.Contains(cam);
-                string classification = isUI ? "UI" : (isWorld ? "World" : "Unclassified");
+                bool isAux = auxiliaryCameras.Contains(cam);
+                string classification = isUI ? "UI" : (isWorld ? "World" : (isAux ? "Auxiliary(RT)" : "Unclassified"));
                 string targetTexStr = cam.targetTexture != null
                     ? $"{cam.targetTexture.name} ({cam.targetTexture.width}x{cam.targetTexture.height}, fmt={cam.targetTexture.format})"
                     : "none";
@@ -250,6 +254,7 @@ namespace UnityRemix
         {
             uiCameras.Clear();
             worldCameras.Clear();
+            auxiliaryCameras.Clear();
 
             string curScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
             if (curScene != lastDumpedScene && !string.IsNullOrEmpty(curScene))
@@ -339,9 +344,25 @@ namespace UnityRemix
                     continue;
                 }
 
+                bool hasAssociatedCanvas = canvasCameras.Contains(cam) || cam.GetComponentInChildren<Canvas>() != null;
+
+                // Check if camera renders to an offscreen RenderTexture (minimaps, character previews, mirrors, CCTV)
+                RenderTexture origTarget = RemixUIOverlay.GetOriginalTargetTexture(cam);
+                if (origTarget != null)
+                {
+                    bool isCompositorTarget = IsCompositorTarget(origTarget);
+
+                    // If it has NO UI Canvases and is NOT a fullscreen compositor target, it is an Auxiliary Camera!
+                    // It must neither be suppressed (which breaks offscreen rendering) nor redirected to uiRenderTexture (which stretches it full screen).
+                    if (!hasAssociatedCanvas && !isCompositorTarget)
+                    {
+                        auxiliaryCameras.Add(cam);
+                        continue;
+                    }
+                }
+
                 // If camera renders 3D meshes and has NO UI canvases in or associated with it, classify as World
                 bool renders3D = (cam.cullingMask & nonUIThreeDMask) != 0;
-                bool hasAssociatedCanvas = canvasCameras.Contains(cam) || cam.GetComponentInChildren<Canvas>() != null;
                 if (renders3D && !hasAssociatedCanvas)
                 {
                     worldCameras.Add(cam);
@@ -438,11 +459,12 @@ namespace UnityRemix
 
             // Order UI cameras ascending by depth so they render in natural sequence
             uiCameras.Sort((a, b) => a.depth.CompareTo(b.depth));
-            if (worldCameras.Count != lastLoggedWorldCamCount || uiCameras.Count != lastLoggedUICamCount)
+            if (worldCameras.Count != lastLoggedWorldCamCount || uiCameras.Count != lastLoggedUICamCount || auxiliaryCameras.Count != lastLoggedAuxCamCount)
             {
                 lastLoggedWorldCamCount = worldCameras.Count;
                 lastLoggedUICamCount = uiCameras.Count;
-                logger?.LogInfo($"[RemixUIDetector] Scan complete: {worldCameras.Count} World Cameras, {uiCameras.Count} UI Cameras detected.");
+                lastLoggedAuxCamCount = auxiliaryCameras.Count;
+                logger?.LogInfo($"[RemixUIDetector] Scan complete: {worldCameras.Count} World Cameras, {uiCameras.Count} UI Cameras, {auxiliaryCameras.Count} Auxiliary Cameras detected.");
             }
         }
 
@@ -787,8 +809,10 @@ namespace UnityRemix
             originalCanvasCameras.Clear();
             loggedSanitizedCanvases.Clear();
             loggedRoutedCanvases.Clear();
+            auxiliaryCameras.Clear();
             lastLoggedWorldCamCount = -1;
             lastLoggedUICamCount = -1;
+            lastLoggedAuxCamCount = -1;
         }
 
         /// <summary>
@@ -857,6 +881,21 @@ namespace UnityRemix
                 }
             }
 
+            return false;
+        }
+
+        public bool IsCompositorTarget(RenderTexture rt)
+        {
+            if (rt == null) return false;
+            Camera primaryWorld = Camera.main;
+            if (primaryWorld != null && primaryWorld.targetTexture == rt) return true;
+            string texName = (rt.name ?? "").ToLowerInvariant();
+            if (texName.Contains("render texture main") || texName.Contains("rendertexturemain") ||
+                texName.Contains("render texture overlay") || texName.Contains("rendertextureoverlay") ||
+                texName.Contains("screenblit") || texName.Contains("screen quad"))
+            {
+                return true;
+            }
             return false;
         }
 

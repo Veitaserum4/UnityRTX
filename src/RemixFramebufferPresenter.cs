@@ -318,6 +318,28 @@ namespace UnityRemix
 
         private void ApplyCameraSuppressionInternal()
         {
+            // Restore any camera that was previously suppressed but is no longer in WorldCameras (e.g. now Auxiliary)
+            var unsuppressed = new List<Camera>();
+            foreach (var kvp in originalCullingMasks)
+            {
+                if (kvp.Key != null && !uiDetector.WorldCameras.Contains(kvp.Key))
+                {
+                    unsuppressed.Add(kvp.Key);
+                }
+            }
+            foreach (var cam in unsuppressed)
+            {
+                if (originalCullingMasks.TryGetValue(cam, out int origMask))
+                {
+                    cam.cullingMask = origMask;
+                    if (originalClearFlags.TryGetValue(cam, out var origClear))
+                        cam.clearFlags = origClear;
+                    originalCullingMasks.Remove(cam);
+                    originalClearFlags.Remove(cam);
+                    logger?.LogInfo($"[RemixFramebufferPresenter] Restored suppression on non-world camera '{cam.name}'.");
+                }
+            }
+
             // Suppress 3D World Cameras
             int suppressedCount = 0;
             foreach (var cam in uiDetector.WorldCameras)

@@ -284,6 +284,8 @@ namespace UnityRemix
             return Instance.managedCameras.Contains(cam);
         }
 
+        public RenderTexture UIRenderTexture => uiRenderTexture;
+
         public static bool TryGetOriginalCameraDimensions(Camera cam, out int width, out int height)
         {
             width = 0;
@@ -296,6 +298,20 @@ namespace UnityRemix
                 return width > 0 && height > 0;
             }
             return false;
+        }
+
+        public static RenderTexture GetOriginalTargetTexture(Camera cam)
+        {
+            if (cam == null) return null;
+            if (Instance != null && Instance.originalCameraStates.TryGetValue(cam, out var state))
+            {
+                return state.targetTexture;
+            }
+            if (Instance != null && Instance.uiRenderTexture != null && cam.targetTexture == Instance.uiRenderTexture)
+            {
+                return null;
+            }
+            return cam.targetTexture;
         }
 
         public void RebindAllUICameras()
@@ -500,6 +516,35 @@ namespace UnityRemix
             int height = Screen.height > 0 ? Screen.height : 1080;
 
             EnsureRenderTexture(width, height);
+
+            // Restore any cameras that were previously managed but are no longer in uiCameras
+            var unmanagedCams = new List<Camera>();
+            foreach (var kvp in originalCameraStates)
+            {
+                if (kvp.Key != null && !uiCameras.Contains(kvp.Key))
+                {
+                    unmanagedCams.Add(kvp.Key);
+                }
+            }
+
+            foreach (var cam in unmanagedCams)
+            {
+                if (originalCameraStates.TryGetValue(cam, out var savedState))
+                {
+                    var hook = cam.GetComponent<RemixUICameraHook>();
+                    if (hook != null)
+                    {
+                        UnityEngine.Object.Destroy(hook);
+                    }
+
+                    cam.targetTexture = savedState.targetTexture;
+                    cam.clearFlags = savedState.clearFlags;
+                    cam.backgroundColor = savedState.backgroundColor;
+                    originalCameraStates.Remove(cam);
+                    managedCameras.Remove(cam);
+                    logger?.LogInfo($"[RemixUIOverlay] Restored unmanaged camera '{cam.name}' to original targetTexture ({savedState.targetTexture?.name ?? "null"}).");
+                }
+            }
 
             managedCameras.Clear();
             var sortedCams = uiCameras.Where(c => c != null).OrderBy(c => c.depth).ToList();

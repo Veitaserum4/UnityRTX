@@ -143,6 +143,18 @@ namespace UnityRemix
                         if (c != null)
                             RemixImGui.Text($"  - {c.name} (Depth: {c.depth})");
                     }
+
+                    var auxCams = presenter.UIDetector.AuxiliaryCameras;
+                    if (auxCams != null && auxCams.Count > 0)
+                    {
+                        RemixImGui.Text($"Detected Auxiliary RT Cameras ({auxCams.Count}):");
+                        for (int i = 0; i < auxCams.Count; i++)
+                        {
+                            var c = auxCams[i];
+                            if (c != null)
+                                RemixImGui.Text($"  - {c.name} (Target: {c.targetTexture?.name ?? "none"})");
+                        }
+                    }
                 }
 
                 RemixImGui.Spacing();
