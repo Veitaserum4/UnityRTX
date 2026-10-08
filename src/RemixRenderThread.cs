@@ -52,6 +52,7 @@ namespace UnityRemix
         private SceneMeshScanner sceneMeshScanner;
         private RemixSkyboxManager skyboxManager;
         private RemixTerrainManager terrainManager;
+        private readonly HashSet<ulong> updatedMeshes = new HashSet<ulong>();
         
         public void SetSkyboxManager(RemixSkyboxManager manager)
         {
@@ -507,7 +508,7 @@ namespace UnityRemix
             if (state.skinned == null || state.skinned.Count == 0)
                 return startObjectPickingValue;
             
-            HashSet<ulong> updatedMeshes = new HashSet<ulong>();
+            updatedMeshes.Clear();
             uint objectPickingValue = startObjectPickingValue;
             
             foreach (var skinned in state.skinned)

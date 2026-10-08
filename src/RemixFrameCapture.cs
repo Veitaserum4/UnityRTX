@@ -89,6 +89,16 @@ namespace UnityRemix
         private readonly List<ParticleBatchBucket> _activeParticleBatches = new List<ParticleBatchBucket>();
         private readonly List<ParticleBatchBucket> _batchBucketPool = new List<ParticleBatchBucket>();
         private readonly HashSet<int> _capturedParticleMatIds = new HashSet<int>();
+        private readonly Dictionary<int, Color> _materialTintCache = new Dictionary<int, Color>();
+
+        // TrailRenderer caching
+        private struct TrackedTrailRenderer
+        {
+            public TrailRenderer renderer;
+            public int id;
+        }
+        private readonly List<TrackedTrailRenderer> trackedTrailRenderers = new List<TrackedTrailRenderer>();
+        private readonly HashSet<int> trackedTrailRendererIds = new HashSet<int>();
 
         // Scrolling UV mesh tracking
         private static readonly int PropScrollOffset = Shader.PropertyToID("_ScrollOffset");
@@ -722,7 +732,10 @@ namespace UnityRemix
             }
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            trackedTrailRenderers.Clear();
+            trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
+            _materialTintCache.Clear();
             logger.LogInfo("Renderer caches invalidated");
         }
         
@@ -737,7 +750,10 @@ namespace UnityRemix
             cachedSkinnedRendererIds.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            trackedTrailRenderers.Clear();
+            trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
+            _materialTintCache.Clear();
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();
             cachedScrollingRenderers.Clear();
@@ -794,6 +810,20 @@ namespace UnityRemix
                             id = pr.GetInstanceID()
                         });
                     }
+                }
+            }
+
+            var allTrails = UnityCompat.FindActiveSceneComponents<TrailRenderer>();
+            for (int i = 0; i < allTrails.Length; i++)
+            {
+                var tr = allTrails[i];
+                if (tr != null && trackedTrailRendererIds.Add(tr.GetInstanceID()))
+                {
+                    trackedTrailRenderers.Add(new TrackedTrailRenderer
+                    {
+                        renderer = tr,
+                        id = tr.GetInstanceID()
+                    });
                 }
             }
 
@@ -2454,12 +2484,6 @@ namespace UnityRemix
                 if (configEnableParticleDistanceCulling != null && configEnableParticleDistanceCulling.Value && (pr.transform.position - camPos).sqrMagnitude > maxParticleDistSqr)
                     continue;
 
-                var main = ps.main;
-                if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
-                {
-                    main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
-                }
-
                 int numAlive = ps.particleCount;
                 if (numAlive <= 0) continue;
 
@@ -2481,12 +2505,12 @@ namespace UnityRemix
                 }
                 if (mat == null) continue;
 
-                // Sample color from active particles or system start color
+                // Sample color from active particles (fast struct read) or fallback
                 Color pCol = Color.white;
                 bool foundAliveColor = false;
-                for (int pIdx = 0; pIdx < Math.Min(actualAlive, 16); pIdx++)
+                for (int pIdx = 0; pIdx < Math.Min(actualAlive, 8); pIdx++)
                 {
-                    Color32 c = _particleBuffer[pIdx].GetCurrentColor(ps);
+                    Color32 c = _particleBuffer[pIdx].startColor;
                     if (c.a > 10 && (c.r > 10 || c.g > 10 || c.b > 10))
                     {
                         pCol = (Color)c;
@@ -2494,8 +2518,18 @@ namespace UnityRemix
                         break;
                     }
                 }
+                if (!foundAliveColor && actualAlive > 0)
+                {
+                    Color32 c = _particleBuffer[0].GetCurrentColor(ps);
+                    if (c.a > 10 && (c.r > 10 || c.g > 10 || c.b > 10))
+                    {
+                        pCol = (Color)c;
+                        foundAliveColor = true;
+                    }
+                }
                 if (!foundAliveColor)
                 {
+                    var main = ps.main;
                     var startColor = main.startColor;
                     if (startColor.mode == ParticleSystemGradientMode.Color)
                         pCol = startColor.color;
@@ -2505,14 +2539,19 @@ namespace UnityRemix
                         pCol = startColor.gradient.Evaluate(0.5f);
                 }
 
-                // Check material tint
-                Color matTint = Color.white;
-                if (mat.HasProperty("_TintColor"))
-                    matTint = mat.GetColor("_TintColor");
-                else if (mat.HasProperty("_Color"))
-                    matTint = mat.GetColor("_Color");
-                else if (mat.HasProperty("_BaseColor"))
-                    matTint = mat.GetColor("_BaseColor");
+                // Check material tint using cache
+                int matInstId = mat.GetInstanceID();
+                if (!_materialTintCache.TryGetValue(matInstId, out Color matTint))
+                {
+                    matTint = Color.white;
+                    if (mat.HasProperty("_TintColor"))
+                        matTint = mat.GetColor("_TintColor");
+                    else if (mat.HasProperty("_Color"))
+                        matTint = mat.GetColor("_Color");
+                    else if (mat.HasProperty("_BaseColor"))
+                        matTint = mat.GetColor("_BaseColor");
+                    _materialTintCache[matInstId] = matTint;
+                }
 
                 Color finalParticleColor = new Color(
                     pCol.r * matTint.r,
@@ -2662,10 +2701,15 @@ namespace UnityRemix
             Vector3 camForward,
             bool isSurfaceAligned = false)
         {
-            bool isWorldSpace = ps.main.simulationSpace == ParticleSystemSimulationSpace.World;
-            bool isCustomSpace = ps.main.simulationSpace == ParticleSystemSimulationSpace.Custom && ps.main.customSimulationSpace != null;
+            var mainModule = ps.main;
+            bool isWorldSpace = mainModule.simulationSpace == ParticleSystemSimulationSpace.World;
+            bool isCustomSpace = mainModule.simulationSpace == ParticleSystemSimulationSpace.Custom && mainModule.customSimulationSpace != null;
             Matrix4x4 sysTransform = isWorldSpace ? Matrix4x4.identity 
-                : (isCustomSpace ? ps.main.customSimulationSpace.localToWorldMatrix : ps.transform.localToWorldMatrix);
+                : (isCustomSpace ? mainModule.customSimulationSpace.localToWorldMatrix : ps.transform.localToWorldMatrix);
+
+            bool isStartSize3D = mainModule.startSize3D;
+            bool hasSizeOverLifetime = ps.sizeOverLifetime.enabled;
+            bool hasColorOverLifetime = ps.colorOverLifetime.enabled;
 
             var texModule = ps.textureSheetAnimation;
             bool useTexSheet = texModule.enabled;
@@ -2679,6 +2723,7 @@ namespace UnityRemix
             bool isHorizontal = renderMode == ParticleSystemRenderMode.HorizontalBillboard;
             bool isVertical = renderMode == ParticleSystemRenderMode.VerticalBillboard;
             bool isStretch = renderMode == ParticleSystemRenderMode.Stretch;
+            bool isStandardView = !isSurfaceAligned && !isHorizontal && !isVertical && !isStretch && alignment == ParticleSystemRenderSpace.View;
 
             Vector3 upDir = pr.transform.up;
             if (upDir.sqrMagnitude < 0.001f) upDir = Vector3.up;
@@ -2694,16 +2739,43 @@ namespace UnityRemix
             {
                 var p = _particleBuffer[i];
                 Vector3 pos = isWorldSpace ? p.position : sysTransform.MultiplyPoint3x4(p.position);
-                Vector3 size = ps.main.startSize3D ? p.GetCurrentSize3D(ps) : (Vector3.one * p.GetCurrentSize(ps));
-                Color32 col = p.GetCurrentColor(ps);
+                
+                Vector3 size;
+                if (hasSizeOverLifetime)
+                    size = isStartSize3D ? p.GetCurrentSize3D(ps) : (Vector3.one * p.GetCurrentSize(ps));
+                else
+                    size = isStartSize3D ? p.startSize3D : (Vector3.one * p.startSize);
 
-                float rot = p.rotation * Mathf.Deg2Rad;
-                float cosR = Mathf.Cos(rot);
-                float sinR = Mathf.Sin(rot);
+                Color32 col = hasColorOverLifetime ? p.GetCurrentColor(ps) : p.startColor;
+
+                float rot = p.rotation;
+                float cosR = 1f;
+                float sinR = 0f;
+                if (rot != 0f)
+                {
+                    float rotRad = rot * Mathf.Deg2Rad;
+                    cosR = Mathf.Cos(rotRad);
+                    sinR = Mathf.Sin(rotRad);
+                }
 
                 Vector3 hR, hU;
-                Vector3 rAxis, uAxis;
-                if (isSurfaceAligned)
+                Vector3 rAxis = camRight, uAxis = camUp;
+                if (isStandardView)
+                {
+                    if (rot == 0f)
+                    {
+                        hR = camRight * (size.x * 0.5f);
+                        hU = camUp * (size.y * 0.5f);
+                    }
+                    else
+                    {
+                        rAxis = camRight * cosR + camUp * sinR;
+                        uAxis = -camRight * sinR + camUp * cosR;
+                        hR = rAxis * (size.x * 0.5f);
+                        hU = uAxis * (size.y * 0.5f);
+                    }
+                }
+                else if (isSurfaceAligned)
                 {
                     Vector3 rightDir = pr.transform.right;
                     Vector3 fwdDir = pr.transform.forward;
@@ -2800,15 +2872,18 @@ namespace UnityRemix
                 }
                 else
                 {
-                    // Standard View Billboard (faces camera plane)
                     rAxis = camRight * cosR + camUp * sinR;
                     uAxis = -camRight * sinR + camUp * cosR;
                     hR = rAxis * (size.x * 0.5f);
                     hU = uAxis * (size.y * 0.5f);
                 }
 
-                Vector3 norm = isSurfaceAligned ? upDir : Vector3.Cross(uAxis, rAxis).normalized;
-                if (norm.sqrMagnitude < 0.001f) norm = defaultNormal;
+                Vector3 norm = defaultNormal;
+                if (!isStandardView)
+                {
+                    norm = isSurfaceAligned ? upDir : Vector3.Cross(uAxis, rAxis).normalized;
+                    if (norm.sqrMagnitude < 0.001f) norm = defaultNormal;
+                }
 
                 int vi = baseVert + i * 4;
                 bucket.Vertices.Add(pos - hR - hU);
@@ -3008,8 +3083,57 @@ namespace UnityRemix
             if (mainCam == null || !mainCam.gameObject.activeInHierarchy || !mainCam.enabled || Time.frameCount < 10)
                 return;
 
-            var activeTrails = UnityCompat.FindActiveSceneComponents<TrailRenderer>();
-            if (activeTrails == null || activeTrails.Length == 0)
+            // Throttle discovery of newly spawned TrailRenderers to avoid full-scene sweeps every frame
+            if (frameCount % 30 == 0)
+            {
+                var activeTrails = UnityCompat.FindActiveSceneComponents<TrailRenderer>();
+                for (int a = 0; a < activeTrails.Length; a++)
+                {
+                    var ar = activeTrails[a];
+                    if (ar != null && trackedTrailRendererIds.Add(ar.GetInstanceID()))
+                    {
+                        trackedTrailRenderers.Add(new TrackedTrailRenderer
+                        {
+                            renderer = ar,
+                            id = ar.GetInstanceID()
+                        });
+                    }
+                }
+            }
+
+            // Always check camera hierarchy every frame for instantaneous first-person / viewmodel trails
+            if (mainCam != null)
+            {
+                var camTrails = mainCam.GetComponentsInChildren<TrailRenderer>(false);
+                for (int a = 0; a < camTrails.Length; a++)
+                {
+                    var ar = camTrails[a];
+                    if (ar != null && trackedTrailRendererIds.Add(ar.GetInstanceID()))
+                    {
+                        trackedTrailRenderers.Add(new TrackedTrailRenderer
+                        {
+                            renderer = ar,
+                            id = ar.GetInstanceID()
+                        });
+                    }
+                }
+            }
+
+            // Periodically prune destroyed trail renderers
+            if (frameCount % 180 == 0)
+            {
+                for (int d = trackedTrailRenderers.Count - 1; d >= 0; d--)
+                {
+                    var t = trackedTrailRenderers[d];
+                    if (t.renderer == null)
+                    {
+                        trackedTrailRendererIds.Remove(t.id);
+                        trackedTrailRenderers.RemoveAt(d);
+                    }
+                }
+            }
+
+            if (trackedTrailRenderers.Count == 0)
                 return;
 
             if (_reusableTrailRendererMesh == null)
@@ -3017,9 +3141,10 @@ namespace UnityRemix
                 _reusableTrailRendererMesh = new Mesh { name = "TrailRendererBakeMesh" };
             }
 
-            for (int i = 0; i < activeTrails.Length; i++)
+            for (int i = 0; i < trackedTrailRenderers.Count; i++)
             {
-                var tr = activeTrails[i];
+                var t = trackedTrailRenderers[i];
+                var tr = t.renderer;
                 if (tr == null || !tr.enabled || !tr.gameObject.activeInHierarchy)
                     continue;
 
@@ -3053,13 +3178,19 @@ namespace UnityRemix
                     if (trCol.a <= 0.01f && tr.colorGradient != null)
                         trCol = tr.colorGradient.Evaluate(0.5f);
 
-                    Color matTint = Color.white;
-                    if (mat.HasProperty("_TintColor"))
-                        matTint = mat.GetColor("_TintColor");
-                    else if (mat.HasProperty("_Color"))
-                        matTint = mat.GetColor("_Color");
-                    else if (mat.HasProperty("_BaseColor"))
-                        matTint = mat.GetColor("_BaseColor");
+                    // Check material tint using cache
+                    int matInstId = mat.GetInstanceID();
+                    if (!_materialTintCache.TryGetValue(matInstId, out Color matTint))
+                    {
+                        matTint = Color.white;
+                        if (mat.HasProperty("_TintColor"))
+                            matTint = mat.GetColor("_TintColor");
+                        else if (mat.HasProperty("_Color"))
+                            matTint = mat.GetColor("_Color");
+                        else if (mat.HasProperty("_BaseColor"))
+                            matTint = mat.GetColor("_BaseColor");
+                        _materialTintCache[matInstId] = matTint;
+                    }
 
                     Color finalTrailCol = new Color(
                         trCol.r * matTint.r,
@@ -3085,13 +3216,16 @@ namespace UnityRemix
                     int trailMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
                     float emIntensity = (r4 != g4 || g4 != b4) ? 0.8f : 0.2f;
 
-                    materialManager.CaptureMaterialTextures(
-                        mat,
-                        trailMatId,
-                        mpbEmissiveColor: quantizedColor,
-                        mpbEmissiveIntensity: emIntensity,
-                        mpbColor: quantizedColor
-                    );
+                    if (_capturedParticleMatIds.Add(trailMatId))
+                    {
+                        materialManager.CaptureMaterialTextures(
+                            mat,
+                            trailMatId,
+                            mpbEmissiveColor: quantizedColor,
+                            mpbEmissiveIntensity: emIntensity,
+                            mpbColor: quantizedColor
+                        );
+                    }
 
                     ulong remixMeshHash = (ulong)(uint)tr.GetInstanceID() | 0x4C00000000000000UL;
 

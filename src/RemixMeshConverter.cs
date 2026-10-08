@@ -546,14 +546,17 @@ namespace UnityRemix
                 return IntPtr.Zero;
             }
             
-            // Validate indices
-            for (int i = 0; i < triangles.Length; i++)
+            // Validate indices (skip for bridge-generated particle meshes where indices are mathematically guaranteed valid)
+            if ((meshHash & 0x4000000000000000UL) == 0)
             {
-                if (triangles[i] < 0 || triangles[i] >= vertices.Length)
+                for (int i = 0; i < triangles.Length; i++)
                 {
-                    if (skinnedRenderCount % 300 == 1)
-                        logger.LogError($"Skinned mesh {meshHash} has out-of-bounds index");
-                    return IntPtr.Zero;
+                    if (triangles[i] < 0 || triangles[i] >= vertices.Length)
+                    {
+                        if (skinnedRenderCount % 300 == 1)
+                            logger.LogError($"Skinned mesh {meshHash} has out-of-bounds index");
+                        return IntPtr.Zero;
+                    }
                 }
             }
             
