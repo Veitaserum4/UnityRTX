@@ -61,6 +61,35 @@ namespace UnityRemix
         private static Mesh _reusableTrailRendererMesh = null;
         private int rendererCacheFrame = -1;
 
+        // Particle batching
+        private class ParticleBatchBucket
+        {
+            public int MaterialId;
+            public int SubBucketIndex;
+            public int ParticleCount;
+            public readonly List<Vector3> Vertices = new List<Vector3>(2048);
+            public readonly List<Vector3> Normals = new List<Vector3>(2048);
+            public readonly List<Vector2> UVs = new List<Vector2>(2048);
+            public readonly List<Color32> Colors = new List<Color32>(2048);
+            public readonly List<int> Triangles = new List<int>(3072);
+
+            public void Reset(int matId, int subBucket)
+            {
+                MaterialId = matId;
+                SubBucketIndex = subBucket;
+                ParticleCount = 0;
+                Vertices.Clear();
+                Normals.Clear();
+                UVs.Clear();
+                Colors.Clear();
+                Triangles.Clear();
+            }
+        }
+        private readonly Dictionary<int, ParticleBatchBucket> _particleBatchesByMat = new Dictionary<int, ParticleBatchBucket>();
+        private readonly List<ParticleBatchBucket> _activeParticleBatches = new List<ParticleBatchBucket>();
+        private readonly List<ParticleBatchBucket> _batchBucketPool = new List<ParticleBatchBucket>();
+        private readonly HashSet<int> _capturedParticleMatIds = new HashSet<int>();
+
         // Scrolling UV mesh tracking
         private static readonly int PropScrollOffset = Shader.PropertyToID("_ScrollOffset");
         private class CachedScrollingMesh
@@ -691,6 +720,9 @@ namespace UnityRemix
             {
                 persistentStaticInstances.Clear();
             }
+            trackedParticleSystems.Clear();
+            trackedParticleSystemIds.Clear();
+            _capturedParticleMatIds.Clear();
             logger.LogInfo("Renderer caches invalidated");
         }
         
@@ -705,6 +737,7 @@ namespace UnityRemix
             cachedSkinnedRendererIds.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            _capturedParticleMatIds.Clear();
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();
             cachedScrollingRenderers.Clear();
@@ -2332,37 +2365,75 @@ namespace UnityRemix
                 : 60f;
             float maxParticleDistSqr = maxParticleDist * maxParticleDist;
 
-            // Check active particle renderers every frame to capture transient particles immediately (bullet impacts, sparks, newly spawned systems)
-            var activeRenderers = UnityCompat.FindActiveSceneComponents<ParticleSystemRenderer>();
-            for (int a = 0; a < activeRenderers.Length; a++)
+            // Recycle batch buckets from previous frame
+            for (int b = 0; b < _activeParticleBatches.Count; b++)
             {
-                var ar = activeRenderers[a];
-                if (ar != null && trackedParticleSystemIds.Add(ar.GetInstanceID()))
-                {
-                    var aps = ar.GetComponent<ParticleSystem>();
-                    if (aps != null)
-                    {
-                        var main = aps.main;
-                        if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
-                            main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+                _batchBucketPool.Add(_activeParticleBatches[b]);
+            }
+            _activeParticleBatches.Clear();
+            _particleBatchesByMat.Clear();
 
-                        trackedParticleSystems.Add(new TrackedParticleSystem
+            // Check active particle renderers periodically to capture newly spawned systems without sweeping full scene every frame
+            if (frameCount % 30 == 0)
+            {
+                var activeRenderers = UnityCompat.FindActiveSceneComponents<ParticleSystemRenderer>();
+                for (int a = 0; a < activeRenderers.Length; a++)
+                {
+                    var ar = activeRenderers[a];
+                    if (ar != null && trackedParticleSystemIds.Add(ar.GetInstanceID()))
+                    {
+                        var aps = ar.GetComponent<ParticleSystem>();
+                        if (aps != null)
                         {
-                            renderer = ar,
-                            system = aps,
-                            id = ar.GetInstanceID()
-                        });
+                            var main = aps.main;
+                            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+
+                            trackedParticleSystems.Add(new TrackedParticleSystem
+                            {
+                                renderer = ar,
+                                system = aps,
+                                id = ar.GetInstanceID()
+                            });
+                        }
                     }
                 }
             }
 
-            // Periodically prune dead or deactivated particle systems to keep tracking lean
+            // Always check camera hierarchy every frame for instantaneous first-person / viewmodel particle discovery
+            if (mainCam != null)
+            {
+                var camRenderers = mainCam.GetComponentsInChildren<ParticleSystemRenderer>(false);
+                for (int a = 0; a < camRenderers.Length; a++)
+                {
+                    var ar = camRenderers[a];
+                    if (ar != null && trackedParticleSystemIds.Add(ar.GetInstanceID()))
+                    {
+                        var aps = ar.GetComponent<ParticleSystem>();
+                        if (aps != null)
+                        {
+                            var main = aps.main;
+                            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+
+                            trackedParticleSystems.Add(new TrackedParticleSystem
+                            {
+                                renderer = ar,
+                                system = aps,
+                                id = ar.GetInstanceID()
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Periodically prune destroyed particle systems
             if (frameCount % 180 == 0)
             {
                 for (int d = trackedParticleSystems.Count - 1; d >= 0; d--)
                 {
                     var t = trackedParticleSystems[d];
-                    if (t.renderer == null || t.system == null || !t.renderer.gameObject.activeInHierarchy)
+                    if (t.renderer == null || t.system == null)
                     {
                         trackedParticleSystemIds.Remove(t.id);
                         trackedParticleSystems.RemoveAt(d);
@@ -2468,13 +2539,16 @@ namespace UnityRemix
                 int tintedMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
                 float emIntensity = (r4 != g4 || g4 != b4) ? 0.8f : 0.2f;
 
-                materialManager.CaptureMaterialTextures(
-                    mat, 
-                    tintedMatId, 
-                    mpbEmissiveColor: quantizedColor, 
-                    mpbEmissiveIntensity: emIntensity, 
-                    mpbColor: quantizedColor
-                );
+                if (_capturedParticleMatIds.Add(tintedMatId))
+                {
+                    materialManager.CaptureMaterialTextures(
+                        mat, 
+                        tintedMatId, 
+                        mpbEmissiveColor: quantizedColor, 
+                        mpbEmissiveIntensity: emIntensity, 
+                        mpbColor: quantizedColor
+                    );
+                }
 
                 if (configDebugLogInterval.Value > 0)
                 {
@@ -2504,13 +2578,15 @@ namespace UnityRemix
                     if (!BakeMeshParticleSystem(pr, mainCam, tintedMatId, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
-                        GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned);
+                        var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
+                        AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, isSurfaceAligned);
                     }
                 }
                 else
                 {
                     int particlesToDraw = Math.Min(actualAlive, 4096);
-                    GenerateBillboardParticleSystem(pr, ps, particlesToDraw, tintedMatId, mainCam, camRight, camUp, camForward, state, isSurfaceAligned);
+                    var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
+                    AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, isSurfaceAligned);
                 }
 
                 // Capture trails if enabled on this particle system
@@ -2520,29 +2596,72 @@ namespace UnityRemix
                     BakeParticleTrails(pr, ps, mainCam, quantizedColor, emIntensity, state);
                 }
             }
+
+            // Emit batched billboard meshes to state.skinned
+            for (int b = 0; b < _activeParticleBatches.Count; b++)
+            {
+                var bucket = _activeParticleBatches[b];
+                if (bucket.ParticleCount <= 0 || bucket.Vertices.Count == 0) continue;
+
+                ulong remixMeshHash = 0x4000000000000000UL | ((ulong)(uint)bucket.SubBucketIndex << 32) | (ulong)(uint)bucket.MaterialId;
+
+                state.skinned.Add(new SkinnedMeshData
+                {
+                    meshId = bucket.MaterialId,
+                    remixMeshHash = remixMeshHash,
+                    materialId = bucket.MaterialId,
+                    vertices = bucket.Vertices.ToArray(),
+                    normals = bucket.Normals.ToArray(),
+                    uvs = bucket.UVs.ToArray(),
+                    colors = bucket.Colors.ToArray(),
+                    triangles = bucket.Triangles.ToArray(),
+                    localToWorld = Matrix4x4.identity,
+                    boneTransforms = null,
+                    skinningData = null,
+                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
+                });
+            }
         }
 
-        private void GenerateBillboardParticleSystem(
+        private ParticleBatchBucket GetOrCreateBatchBucket(int matId, int neededParticles)
+        {
+            if (_particleBatchesByMat.TryGetValue(matId, out var existing))
+            {
+                if (existing.Vertices.Count + neededParticles * 4 <= 65535)
+                    return existing;
+            }
+
+            int subIndex = existing != null ? existing.SubBucketIndex + 1 : 0;
+
+            ParticleBatchBucket bucket;
+            if (_batchBucketPool.Count > 0)
+            {
+                bucket = _batchBucketPool[_batchBucketPool.Count - 1];
+                _batchBucketPool.RemoveAt(_batchBucketPool.Count - 1);
+                bucket.Reset(matId, subIndex);
+            }
+            else
+            {
+                bucket = new ParticleBatchBucket();
+                bucket.Reset(matId, subIndex);
+            }
+
+            _particleBatchesByMat[matId] = bucket;
+            _activeParticleBatches.Add(bucket);
+            return bucket;
+        }
+
+        private void AppendBillboardParticles(
+            ParticleBatchBucket bucket,
             ParticleSystemRenderer pr,
             ParticleSystem ps,
             int numParticlesAlive,
-            int matId,
             Camera cam,
             Vector3 camRight,
             Vector3 camUp,
             Vector3 camForward,
-            FrameState state,
             bool isSurfaceAligned = false)
         {
-            int vertCount = numParticlesAlive * 4;
-            int triCount = numParticlesAlive * 6;
-
-            Vector3[] verts = new Vector3[vertCount];
-            Vector3[] normals = new Vector3[vertCount];
-            Vector2[] uvs = new Vector2[vertCount];
-            Color32[] colors = new Color32[vertCount];
-            int[] tris = new int[triCount];
-
             bool isWorldSpace = ps.main.simulationSpace == ParticleSystemSimulationSpace.World;
             bool isCustomSpace = ps.main.simulationSpace == ParticleSystemSimulationSpace.Custom && ps.main.customSimulationSpace != null;
             Matrix4x4 sysTransform = isWorldSpace ? Matrix4x4.identity 
@@ -2568,6 +2687,8 @@ namespace UnityRemix
             if (isSurfaceAligned) defaultNormal = upDir;
             else if (isHorizontal || alignment == ParticleSystemRenderSpace.World) defaultNormal = Vector3.up;
             else if (alignment == ParticleSystemRenderSpace.Local) defaultNormal = pr.transform.forward;
+
+            int baseVert = bucket.Vertices.Count;
 
             for (int i = 0; i < numParticlesAlive; i++)
             {
@@ -2689,16 +2810,16 @@ namespace UnityRemix
                 Vector3 norm = isSurfaceAligned ? upDir : Vector3.Cross(uAxis, rAxis).normalized;
                 if (norm.sqrMagnitude < 0.001f) norm = defaultNormal;
 
-                int vi = i * 4;
-                verts[vi + 0] = pos - hR - hU;
-                verts[vi + 1] = pos + hR - hU;
-                verts[vi + 2] = pos + hR + hU;
-                verts[vi + 3] = pos - hR + hU;
+                int vi = baseVert + i * 4;
+                bucket.Vertices.Add(pos - hR - hU);
+                bucket.Vertices.Add(pos + hR - hU);
+                bucket.Vertices.Add(pos + hR + hU);
+                bucket.Vertices.Add(pos - hR + hU);
 
-                normals[vi + 0] = norm;
-                normals[vi + 1] = norm;
-                normals[vi + 2] = norm;
-                normals[vi + 3] = norm;
+                bucket.Normals.Add(norm);
+                bucket.Normals.Add(norm);
+                bucket.Normals.Add(norm);
+                bucket.Normals.Add(norm);
 
                 float uvX0 = 0f, uvX1 = 1f, uvY0 = 0f, uvY1 = 1f;
                 if (useTexSheet)
@@ -2714,42 +2835,25 @@ namespace UnityRemix
                     uvY1 = (ty + 1) * uvHeight;
                 }
 
-                uvs[vi + 0] = new Vector2(uvX0, uvY0);
-                uvs[vi + 1] = new Vector2(uvX1, uvY0);
-                uvs[vi + 2] = new Vector2(uvX1, uvY1);
-                uvs[vi + 3] = new Vector2(uvX0, uvY1);
+                bucket.UVs.Add(new Vector2(uvX0, uvY0));
+                bucket.UVs.Add(new Vector2(uvX1, uvY0));
+                bucket.UVs.Add(new Vector2(uvX1, uvY1));
+                bucket.UVs.Add(new Vector2(uvX0, uvY1));
 
-                colors[vi + 0] = col;
-                colors[vi + 1] = col;
-                colors[vi + 2] = col;
-                colors[vi + 3] = col;
+                bucket.Colors.Add(col);
+                bucket.Colors.Add(col);
+                bucket.Colors.Add(col);
+                bucket.Colors.Add(col);
 
-                int ti = i * 6;
-                tris[ti + 0] = vi + 0;
-                tris[ti + 1] = vi + 2;
-                tris[ti + 2] = vi + 1;
-                tris[ti + 3] = vi + 0;
-                tris[ti + 4] = vi + 3;
-                tris[ti + 5] = vi + 2;
+                bucket.Triangles.Add(vi + 0);
+                bucket.Triangles.Add(vi + 2);
+                bucket.Triangles.Add(vi + 1);
+                bucket.Triangles.Add(vi + 0);
+                bucket.Triangles.Add(vi + 3);
+                bucket.Triangles.Add(vi + 2);
             }
 
-            ulong remixMeshHash = (ulong)(uint)pr.GetInstanceID() | 0x4000000000000000UL;
-
-            state.skinned.Add(new SkinnedMeshData
-            {
-                meshId = pr.GetInstanceID(),
-                remixMeshHash = remixMeshHash,
-                materialId = matId,
-                vertices = verts,
-                normals = normals,
-                uvs = uvs,
-                colors = colors,
-                triangles = tris,
-                localToWorld = Matrix4x4.identity,
-                boneTransforms = null,
-                skinningData = null,
-                categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
-            });
+            bucket.ParticleCount += numParticlesAlive;
         }
 
         private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, Camera cam, int matId, FrameState state)
