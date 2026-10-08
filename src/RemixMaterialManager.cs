@@ -227,6 +227,58 @@ namespace UnityRemix
             
             return handle;
         }
+
+        /// <summary>
+        /// Register a custom/baked material directly (e.g. for baked terrain).
+        /// Returns the materialId.
+        /// </summary>
+        public int RegisterCustomMaterial(string name, Texture2D albedo, Texture2D normal = null, float roughness = 0.85f, float metallic = 0.0f)
+        {
+            int matId = HashUtils.HashStringFNV(name).GetHashCode();
+            if (matId == 0) matId = 1;
+
+            IntPtr albedoHandle = albedo != null ? UploadUnityTexture(albedo) : IntPtr.Zero;
+            ulong albedoHash = 0;
+            if (albedo != null)
+            {
+                lock (pendingTextureLock)
+                {
+                    textureHashCache.TryGetValue(albedo.GetInstanceID(), out albedoHash);
+                }
+            }
+
+            IntPtr normalHandle = normal != null ? UploadUnityTexture(normal, true) : IntPtr.Zero;
+            ulong normalHash = 0;
+            if (normal != null)
+            {
+                lock (pendingTextureLock)
+                {
+                    textureHashCache.TryGetValue(normal.GetInstanceID(), out normalHash);
+                }
+            }
+
+            var matData = new MaterialTextureData
+            {
+                materialName = name,
+                albedoHandle = albedoHandle,
+                albedoTextureHash = albedoHash,
+                normalHandle = normalHandle,
+                normalTextureHash = normalHash,
+                albedoColor = Color.white,
+                alphaMode = AlphaMode.Opaque,
+                wrapModeU = 0,
+                wrapModeV = 0,
+                filterMode = 1,
+                mainTexST = new Vector4(1, 1, 0, 0),
+                roughness = roughness,
+                metallic = metallic,
+                emissiveColor = Color.black,
+                emissiveIntensity = 0f
+            };
+
+            materialTextureData[matId] = matData;
+            return matId;
+        }
         
         /// <summary>
         /// Register a texture to a Remix category

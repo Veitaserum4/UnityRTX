@@ -51,10 +51,16 @@ namespace UnityRemix
         // Scene mesh scanner (optional)
         private SceneMeshScanner sceneMeshScanner;
         private RemixSkyboxManager skyboxManager;
+        private RemixTerrainManager terrainManager;
         
         public void SetSkyboxManager(RemixSkyboxManager manager)
         {
             skyboxManager = manager;
+        }
+
+        public void SetTerrainManager(RemixTerrainManager manager)
+        {
+            terrainManager = manager;
         }
         
         public RemixRenderThread(
@@ -410,6 +416,61 @@ namespace UnityRemix
                                     doubleSided = 1
                                 };
                                 
+                                drawFunc(ref instanceInfo);
+                                objectPickingValue++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Draw terrain chunks
+            if (terrainManager != null && (terrainManager.HasData || terrainManager.IsStreaming))
+            {
+                var terrainInstances = terrainManager.GetInstances();
+                if (terrainInstances != null && terrainInstances.Length > 0)
+                {
+                    var drawFunc = meshConverter.GetDrawInstanceFunc();
+                    if (drawFunc != null)
+                    {
+                        foreach (var instance in terrainInstances)
+                        {
+                            if (instance.MeshHandle == IntPtr.Zero)
+                                continue;
+
+                            if (frameCapture != null && frameCapture.IsLayerDisabled(instance.Layer))
+                                continue;
+
+                            RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
+                            bool hasIdentity = false;
+                            ulong persistentId = (ulong)(uint)instance.RendererInstanceId;
+                            if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+
+                            if (RemixAPI.IsOpenRemix && persistentId != 0)
+                            {
+                                identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
+                                {
+                                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
+                                    pNext = IntPtr.Zero,
+                                    instanceId = persistentId,
+                                    classification = 0u, // Static terrain geometry
+                                    rasterVisible = 1
+                                };
+                                hasIdentity = true;
+                            }
+
+                            unsafe
+                            {
+                                var instanceInfo = new RemixAPI.remixapi_InstanceInfo
+                                {
+                                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
+                                    pNext = hasIdentity ? (IntPtr)(&identityExt) : IntPtr.Zero,
+                                    categoryFlags = 0,
+                                    mesh = instance.MeshHandle,
+                                    transform = instance.Transform,
+                                    doubleSided = 1
+                                };
+
                                 drawFunc(ref instanceInfo);
                                 objectPickingValue++;
                             }

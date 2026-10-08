@@ -44,6 +44,7 @@ namespace UnityRemix
             public int CachedSkinnedRenderers;
             public int ScannedInstances;
             public int ScannerStreamQueue;
+            public int TerrainChunks;
             public StaticGeometryStats StaticGeometryStats;
             public int LightCount;
             public string CameraName;
@@ -137,6 +138,12 @@ namespace UnityRemix
             {
                 snap.ScannedInstances = sc.TotalInstanceCount;
                 snap.ScannerStreamQueue = sc.StreamingQueueCount;
+            }
+
+            var tm = _plugin.TerrainManager;
+            if (tm != null)
+            {
+                snap.TerrainChunks = tm.ChunkCount;
             }
 
             if (ch != null)
@@ -306,6 +313,10 @@ namespace UnityRemix
             RemixImGui.Text($"  Streaming queue:   {snap.ScannerStreamQueue}");
             RemixImGui.Text($"  Raw scene scan:    {snap.StaticGeometryStats.RawSceneScanInstances}");
             RemixImGui.Text($"  Visible scan:      {snap.StaticGeometryStats.DedupedSceneScanInstances} (-{snap.StaticGeometryStats.SuppressedSceneScanInstances})");
+
+            RemixImGui.Spacing();
+            RemixImGui.TextColored(0.6f, 1.0f, 0.6f, 1.0f, "Terrain Manager");
+            RemixImGui.Text($"  Terrain chunks:    {snap.TerrainChunks}");
 
             RemixImGui.Unindent();
         }

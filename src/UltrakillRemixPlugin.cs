@@ -74,6 +74,9 @@ namespace UnityRemix
         private ConfigEntry<int> configEngineFPSLimit;
         private ConfigEntry<bool> configPreventSlowMotion;
         private ConfigEntry<int> configStaticMeshFrameSkip;
+        private ConfigEntry<bool> configEnableTerrain;
+        private ConfigEntry<int> configTerrainChunkSize;
+        private ConfigEntry<int> configTerrainBakeResolution;
         private int lastAppliedEngineFPSLimit = -1;
         private bool initialSingleWindowEnabled = false;
         
@@ -94,6 +97,7 @@ namespace UnityRemix
         private RemixRenderThread renderThread;
         private TextureCategoryManager textureCategoryManager;
         private SceneMeshScanner sceneMeshScanner;
+        private RemixTerrainManager terrainManager;
         private RemixSettingsUI settingsUI;
         private RemixDebugHUD debugHUD;
         private RemixSkyboxManager skyboxManager;
@@ -327,6 +331,18 @@ namespace UnityRemix
                 new ConfigDescription("Reuses cached static mesh instances across N frames instead of iterating thousands of renderers every frame. 1 = every frame (no skip), 2 = skip every other frame (50% CPU savings), etc.",
                     new AcceptableValueRange<int>(1, 4)));
 
+            // Terrain Settings
+            configEnableTerrain = Config.Bind("Terrain", "EnableTerrain", true,
+                "Extract and render UnityEngine.Terrain heightmaps and baked splatmap textures in RTX Remix.");
+
+            configTerrainChunkSize = Config.Bind("Terrain", "ChunkSize", 64,
+                new ConfigDescription("Number of quads per terrain chunk (e.g. 32, 64, 128).",
+                    new AcceptableValueRange<int>(16, 128)));
+
+            configTerrainBakeResolution = Config.Bind("Terrain", "BakeResolution", 2048,
+                new ConfigDescription("Resolution of baked terrain composite textures (e.g. 1024, 2048, 4096).",
+                    new AcceptableValueRange<int>(512, 4096)));
+
             initialSingleWindowEnabled = configSingleWindow.Value;
             LogSource.LogInfo("Configuration loaded:");
             LogSource.LogInfo($"  Camera Name: '{configCameraName.Value}' (empty = auto-detect)");
@@ -363,6 +379,8 @@ namespace UnityRemix
             // Trigger scene scan
             if (configEnableSceneScan.Value)
                 sceneMeshScanner?.OnSceneLoaded(scene);
+            
+            terrainManager?.OnSceneLoaded(scene, mode);
             
             // Refresh light cache on scene load
             lightConverter?.RefreshLightCache();
@@ -553,6 +571,18 @@ namespace UnityRemix
             // Give render thread access to scene mesh scanner and skybox manager
             renderThread.SetSceneMeshScanner(sceneMeshScanner);
             renderThread.SetSkyboxManager(skyboxManager);
+
+            terrainManager = new RemixTerrainManager(
+                LogSource,
+                meshConverter,
+                materialManager,
+                remixApiLock,
+                frameCapture.IsLayerDisabled,
+                configTerrainChunkSize,
+                configTerrainBakeResolution,
+                configEnableTerrain
+            );
+            renderThread.SetTerrainManager(terrainManager);
             
             // Initialize ImGui overlay
             if (RemixImGui.Initialize(LogSource))
@@ -660,6 +690,8 @@ namespace UnityRemix
             if (configEnableSceneScan.Value)
                 sceneMeshScanner?.Update(Time.unscaledDeltaTime);
 
+            terrainManager?.Update(Time.unscaledDeltaTime);
+
             // Visibility filtering for scanned instances is done in UpdateFromPersistent()
             // after the camera has been resolved by CaptureStaticMeshes
         }
@@ -761,6 +793,23 @@ namespace UnityRemix
                     catch (Exception ex)
                     {
                         LogSource.LogError($"sceneMeshScanner UpdateVisibility exception: {ex}");
+                    }
+                }
+
+                if (terrainManager != null)
+                {
+                    try
+                    {
+                        Vector3 camPos = nextState.camera.valid ? nextState.camera.position : Vector3.zero;
+                        terrainManager.UpdateVisibility(
+                            camPos,
+                            configUseDistanceCulling.Value,
+                            configMaxRenderDistance.Value
+                        );
+                    }
+                    catch (Exception ex)
+                    {
+                        LogSource.LogError($"terrainManager UpdateVisibility exception: {ex}");
                     }
                 }
 
@@ -965,6 +1014,7 @@ namespace UnityRemix
                 case "PreventSlowMotion": configPreventSlowMotion.Value = value; break;
                 case "HideUIOnRemixMenu": configHideUIOnRemixMenu.Value = value; break;
                 case "UIOverlayClearBlack": configUIOverlayClearBlack.Value = value; break;
+                case "EnableTerrain": configEnableTerrain.Value = value; break;
             }
         }
 
@@ -993,6 +1043,8 @@ namespace UnityRemix
                         skyboxManager?.ForceRecapture();
                     }
                     break;
+                case "TerrainChunkSize": configTerrainChunkSize.Value = value; break;
+                case "TerrainBakeResolution": configTerrainBakeResolution.Value = value; break;
             }
         }
 
@@ -1003,6 +1055,8 @@ namespace UnityRemix
         public RemixFrameCapture FrameCapture => frameCapture;
 
         public SceneMeshScanner SceneMeshScanner => sceneMeshScanner;
+
+        public RemixTerrainManager TerrainManager => terrainManager;
 
         public RemixMeshConverter MeshConverter => meshConverter;
 

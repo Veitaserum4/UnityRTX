@@ -1251,6 +1251,11 @@ namespace UnityRemix
         /// Expose DrawInstance delegate for external callers (e.g. SceneMeshScanner).
         /// </summary>
         public RemixAPI.PFN_remixapi_DrawInstance GetDrawInstanceFunc() => drawInstanceFunc;
+        
+        /// <summary>
+        /// Expose DestroyMesh delegate for external callers (e.g. RemixTerrainManager).
+        /// </summary>
+        public RemixAPI.PFN_remixapi_DestroyMesh GetDestroyMeshFunc() => destroyMeshFunc;
 
         // --- Diagnostic getters for debug HUD ---
         public int MeshCacheCount => meshCache.Count;
