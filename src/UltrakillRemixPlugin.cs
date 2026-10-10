@@ -404,19 +404,20 @@ namespace UnityRemix
         {
             LogSource.LogInfo("Loading Remix API interface...");
             
-            // Find d3d9.dll
-            string gamePath = Application.dataPath;
-            string dllPath = System.IO.Path.Combine(
-                System.IO.Path.GetDirectoryName(gamePath),
-                "d3d9.dll"
-            );
+            // Find remix.dll or d3d9.dll
+            string gameDir = System.IO.Path.GetDirectoryName(Application.dataPath);
+            string dllPath = System.IO.Path.Combine(gameDir, "remix.dll");
+            if (!System.IO.File.Exists(dllPath))
+            {
+                dllPath = System.IO.Path.Combine(gameDir, "d3d9.dll");
+            }
             
             LogSource.LogInfo($"Looking for Remix DLL at: {dllPath}");
             
             if (!System.IO.File.Exists(dllPath))
             {
                 LogSource.LogError($"Remix DLL not found at {dllPath}");
-                LogSource.LogInfo("Please place the RTX Remix d3d9.dll in the game root folder.");
+                LogSource.LogInfo("Please place remix.dll (OpenRemix) or d3d9.dll (RTX Remix) in the game root folder.");
                 return;
             }
             
