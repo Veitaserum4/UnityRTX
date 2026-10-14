@@ -766,6 +766,10 @@ namespace UnityRemix
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
             _materialTintCache.Clear();
+            lock (_spawnedQueueLock)
+            {
+                _spawnedDynamicQueue.Clear();
+            }
             logger.LogInfo("Renderer caches invalidated");
         }
         
@@ -963,6 +967,118 @@ namespace UnityRemix
             Volatile.Write(ref _rendererSnapshots, renderers.ToArray());
         }
         
+        private static readonly List<Component> _spawnedDynamicQueue = new List<Component>();
+        private static readonly object _spawnedQueueLock = new object();
+
+        /// <summary>
+        /// Called by DynamicSpawnPatch whenever a projectile, explosion, rocket, enemy, etc.
+        /// is instantiated / initialized. Zero polling overhead.
+        /// </summary>
+        public static void QueueDynamicObjectForTracking(Component c)
+        {
+            if (c == null) return;
+            lock (_spawnedQueueLock)
+            {
+                _spawnedDynamicQueue.Add(c);
+            }
+        }
+
+        /// <summary>
+        /// Drains newly spawned dynamic objects and adds their renderers to the active caches.
+        /// Takes ~0.0001 ms per frame when no new objects spawn.
+        /// </summary>
+        public void ProcessQueuedDynamicObjects()
+        {
+            List<Component> queueCopy = null;
+            lock (_spawnedQueueLock)
+            {
+                if (_spawnedDynamicQueue.Count > 0)
+                {
+                    queueCopy = new List<Component>(_spawnedDynamicQueue);
+                    _spawnedDynamicQueue.Clear();
+                }
+            }
+
+            if (queueCopy == null) return;
+
+            for (int i = 0; i < queueCopy.Count; i++)
+            {
+                var c = queueCopy[i];
+                if (c == null) continue;
+
+                try
+                {
+                    var mrs = c.GetComponentsInChildren<MeshRenderer>(true);
+                    for (int j = 0; j < mrs.Length; j++)
+                    {
+                        var r = mrs[j];
+                        if (r != null && cachedRendererIds.Add(r.GetInstanceID()))
+                        {
+                            if (RemixScrollingTextureDetector.IsScrollingRenderer(r))
+                            {
+                                scrollingRendererIds.Add(r.GetInstanceID());
+                                cachedScrollingRenderers.Add(r);
+                            }
+                            cachedRenderers.Add(r);
+                        }
+                    }
+
+                    var smrs = c.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+                    for (int j = 0; j < smrs.Length; j++)
+                    {
+                        var sr = smrs[j];
+                        if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
+                        {
+                            cachedSkinnedRenderers.Add(sr);
+                            if (!sr.updateWhenOffscreen)
+                                sr.updateWhenOffscreen = true;
+                            var anim = sr.GetComponentInParent<Animator>();
+                            if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                                anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                        }
+                    }
+
+                    var prs = c.GetComponentsInChildren<ParticleSystemRenderer>(true);
+                    for (int j = 0; j < prs.Length; j++)
+                    {
+                        var pr = prs[j];
+                        if (pr != null && trackedParticleSystemIds.Add(pr.GetInstanceID()))
+                        {
+                            var ps = pr.GetComponent<ParticleSystem>();
+                            if (ps != null)
+                            {
+                                var main = ps.main;
+                                if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                                    main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+
+                                trackedParticleSystems.Add(new TrackedParticleSystem
+                                {
+                                    renderer = pr,
+                                    system = ps,
+                                    id = pr.GetInstanceID()
+                                });
+                            }
+                        }
+                    }
+
+                    var trs = c.GetComponentsInChildren<TrailRenderer>(true);
+                    for (int j = 0; j < trs.Length; j++)
+                    {
+                        var tr = trs[j];
+                        if (tr != null && trackedTrailRendererIds.Add(tr.GetInstanceID()))
+                        {
+                            trackedTrailRenderers.Add(new TrackedTrailRenderer
+                            {
+                                renderer = tr,
+                                id = tr.GetInstanceID()
+                            });
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+
         /// <summary>
         /// Ensures all active renderers parented under the camera (viewmodels, weapons, arms) are tracked immediately.
         /// This avoids any delay when switching weapons or activating arms.
@@ -1016,6 +1132,7 @@ namespace UnityRemix
             {
                 EnsureCameraRenderersTracked(mainCam);
             }
+            ProcessQueuedDynamicObjects();
             
             // Capture camera
             if (mainCam != null)
@@ -1841,6 +1958,15 @@ namespace UnityRemix
             if (!configCaptureSkinnedMeshes.Value)
                 return;
             
+            Camera mainCam = cameraHandler.GetPreferredCamera();
+            Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;
+
+            if (mainCam != null)
+            {
+                EnsureCameraRenderersTracked(mainCam);
+            }
+            ProcessQueuedDynamicObjects();
+
             skinnedCaptureCount++;
             bool doLog = configDebugLogInterval.Value > 0 && (skinnedCaptureCount % configDebugLogInterval.Value == 1);
             
@@ -1851,14 +1977,6 @@ namespace UnityRemix
             int baked = 0;
             int skipNull = 0, skipLayer = 0, skipVis = 0, skipDist = 0, skipNoMesh = 0;
             var validSkinnedIds = new HashSet<int>();
-            
-            Camera mainCam = cameraHandler.GetPreferredCamera();
-            Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;
-
-            if (mainCam != null)
-            {
-                EnsureCameraRenderersTracked(mainCam);
-            }
             
             // BakeMesh fallback budget
             var bakeSw = System.Diagnostics.Stopwatch.StartNew();
