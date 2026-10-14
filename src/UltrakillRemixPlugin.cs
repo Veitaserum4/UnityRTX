@@ -66,7 +66,6 @@ namespace UnityRemix
         private ConfigEntry<bool> configAutoDetectUI;
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
-        private ConfigEntry<int> configUIOverlayFPS;
         private ConfigEntry<bool> configHideUIOnRemixMenu;
         private ConfigEntry<bool> configUIOverlayClearBlack;
 
@@ -308,11 +307,7 @@ namespace UnityRemix
                 "Comma-separated list of camera names to treat as UI cameras (e.g. 'HUD Camera, Virtual Camera'). Extends auto-detection.");
 
             configSingleWindowUIOverlay = Config.Bind("Window", "SingleWindowUIOverlay", true,
-                "For Embedded mode, renders autodetected UI onto a transparent layered overlay window sitting on top of the Remix viewport.");
-
-            configUIOverlayFPS = Config.Bind("Window", "UIOverlayFPS", 60,
-                new ConfigDescription("Target refresh rate (FPS) for the transparent UI overlay window in SingleWindow mode. Supports up to 300 FPS.",
-                    new AcceptableValueRange<int>(10, 300)));
+                "For Embedded mode, renders autodetected UI directly into the RTX Remix viewport using native OpenRemix screen overlay.");
 
             configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", false,
                 "Hides the game UI overlay when the Remix Alt+X menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
@@ -480,7 +475,6 @@ namespace UnityRemix
                 configAutoDetectUI,
                 configUICameraNames,
                 configSingleWindowUIOverlay,
-                configUIOverlayFPS,
                 configHideUIOnRemixMenu,
                 configUIOverlayClearBlack
             );
@@ -980,7 +974,6 @@ namespace UnityRemix
                 case "TargetFPS": return configTargetFPS.Value;
                 case "EngineFPSLimit": return configEngineFPSLimit.Value;
                 case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
-                case "UIOverlayFPS": return configUIOverlayFPS.Value;
                 case "SkyboxFiltering": return configSkyboxFiltering != null ? (int)configSkyboxFiltering.Value : 0;
                 default: return 0;
             }
@@ -1036,7 +1029,6 @@ namespace UnityRemix
                 case "TargetFPS": configTargetFPS.Value = value; break;
                 case "EngineFPSLimit": configEngineFPSLimit.Value = value; break;
                 case "StaticMeshFrameSkip": configStaticMeshFrameSkip.Value = value; break;
-                case "UIOverlayFPS": configUIOverlayFPS.Value = value; break;
                 case "SkyboxFiltering":
                     if (configSkyboxFiltering != null)
                     {

@@ -157,10 +157,6 @@ namespace UnityRemix
                 {
                     SetClassLongPtr(instance.remixWindow, GCLP_HCURSOR, targetCursor);
                 }
-                if (RemixUIOverlay.Instance != null && RemixUIOverlay.Instance.OverlayWindow != IntPtr.Zero)
-                {
-                    SetClassLongPtr(RemixUIOverlay.Instance.OverlayWindow, GCLP_HCURSOR, targetCursor);
-                }
             }
 
             if (shouldHide)

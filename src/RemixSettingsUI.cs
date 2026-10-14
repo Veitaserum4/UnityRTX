@@ -39,7 +39,6 @@ namespace UnityRemix
         private bool _disableInEngineRendering;
         private bool _autoDetectUI;
         private bool _singleWindowUIOverlay;
-        private int _uiOverlayFPS;
         private bool _hideUIOnRemixMenu;
         private string _selectedCameraName;
         private int _engineFPSLimit;
@@ -117,20 +116,10 @@ namespace UnityRemix
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Automatically detects UI/HUD cameras and Canvases.\nRequires game restart.");
 
-                if (RemixImGui.Checkbox("UI Overlay Window (Embedded Mode) (Requires Restart)", ref _singleWindowUIOverlay))
+                if (RemixImGui.Checkbox("UI Overlay (Embedded Mode) (Requires Restart)", ref _singleWindowUIOverlay))
                     _plugin.SetConfig("SingleWindowUIOverlay", _singleWindowUIOverlay);
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Renders detected UI over embedded Remix viewport.\nRequires game restart.");
-
-                if (_singleWindowUIOverlay)
-                {
-                    RemixImGui.Indent();
-                    if (RemixImGui.SliderInt("UI Overlay FPS (Requires Restart)", ref _uiOverlayFPS, 10, 300))
-                        _plugin.SetConfig("UIOverlayFPS", _uiOverlayFPS);
-                    if (RemixImGui.IsItemHovered())
-                        RemixImGui.SetTooltip("Target refresh rate for the UI overlay window (10 to 300 FPS).");
-                    RemixImGui.Unindent();
-                }
+                    RemixImGui.SetTooltip("Renders detected UI over embedded Remix viewport using native OpenRemix overlay.\nRequires game restart.");
 
                 var presenter = _plugin.FramebufferPresenter;
                 if (presenter?.UIDetector != null)
@@ -604,7 +593,6 @@ namespace UnityRemix
             _disableInEngineRendering = _plugin.GetConfigBool("DisableInEngineRendering");
             _autoDetectUI = _plugin.GetConfigBool("AutoDetectUI");
             _singleWindowUIOverlay = _plugin.GetConfigBool("SingleWindowUIOverlay");
-            _uiOverlayFPS = _plugin.GetConfigInt("UIOverlayFPS");
             _hideUIOnRemixMenu = _plugin.GetConfigBool("HideUIOnRemixMenu");
             _selectedCameraName = _plugin.GetConfigString("CameraName");
             _engineFPSLimit = _plugin.GetConfigInt("EngineFPSLimit");

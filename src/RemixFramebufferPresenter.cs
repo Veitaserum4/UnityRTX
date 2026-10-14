@@ -27,7 +27,6 @@ namespace UnityRemix
         private ConfigEntry<bool> configAutoDetectUI;
         private ConfigEntry<string> configUICameraNames;
         private ConfigEntry<bool> configSingleWindowUIOverlay;
-        private ConfigEntry<int> configUIOverlayFPS;
         private ConfigEntry<bool> configHideUIOnRemixMenu;
         private ConfigEntry<bool> configUIOverlayClearBlack;
 
@@ -51,7 +50,6 @@ namespace UnityRemix
             ConfigEntry<bool> autoDetectUI,
             ConfigEntry<string> uiCameraNames,
             ConfigEntry<bool> singleWindowUIOverlay,
-            ConfigEntry<int> uiOverlayFPS = null,
             ConfigEntry<bool> hideUIOnRemixMenu = null,
             ConfigEntry<bool> uiOverlayClearBlack = null)
         {
@@ -63,7 +61,6 @@ namespace UnityRemix
             this.configAutoDetectUI = autoDetectUI;
             this.configUICameraNames = uiCameraNames;
             this.configSingleWindowUIOverlay = singleWindowUIOverlay;
-            this.configUIOverlayFPS = uiOverlayFPS;
             this.configHideUIOnRemixMenu = hideUIOnRemixMenu;
             this.configUIOverlayClearBlack = uiOverlayClearBlack;
             this.isSingleWindowActive = singleWindow != null && singleWindow.Value;
@@ -377,9 +374,9 @@ namespace UnityRemix
                 ? windowManager.GameWindow 
                 : RemixWindowManager.FindGameWindow();
 
-            if (uiOverlay == null && gameWnd != IntPtr.Zero)
+            if (uiOverlay == null)
             {
-                uiOverlay = new RemixUIOverlay(logger, gameWnd, configUIOverlayFPS, configHideUIOnRemixMenu, configUIOverlayClearBlack);
+                uiOverlay = new RemixUIOverlay(logger, configHideUIOnRemixMenu, configUIOverlayClearBlack);
                 if (!uiOverlay.Initialize())
                 {
                     uiOverlay = null;
