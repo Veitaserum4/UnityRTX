@@ -99,6 +99,7 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_PARTICLE_SYSTEM_EXT = 26,
             REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_GPU_INSTANCING_EXT = 27,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_INFO = 28,
+            REMIXAPI_STRUCT_TYPE_FOG_INFO = 29,
             REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT = 0x7fff1002,
             REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT = 0x7fff1008,
             REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
@@ -443,6 +444,18 @@ namespace UnityRemix
             public ulong version;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_FogInfo
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public uint mode;
+            public remixapi_Float3D color;
+            public float scale;
+            public float end;
+            public float density;
+        }
+
         // Material structures
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct remixapi_MaterialInfo
@@ -621,6 +634,9 @@ namespace UnityRemix
             remixapi_Format format,
             float opacity);
 
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_SetFogState(ref remixapi_FogInfo info);
+
         #endregion
 
         #region Interface Struct
@@ -662,7 +678,6 @@ namespace UnityRemix
             // Core functions
             public IntPtr Startup;               // PFN_remixapi_Startup
             public IntPtr Present;               // PFN_remixapi_Present
-            public IntPtr SetCameraMediumMaterial;
             public IntPtr GetUIState;
             public IntPtr SetUIState;
             // Optional extension functions (v0.5.1+)
@@ -675,6 +690,22 @@ namespace UnityRemix
             public IntPtr GetVramStats;
             public IntPtr RequestTextureVramFree;
             public IntPtr GetGameValue;
+            public IntPtr SetFogState;
+            public IntPtr SetScreenTint;
+            public IntPtr RegisterUITexture;
+            public IntPtr FreeUITexture;
+            public IntPtr SubmitUIDrawList;
+            public IntPtr RequestPresentedScreenshot;
+            public IntPtr SetCameraMediumMaterial;
+            // Native window, input, and runtime capability API (v0.1001+)
+            public IntPtr PumpEvents;
+            public IntPtr GetWindowState;
+            public IntPtr PollMouseState;
+            public IntPtr IsKeyDown;
+            public IntPtr SetMouseGrabbed;
+            public IntPtr SetCursorPosition;
+            public IntPtr SetFullscreen;
+            public IntPtr GetFeatureAvailability;
         }
 
         #endregion
@@ -720,6 +751,7 @@ namespace UnityRemix
         public static PFN_remixapi_GetUIState GetUIStateFunc;
         public static PFN_remixapi_SetUIState SetUIStateFunc;
         public static PFN_remixapi_DrawScreenOverlay DrawScreenOverlayFunc;
+        public static PFN_remixapi_SetFogState SetFogStateFunc;
         public static PFN_remixapi_PumpEvents NativePumpEvents { get; private set; }
 
         private static IntPtr _remixDll = IntPtr.Zero;
@@ -788,6 +820,15 @@ namespace UnityRemix
             if (remixInterface.DrawScreenOverlay != IntPtr.Zero)
             {
                 DrawScreenOverlayFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_DrawScreenOverlay>(remixInterface.DrawScreenOverlay);
+            }
+            IntPtr setFogStatePtr = remixInterface.SetFogState;
+            if (setFogStatePtr == IntPtr.Zero)
+            {
+                setFogStatePtr = GetProcAddress(hModule, "remixapi_SetFogState");
+            }
+            if (setFogStatePtr != IntPtr.Zero)
+            {
+                SetFogStateFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_SetFogState>(setFogStatePtr);
             }
 
             LoadedApiVersion = apiVersion;
@@ -915,6 +956,10 @@ namespace UnityRemix
             _remixDll = IntPtr.Zero;
             LoadedApiVersion = null;
             NativePumpEvents = null;
+            SetFogStateFunc = null;
+            GetUIStateFunc = null;
+            SetUIStateFunc = null;
+            DrawScreenOverlayFunc = null;
             return status;
         }
 

@@ -24,6 +24,7 @@ namespace UnityRemix
             result.GetVramStats = Marshal.ReadIntPtr(buffer, 37 * IntPtr.Size);
             result.RequestTextureVramFree = Marshal.ReadIntPtr(buffer, 38 * IntPtr.Size);
             result.GetGameValue = Marshal.ReadIntPtr(buffer, 39 * IntPtr.Size);
+            result.SetFogState = Marshal.ReadIntPtr(buffer, 40 * IntPtr.Size);
             result.SetCameraMediumMaterial = Marshal.ReadIntPtr(buffer, 46 * IntPtr.Size);
             return result;
         }

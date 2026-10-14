@@ -100,6 +100,7 @@ namespace UnityRemix
         private RemixSettingsUI settingsUI;
         private RemixDebugHUD debugHUD;
         private RemixSkyboxManager skyboxManager;
+        private RemixFogManager fogManager;
         
         private int frameCount = 0;
         private static bool isQuitting = false;
@@ -376,6 +377,7 @@ namespace UnityRemix
                 sceneMeshScanner?.OnSceneLoaded(scene);
             
             terrainManager?.OnSceneLoaded(scene, mode);
+            fogManager?.MarkDirty();
             
             // Refresh light cache on scene load
             lightConverter?.RefreshLightCache();
@@ -579,6 +581,8 @@ namespace UnityRemix
             );
             renderThread.SetTerrainManager(terrainManager);
             
+            fogManager = new RemixFogManager(LogSource, Config, remixApiLock);
+            
             // Initialize ImGui overlay
             if (RemixImGui.Initialize(LogSource))
             {
@@ -686,6 +690,8 @@ namespace UnityRemix
                 sceneMeshScanner?.Update(Time.unscaledDeltaTime);
 
             terrainManager?.Update(Time.unscaledDeltaTime);
+
+            fogManager?.Update();
 
             // Visibility filtering for scanned instances is done in UpdateFromPersistent()
             // after the camera has been resolved by CaptureStaticMeshes
@@ -891,6 +897,7 @@ namespace UnityRemix
             materialManager?.Cleanup();
             meshConverter?.Cleanup();
             skyboxManager?.Cleanup();
+            fogManager?.Cleanup();
             frameCapture?.Cleanup();
             lightConverter?.ClearCache();
             windowManager?.DestroyRemixWindow();
@@ -1060,6 +1067,8 @@ namespace UnityRemix
         public RemixFramebufferPresenter FramebufferPresenter => framebufferPresenter;
 
         public RemixSkyboxManager SkyboxManager => skyboxManager;
+ 
+        public RemixFogManager FogManager => fogManager;
 
         #endregion
     }

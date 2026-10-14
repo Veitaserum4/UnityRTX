@@ -68,6 +68,7 @@ namespace UnityRemix
             DrawCameraSection();
             DrawRendererSection();
             DrawLightingSection();
+            DrawFogSection();
             DrawPerformanceSection();
             DrawDebugSection();
 
@@ -526,6 +527,154 @@ namespace UnityRemix
 
             if (RemixImGui.SliderFloat("Intensity Multiplier", ref _lightIntensityMultiplier, 0.01f, 100f))
                 _plugin.SetConfig("IntensityMultiplier", _lightIntensityMultiplier);
+        }
+
+        private void DrawFogSection()
+        {
+            if (!RemixImGui.CollapsingHeader("Fog & Volumetrics", RemixImGui.TreeNodeFlags_DefaultOpen))
+                return;
+
+            var fog = _plugin.FogManager;
+            if (fog == null)
+            {
+                RemixImGui.Text("Fog manager not initialized.");
+                return;
+            }
+
+            bool enableFog = fog.ConfigEnableFog.Value;
+            if (RemixImGui.Checkbox("Enable Fog Sync", ref enableFog))
+            {
+                fog.ConfigEnableFog.Value = enableFog;
+                fog.MarkDirty();
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Synchronizes Unity engine fog (RenderSettings.fog) with OpenRemix path-traced volumetrics.\nExtinction, scattering color, and distance are passed automatically.");
+
+            RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Status: {fog.StatusText}");
+
+            // Live Game Fog Info
+            RemixImGui.Spacing();
+            RemixImGui.Text("Game Fog State (Unity):");
+            RemixImGui.Indent();
+            RemixImGui.Text($"RenderSettings.fog: {(fog.GameFogEnabled ? "Enabled" : "Disabled")}");
+            if (fog.GameFogEnabled)
+            {
+                RemixImGui.Text($"Mode: {fog.GameFogMode}");
+                var c = fog.GameFogColor;
+                RemixImGui.Text($"Color: R={c.r:F2}, G={c.g:F2}, B={c.b:F2}");
+                if (fog.GameFogMode == UnityEngine.FogMode.Linear)
+                {
+                    RemixImGui.Text($"Start: {fog.GameFogStart:F1}m, End: {fog.GameFogEnd:F1}m");
+                }
+                else
+                {
+                    RemixImGui.Text($"Density: {fog.GameFogDensity:F5}");
+                }
+            }
+            RemixImGui.Unindent();
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
+
+            // Tuning multipliers
+            float densMult = fog.ConfigFogDensityMultiplier.Value;
+            if (RemixImGui.SliderFloat("Density Multiplier", ref densMult, 0.05f, 10.0f))
+            {
+                fog.ConfigFogDensityMultiplier.Value = densMult;
+                fog.MarkDirty();
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Scales exponential fog density for path-traced volumetrics.");
+
+            float distMult = fog.ConfigFogDistanceMultiplier.Value;
+            if (RemixImGui.SliderFloat("Distance Multiplier", ref distMult, 0.1f, 5.0f))
+            {
+                fog.ConfigFogDistanceMultiplier.Value = distMult;
+                fog.MarkDirty();
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Scales linear fog start/end distance in meters.");
+
+            RemixImGui.Spacing();
+            RemixImGui.Separator();
+            RemixImGui.Spacing();
+
+            // Manual Override
+            bool manualOverride = fog.ConfigFogManualOverride.Value;
+            if (RemixImGui.Checkbox("Manual Fog Override", ref manualOverride))
+            {
+                fog.ConfigFogManualOverride.Value = manualOverride;
+                fog.MarkDirty();
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Ignore game fog and use custom volumetric fog parameters.");
+
+            if (manualOverride)
+            {
+                RemixImGui.Indent();
+                string[] modeNames = { "0: None / Off", "1: Exponential", "2: Exponential Squared", "3: Linear" };
+                int currentMode = fog.ConfigFogManualMode.Value;
+                string previewMode = (currentMode >= 0 && currentMode < modeNames.Length) ? modeNames[currentMode] : modeNames[0];
+                if (RemixImGui.BeginCombo("Mode", previewMode))
+                {
+                    for (int i = 0; i < modeNames.Length; i++)
+                    {
+                        bool selected = (currentMode == i);
+                        if (RemixImGui.Selectable(modeNames[i], selected))
+                        {
+                            fog.ConfigFogManualMode.Value = i;
+                            fog.MarkDirty();
+                        }
+                    }
+                    RemixImGui.EndCombo();
+                }
+
+                if (currentMode == 3) // Linear
+                {
+                    float startDist = fog.ConfigFogManualStart.Value;
+                    if (RemixImGui.SliderFloat("Start Distance", ref startDist, 0f, 200f))
+                    {
+                        fog.ConfigFogManualStart.Value = startDist;
+                        fog.MarkDirty();
+                    }
+                    float endDist = fog.ConfigFogManualEnd.Value;
+                    if (RemixImGui.SliderFloat("End Distance", ref endDist, 1f, 1000f))
+                    {
+                        fog.ConfigFogManualEnd.Value = endDist;
+                        fog.MarkDirty();
+                    }
+                }
+                else if (currentMode == 1 || currentMode == 2) // Exp / Exp2
+                {
+                    float dens = fog.ConfigFogManualDensity.Value;
+                    if (RemixImGui.SliderFloat("Density", ref dens, 0.0001f, 0.2f))
+                    {
+                        fog.ConfigFogManualDensity.Value = dens;
+                        fog.MarkDirty();
+                    }
+                }
+
+                float r = fog.ConfigFogManualColorR.Value;
+                if (RemixImGui.SliderFloat("Color Red", ref r, 0f, 1f))
+                {
+                    fog.ConfigFogManualColorR.Value = r;
+                    fog.MarkDirty();
+                }
+                float g = fog.ConfigFogManualColorG.Value;
+                if (RemixImGui.SliderFloat("Color Green", ref g, 0f, 1f))
+                {
+                    fog.ConfigFogManualColorG.Value = g;
+                    fog.MarkDirty();
+                }
+                float b = fog.ConfigFogManualColorB.Value;
+                if (RemixImGui.SliderFloat("Color Blue", ref b, 0f, 1f))
+                {
+                    fog.ConfigFogManualColorB.Value = b;
+                    fog.MarkDirty();
+                }
+                RemixImGui.Unindent();
+            }
         }
 
         private void DrawPerformanceSection()
