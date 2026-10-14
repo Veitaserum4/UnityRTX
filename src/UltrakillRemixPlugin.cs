@@ -581,7 +581,7 @@ namespace UnityRemix
             );
             renderThread.SetTerrainManager(terrainManager);
             
-            fogManager = new RemixFogManager(LogSource, Config, remixApiLock);
+            fogManager = new RemixFogManager(LogSource, Config);
             
             // Initialize ImGui overlay
             if (RemixImGui.Initialize(LogSource))
@@ -690,8 +690,6 @@ namespace UnityRemix
                 sceneMeshScanner?.Update(Time.unscaledDeltaTime);
 
             terrainManager?.Update(Time.unscaledDeltaTime);
-
-            fogManager?.Update();
 
             // Visibility filtering for scanned instances is done in UpdateFromPersistent()
             // after the camera has been resolved by CaptureStaticMeshes
@@ -817,6 +815,8 @@ namespace UnityRemix
                 // Send to render thread (mesh creation moved to render thread to avoid deadlocks)
                 renderThread.UpdateFrameState(nextState);
             }
+
+            fogManager?.Update();
 
             // Update SingleWindow framebuffer presenter & UI overlay
             framebufferPresenter?.Update(frameCount);

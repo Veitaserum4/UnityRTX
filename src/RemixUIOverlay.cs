@@ -16,9 +16,9 @@ namespace UnityRemix
     {
         private readonly ManualLogSource logger;
 
-        // UI rendering state
         private readonly BepInEx.Configuration.ConfigEntry<bool> configHideUIOnRemixMenu;
         private readonly BepInEx.Configuration.ConfigEntry<bool> configUIOverlayClearBlack;
+        private static readonly object overlayApiLock = new object();
         private RenderTexture uiRenderTexture;
         private bool isReadbackPending = false;
         private bool isProcessingOverlay = false;
@@ -352,7 +352,10 @@ namespace UnityRemix
             {
                 if (isOverlayVisible)
                 {
-                    RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    lock (overlayApiLock)
+                    {
+                        RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    }
                     isOverlayVisible = false;
                 }
                 return;
@@ -364,7 +367,10 @@ namespace UnityRemix
             {
                 if (isOverlayVisible)
                 {
-                    RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    lock (overlayApiLock)
+                    {
+                        RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    }
                     isOverlayVisible = false;
                 }
                 return;
@@ -606,7 +612,10 @@ namespace UnityRemix
                                 return;
                             }
                             lastPresentedNonZero = 0;
-                            RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                            lock (overlayApiLock)
+                            {
+                                RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                            }
                             return;
                         }
 
@@ -616,7 +625,11 @@ namespace UnityRemix
                         using (RemixTracy.Zone("DrawScreenOverlay"))
                         {
                             var sw = System.Diagnostics.Stopwatch.StartNew();
-                            var status = RemixAPI.DrawScreenOverlayFunc((IntPtr)pDst, (uint)width, (uint)height, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 1.0f);
+                            RemixAPI.remixapi_ErrorCode status;
+                            lock (overlayApiLock)
+                            {
+                                status = RemixAPI.DrawScreenOverlayFunc((IntPtr)pDst, (uint)width, (uint)height, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 1.0f);
+                            }
                             drawOverlayMs = sw.Elapsed.TotalMilliseconds;
                             if (status != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                             {

@@ -13,7 +13,6 @@ namespace UnityRemix
     public class RemixFogManager
     {
         private readonly ManualLogSource logger;
-        private readonly object apiLock;
 
         // Configuration
         public ConfigEntry<bool> ConfigEnableFog { get; }
@@ -49,10 +48,9 @@ namespace UnityRemix
         public uint CurrentRemixMode => lastSentMode;
         public string StatusText { get; private set; } = "Initializing...";
 
-        public RemixFogManager(ManualLogSource logger, ConfigFile config, object apiLock)
+        public RemixFogManager(ManualLogSource logger, ConfigFile config)
         {
             this.logger = logger;
-            this.apiLock = apiLock;
 
             ConfigEnableFog = config.Bind("Fog", "EnableFog", true,
                 "Synchronize Unity fog with OpenRemix path-traced volumetric fog.");
@@ -118,122 +116,142 @@ namespace UnityRemix
             float density = 0f;
             bool active = false;
 
-            if (ConfigFogManualOverride.Value)
+            try
             {
-                mode = (uint)Mathf.Clamp(ConfigFogManualMode.Value, 0, 3);
-                color = new Color(ConfigFogManualColorR.Value, ConfigFogManualColorG.Value, ConfigFogManualColorB.Value);
-                scale = ConfigFogManualStart.Value;
-                end = ConfigFogManualEnd.Value;
-                density = ConfigFogManualDensity.Value;
-                active = mode != 0;
-            }
-            else if (ConfigEnableFog.Value && RenderSettings.fog)
-            {
-                color = RenderSettings.fogColor;
-                float distMult = Mathf.Max(ConfigFogDistanceMultiplier.Value, 0.01f);
-                float densMult = Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f);
-
-                switch (RenderSettings.fogMode)
+                if (ConfigFogManualOverride.Value)
                 {
-                    case FogMode.Linear:
-                        mode = 3; // D3DFOG_LINEAR
-                        scale = Mathf.Max(RenderSettings.fogStartDistance * distMult, 0f);
-                        end = Mathf.Max(RenderSettings.fogEndDistance * distMult, scale + 0.1f);
-                        active = end > 0f;
-                        break;
-
-                    case FogMode.Exponential:
-                        mode = 1; // D3DFOG_EXP
-                        density = Mathf.Max(RenderSettings.fogDensity * densMult, 0f);
-                        active = density > 0f;
-                        break;
-
-                    case FogMode.ExponentialSquared:
-                        mode = 2; // D3DFOG_EXP2
-                        density = Mathf.Max(RenderSettings.fogDensity * densMult, 0f);
-                        active = density > 0f;
-                        break;
-
-                    default:
-                        mode = 1;
-                        density = Mathf.Max(RenderSettings.fogDensity * densMult, 0f);
-                        active = density > 0f;
-                        break;
+                    mode = (uint)Mathf.Clamp(ConfigFogManualMode.Value, 0, 3);
+                    float mr = Mathf.Clamp01(ConfigFogManualColorR.Value);
+                    float mg = Mathf.Clamp01(ConfigFogManualColorG.Value);
+                    float mb = Mathf.Clamp01(ConfigFogManualColorB.Value);
+                    color = new Color(mr, mg, mb);
+                    scale = Mathf.Max(ConfigFogManualStart.Value, 0f);
+                    end = Mathf.Max(ConfigFogManualEnd.Value, scale + 0.1f);
+                    density = Mathf.Clamp(ConfigFogManualDensity.Value, 0f, 1f);
+                    active = mode != 0;
                 }
-            }
-            else
-            {
-                // Fog disabled
-                mode = 0;
-                active = false;
-            }
-
-            // Check if anything changed
-            if (!forceDirty &&
-                active == lastSentActive &&
-                mode == lastSentMode &&
-                Mathf.Abs(color.r - lastSentColor.r) < 0.002f &&
-                Mathf.Abs(color.g - lastSentColor.g) < 0.002f &&
-                Mathf.Abs(color.b - lastSentColor.b) < 0.002f &&
-                Mathf.Abs(scale - lastSentScale) < 0.05f &&
-                Mathf.Abs(end - lastSentEnd) < 0.05f &&
-                Mathf.Abs(density - lastSentDensity) < 0.00005f)
-            {
-                return;
-            }
-
-            // Send to OpenRemix
-            var info = new RemixAPI.remixapi_FogInfo
-            {
-                sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_FOG_INFO,
-                pNext = IntPtr.Zero,
-                mode = mode,
-                color = new RemixAPI.remixapi_Float3D
+                else if (ConfigEnableFog.Value && RenderSettings.fog)
                 {
-                    x = Mathf.Clamp01(color.r),
-                    y = Mathf.Clamp01(color.g),
-                    z = Mathf.Clamp01(color.b)
-                },
-                scale = scale,
-                end = end,
-                density = density
-            };
+                    color = RenderSettings.fogColor;
+                    float cr = float.IsNaN(color.r) || float.IsInfinity(color.r) ? 0f : Mathf.Clamp01(color.r);
+                    float cg = float.IsNaN(color.g) || float.IsInfinity(color.g) ? 0f : Mathf.Clamp01(color.g);
+                    float cb = float.IsNaN(color.b) || float.IsInfinity(color.b) ? 0f : Mathf.Clamp01(color.b);
+                    color = new Color(cr, cg, cb);
 
-            RemixAPI.remixapi_ErrorCode result;
-            lock (apiLock)
-            {
-                result = RemixAPI.SetFogStateFunc(ref info);
-            }
+                    float distMult = Mathf.Max(ConfigFogDistanceMultiplier.Value, 0.01f);
+                    float densMult = Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f);
 
-            if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
-            {
-                lastSentActive = active;
-                lastSentMode = mode;
-                lastSentColor = color;
-                lastSentScale = scale;
-                lastSentEnd = end;
-                lastSentDensity = density;
-                forceDirty = false;
+                    float rawStart = RenderSettings.fogStartDistance;
+                    float rawEnd = RenderSettings.fogEndDistance;
+                    float rawDens = RenderSettings.fogDensity;
 
-                if (active)
-                {
-                    string modeStr = mode == 1 ? "Exp" : (mode == 2 ? "Exp2" : "Linear");
-                    StatusText = $"Active ({modeStr}, RGB: {color.r:F2},{color.g:F2},{color.b:F2})";
-                    logger.LogInfo($"[Volumetrics] Fog updated in OpenRemix -> mode: {modeStr}, color: ({color.r:F2}, {color.g:F2}, {color.b:F2}), density: {density:F5}, start: {scale:F1}m, end: {end:F1}m");
+                    if (float.IsNaN(rawStart) || float.IsInfinity(rawStart)) rawStart = 0f;
+                    if (float.IsNaN(rawEnd) || float.IsInfinity(rawEnd)) rawEnd = 100f;
+                    if (float.IsNaN(rawDens) || float.IsInfinity(rawDens)) rawDens = 0.01f;
+
+                    switch (RenderSettings.fogMode)
+                    {
+                        case FogMode.Linear:
+                            mode = 3; // D3DFOG_LINEAR
+                            scale = Mathf.Max(rawStart * distMult, 0f);
+                            end = Mathf.Max(rawEnd * distMult, scale + 0.1f);
+                            active = end > 0.5f;
+                            break;
+
+                        case FogMode.Exponential:
+                            mode = 1; // D3DFOG_EXP
+                            density = Mathf.Clamp(rawDens * densMult, 0f, 1f);
+                            active = density > 0.00001f;
+                            break;
+
+                        case FogMode.ExponentialSquared:
+                            mode = 2; // D3DFOG_EXP2
+                            density = Mathf.Clamp(rawDens * densMult, 0f, 1f);
+                            active = density > 0.00001f;
+                            break;
+
+                        default:
+                            mode = 1;
+                            density = Mathf.Clamp(rawDens * densMult, 0f, 1f);
+                            active = density > 0.00001f;
+                            break;
+                    }
                 }
                 else
                 {
-                    StatusText = "Inactive (No fog)";
-                    if (lastSentActive != active)
+                    // Fog disabled
+                    mode = 0;
+                    active = false;
+                }
+
+                // Check if anything changed
+                if (!forceDirty &&
+                    active == lastSentActive &&
+                    mode == lastSentMode &&
+                    Mathf.Abs(color.r - lastSentColor.r) < 0.002f &&
+                    Mathf.Abs(color.g - lastSentColor.g) < 0.002f &&
+                    Mathf.Abs(color.b - lastSentColor.b) < 0.002f &&
+                    Mathf.Abs(scale - lastSentScale) < 0.05f &&
+                    Mathf.Abs(end - lastSentEnd) < 0.05f &&
+                    Mathf.Abs(density - lastSentDensity) < 0.00005f)
+                {
+                    return;
+                }
+
+                // Send to OpenRemix (remixapi_SetFogState is thread-safe internally and uses its own g_gameFogLock)
+                var info = new RemixAPI.remixapi_FogInfo
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_FOG_INFO,
+                    pNext = IntPtr.Zero,
+                    mode = mode,
+                    color = new RemixAPI.remixapi_Float3D
                     {
-                        logger.LogInfo("[Volumetrics] Fog deactivated in OpenRemix (mode: None).");
+                        x = color.r,
+                        y = color.g,
+                        z = color.b
+                    },
+                    scale = scale,
+                    end = end,
+                    density = density
+                };
+
+                var result = RemixAPI.SetFogStateFunc(ref info);
+
+                if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                {
+                    lastSentActive = active;
+                    lastSentMode = mode;
+                    lastSentColor = color;
+                    lastSentScale = scale;
+                    lastSentEnd = end;
+                    lastSentDensity = density;
+                    forceDirty = false;
+
+                    if (active)
+                    {
+                        string modeStr = mode == 1 ? "Exp" : (mode == 2 ? "Exp2" : "Linear");
+                        StatusText = $"Active ({modeStr}, RGB: {color.r:F2},{color.g:F2},{color.b:F2})";
+                        logger.LogInfo($"[Volumetrics] Fog updated in OpenRemix -> mode: {modeStr}, color: ({color.r:F2}, {color.g:F2}, {color.b:F2}), density: {density:F5}, start: {scale:F1}m, end: {end:F1}m");
+                    }
+                    else
+                    {
+                        StatusText = "Inactive (No fog)";
+                        if (lastSentActive != active)
+                        {
+                            logger.LogInfo("[Volumetrics] Fog deactivated in OpenRemix (mode: None).");
+                        }
                     }
                 }
+                else
+                {
+                    StatusText = $"Error setting fog: {result}";
+                    logger.LogWarning($"[Volumetrics] remixapi_SetFogState failed with error code: {result}");
+                }
             }
-            else
+            catch (Exception ex)
             {
-                StatusText = $"Error setting fog: {result}";
-                logger.LogWarning($"[Volumetrics] remixapi_SetFogState failed with error code: {result}");
+                StatusText = $"Exception: {ex.Message}";
+                logger.LogError($"[Volumetrics] Exception in RemixFogManager.Update: {ex}");
             }
         }
 
@@ -249,10 +267,7 @@ namespace UnityRemix
                         pNext = IntPtr.Zero,
                         mode = 0
                     };
-                    lock (apiLock)
-                    {
-                        RemixAPI.SetFogStateFunc(ref clearInfo);
-                    }
+                    RemixAPI.SetFogStateFunc(ref clearInfo);
                     lastSentActive = false;
                     lastSentMode = 0;
                     logger.LogInfo("[Volumetrics] Cleared fog state on cleanup.");
