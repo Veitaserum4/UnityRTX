@@ -33,8 +33,6 @@ namespace UnityRemix
         private ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
         private ConfigEntry<bool> configUseVisibilityCulling;
         private ConfigEntry<int> configRendererCacheDuration;
-        private ConfigEntry<bool> configEnableDynamicSpawnTracking;
-        private ConfigEntry<string> configDynamicSpawnExtraTypes;
         private ConfigEntry<int> configDebugLogInterval;
         private ConfigEntry<bool> configEnableLights;
         private ConfigEntry<float> configLightIntensityMultiplier;
@@ -140,11 +138,6 @@ namespace UnityRemix
                 UltrakillPostProcessPatch.Apply(harmony, LogSource);
                 RemixGameStateHelper.Apply(harmony, LogSource);
                 RemixCameraViewportPatch.Apply(harmony, LogSource);
-
-                if (configEnableDynamicSpawnTracking != null && configEnableDynamicSpawnTracking.Value)
-                {
-                    DynamicSpawnPatch.Apply(harmony, LogSource, configDynamicSpawnExtraTypes?.Value);
-                }
             }
             catch (Exception ex)
             {
@@ -232,12 +225,6 @@ namespace UnityRemix
             configRendererCacheDuration = Config.Bind("Performance", "RendererCacheDuration", 300,
                 new ConfigDescription("Number of frames to cache renderer list before refreshing.",
                     new AcceptableValueRange<int>(60, 3600)));
-            
-            configEnableDynamicSpawnTracking = Config.Bind("Performance", "EnableDynamicSpawnTracking", true,
-                "Hook dynamic object lifecycles (projectiles, explosions, spawned enemies) to register their renderers immediately on the exact frame they spawn, eliminating renderer cache delays.");
-
-            configDynamicSpawnExtraTypes = Config.Bind("Performance", "DynamicSpawnExtraTypes", "",
-                "Comma-separated list of additional type names to hook for instant dynamic spawning in custom games or mods.");
             
             configDebugLogInterval = Config.Bind("Debug", "DetailedLogInterval", 0,
                 new ConfigDescription("Number of frames between detailed diagnostic logs (skinned dumps, prune reasons, mesh failures). 0 = disabled.",
@@ -397,11 +384,6 @@ namespace UnityRemix
             
             // Refresh light cache on scene load
             lightConverter?.RefreshLightCache();
-            
-            if (configEnableDynamicSpawnTracking != null && configEnableDynamicSpawnTracking.Value)
-            {
-                DynamicSpawnPatch.CheckNewAssemblies(LogSource);
-            }
             
             // Refresh camera snapshots for UI
             cameraHandler?.RefreshCameraSnapshots();
@@ -955,7 +937,6 @@ namespace UnityRemix
                 case "PreventSlowMotion": return configPreventSlowMotion.Value;
                 case "HideUIOnRemixMenu": return configHideUIOnRemixMenu.Value;
                 case "UIOverlayClearBlack": return configUIOverlayClearBlack.Value;
-                case "EnableDynamicSpawnTracking": return configEnableDynamicSpawnTracking != null && configEnableDynamicSpawnTracking.Value;
                 default: return false;
             }
         }
@@ -1035,7 +1016,6 @@ namespace UnityRemix
                 case "HideUIOnRemixMenu": configHideUIOnRemixMenu.Value = value; break;
                 case "UIOverlayClearBlack": configUIOverlayClearBlack.Value = value; break;
                 case "EnableTerrain": configEnableTerrain.Value = value; break;
-                case "EnableDynamicSpawnTracking": if (configEnableDynamicSpawnTracking != null) configEnableDynamicSpawnTracking.Value = value; break;
             }
         }
 
