@@ -69,6 +69,7 @@ namespace UnityRemix
             DrawRendererSection();
             DrawLightingSection();
             DrawFogSection();
+            DrawTranslucentsSection();
             DrawPerformanceSection();
             DrawDebugSection();
 
@@ -597,82 +598,78 @@ namespace UnityRemix
                 RemixImGui.SetTooltip("Scales linear fog start/end distance in meters.");
 
             RemixImGui.Spacing();
+        }
+
+        private void DrawTranslucentsSection()
+        {
+            if (!RemixImGui.CollapsingHeader("Translucents, Water & Glass", RemixImGui.TreeNodeFlags_DefaultOpen))
+                return;
+
+            var water = _plugin.WaterManager;
+            if (water == null)
+            {
+                RemixImGui.Text("Water manager not initialized.");
+                return;
+            }
+
+            bool enableTrans = water.ConfigEnableTranslucents.Value;
+            if (RemixImGui.Checkbox("Enable Translucent Path Tracing", ref enableTrans))
+                water.ConfigEnableTranslucents.Value = enableTrans;
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Enables OpenRemix physical translucent materials.\nWater renders with Snell's window, total internal reflection, and volumetric absorption.\nGlass renders with specular transmission and Fresnel reflection.");
+
+            RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Detected: {water.WaterMaterialCount} Water materials, {water.GlassMaterialCount} Glass materials");
+            RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Active Water Surfaces: {water.ActiveWaterSurfaceCount} | Camera Underwater: {(water.IsCameraUnderwater ? "YES (Medium active)" : "No (Air)")}");
+
+            RemixImGui.Spacing();
             RemixImGui.Separator();
             RemixImGui.Spacing();
 
-            // Manual Override
-            bool manualOverride = fog.ConfigFogManualOverride.Value;
-            if (RemixImGui.Checkbox("Manual Fog Override", ref manualOverride))
-            {
-                fog.ConfigFogManualOverride.Value = manualOverride;
-                fog.MarkDirty();
-            }
+            bool enableWater = water.ConfigEnableWater.Value;
+            if (RemixImGui.Checkbox("Water Detection", ref enableWater))
+                water.ConfigEnableWater.Value = enableWater;
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Ignore game fog and use custom volumetric fog parameters.");
+                RemixImGui.SetTooltip("Detects water surfaces (Layer 4, shader keywords, names) and creates translucent liquid bodies.");
 
-            if (manualOverride)
+            if (enableWater)
             {
                 RemixImGui.Indent();
-                string[] modeNames = { "0: None / Off", "1: Exponential", "2: Exponential Squared", "3: Linear" };
-                int currentMode = fog.ConfigFogManualMode.Value;
-                string previewMode = (currentMode >= 0 && currentMode < modeNames.Length) ? modeNames[currentMode] : modeNames[0];
-                if (RemixImGui.BeginCombo("Mode", previewMode))
-                {
-                    for (int i = 0; i < modeNames.Length; i++)
-                    {
-                        bool selected = (currentMode == i);
-                        if (RemixImGui.Selectable(modeNames[i], selected))
-                        {
-                            fog.ConfigFogManualMode.Value = i;
-                            fog.MarkDirty();
-                        }
-                    }
-                    RemixImGui.EndCombo();
-                }
+                float waterIOR = water.ConfigWaterIOR.Value;
+                if (RemixImGui.SliderFloat("Water IOR (Refraction Index)", ref waterIOR, 1.0f, 2.0f))
+                    water.ConfigWaterIOR.Value = waterIOR;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Index of refraction for water (default 1.333). Determines Snell's window curvature and critical angle for total internal reflection.");
 
-                if (currentMode == 3) // Linear
-                {
-                    float startDist = fog.ConfigFogManualStart.Value;
-                    if (RemixImGui.SliderFloat("Start Distance", ref startDist, 0f, 200f))
-                    {
-                        fog.ConfigFogManualStart.Value = startDist;
-                        fog.MarkDirty();
-                    }
-                    float endDist = fog.ConfigFogManualEnd.Value;
-                    if (RemixImGui.SliderFloat("End Distance", ref endDist, 1f, 1000f))
-                    {
-                        fog.ConfigFogManualEnd.Value = endDist;
-                        fog.MarkDirty();
-                    }
-                }
-                else if (currentMode == 1 || currentMode == 2) // Exp / Exp2
-                {
-                    float dens = fog.ConfigFogManualDensity.Value;
-                    if (RemixImGui.SliderFloat("Density", ref dens, 0.0001f, 0.2f))
-                    {
-                        fog.ConfigFogManualDensity.Value = dens;
-                        fog.MarkDirty();
-                    }
-                }
+                float clarity = water.ConfigWaterClarity.Value;
+                if (RemixImGui.SliderFloat("Water Clarity Distance (m)", ref clarity, 1.0f, 100.0f))
+                    water.ConfigWaterClarity.Value = clarity;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Transmittance measurement distance in meters for volumetric Beer-Lambert depth absorption.");
 
-                float r = fog.ConfigFogManualColorR.Value;
-                if (RemixImGui.SliderFloat("Color Red", ref r, 0f, 1f))
-                {
-                    fog.ConfigFogManualColorR.Value = r;
-                    fog.MarkDirty();
-                }
-                float g = fog.ConfigFogManualColorG.Value;
-                if (RemixImGui.SliderFloat("Color Green", ref g, 0f, 1f))
-                {
-                    fog.ConfigFogManualColorG.Value = g;
-                    fog.MarkDirty();
-                }
-                float b = fog.ConfigFogManualColorB.Value;
-                if (RemixImGui.SliderFloat("Color Blue", ref b, 0f, 1f))
-                {
-                    fog.ConfigFogManualColorB.Value = b;
-                    fog.MarkDirty();
-                }
+                bool enableMedium = water.ConfigEnableUnderwaterMedium.Value;
+                if (RemixImGui.Checkbox("Underwater Camera Medium", ref enableMedium))
+                    water.ConfigEnableUnderwaterMedium.Value = enableMedium;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Renders volumetric fog absorption and Snell's window upward reflection when the camera dives underwater.");
+                RemixImGui.Unindent();
+            }
+
+            RemixImGui.Spacing();
+
+            bool enableGlass = water.ConfigEnableGlass.Value;
+            if (RemixImGui.Checkbox("Glass Detection", ref enableGlass))
+                water.ConfigEnableGlass.Value = enableGlass;
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Detects glass, windows, visors, and transparent glossy materials and creates thin transmission sheets.");
+
+            if (enableGlass)
+            {
+                RemixImGui.Indent();
+                float glassIOR = water.ConfigGlassIOR.Value;
+                if (RemixImGui.SliderFloat("Glass IOR (Refraction Index)", ref glassIOR, 1.0f, 2.5f))
+                    water.ConfigGlassIOR.Value = glassIOR;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Index of refraction for glass (default 1.52). Determines Fresnel specular reflection strength.");
                 RemixImGui.Unindent();
             }
         }

@@ -116,6 +116,14 @@ namespace UnityRemix
             Blend       // Alpha blending (fade/transparent)
         }
 
+        // Translucent material classification for OpenRemix path tracing
+        public enum TranslucentKind
+        {
+            None,       // Opaque, Cutout, or standard Blend
+            Water,      // Translucent body: thick liquid volume with Snell's window, refraction, TIR, and Beer-Lambert volumetric absorption
+            Glass       // Translucent thin wall: specular transmission sheet with Fresnel reflection
+        }
+
         // Material data captured from Unity materials
         public struct MaterialTextureData
         {
@@ -139,8 +147,14 @@ namespace UnityRemix
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
+            public TranslucentKind translucentKind;
+            public float refractiveIndex;
+            public float transmittanceDistance;
+            public Color transmittanceColor;
         }
         private System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData> materialTextureData = new System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData>();
+        private RemixWaterManager waterManager;
+        public void SetWaterManager(RemixWaterManager manager) => this.waterManager = manager;
         private HashSet<string> loggedShaderProperties = new HashSet<string>();
         
         // Queue for async material creation
@@ -422,7 +436,7 @@ namespace UnityRemix
         /// <summary>
         /// Capture textures from a Unity material, with optional per-renderer property overrides
         /// </summary>
-        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null)
+        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null)
         {
             if (material == null)
                 return;
@@ -467,7 +481,11 @@ namespace UnityRemix
                 emissiveColor = Color.black,
                 emissiveIntensity = 0f,
                 metallic = 0.0f,
-                roughness = 0.7f
+                roughness = 0.7f,
+                translucentKind = TranslucentKind.None,
+                refractiveIndex = 1.0f,
+                transmittanceDistance = 0.0f,
+                transmittanceColor = Color.white
             };
             
             // Match albedo texture first so color resolution can be aligned to the matched texture channel
@@ -643,13 +661,24 @@ namespace UnityRemix
             {
                 matData.alphaCutoff = material.GetFloat("_Cutoff");
             }
+
+            // Detect translucent kind (Water vs Glass vs None) for OpenRemix
+            var (transKind, ior, dist, transColor, transReason) = DetectTranslucentKind(
+                material, material.name, shaderName, renderer, matData.alphaMode, matData.albedoColor, matData.roughness);
+            matData.translucentKind = transKind;
+            matData.refractiveIndex = ior;
+            matData.transmittanceDistance = dist;
+            matData.transmittanceColor = transColor;
             
             // Detailed diagnostic log for every material
             if (verboseTextureLogging.Value)
+            {
+                string transStr = transKind != TranslucentKind.None ? $" transKind={transKind}({transReason},IOR={ior:F2},dist={dist:F1}m)" : "";
                 logger.LogInfo($"[MaterialDiag] '{material.name}' shader='{material.shader?.name}' queue={material.renderQueue} " +
-                    $"alphaMode={matData.alphaMode} reason={detectionReason} " +
+                    $"alphaMode={matData.alphaMode} reason={detectionReason}{transStr} " +
                     $"color=({matData.albedoColor.r:F3},{matData.albedoColor.g:F3},{matData.albedoColor.b:F3},{matData.albedoColor.a:F3}) " +
                     $"metallic={matData.metallic:F2} roughness={matData.roughness:F2} cutoff={matData.alphaCutoff:F3}");
+            }
 
             // Upload albedo texture (with pre-tinting and remapping)
             albedoTex = tex;
@@ -1794,6 +1823,17 @@ namespace UnityRemix
             hash *= 1099511628211UL;
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.roughness);
             hash *= 1099511628211UL;
+
+            // Incorporate translucent kind and refractive index so translucent materials never collide with opaque materials
+            if (matData.translucentKind != TranslucentKind.None)
+            {
+                hash ^= (ulong)matData.translucentKind * 7919UL;
+                hash *= 1099511628211UL;
+                hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.refractiveIndex);
+                hash *= 1099511628211UL;
+                hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.transmittanceDistance);
+                hash *= 1099511628211UL;
+            }
             
             if (hash == 0) hash = 1;
             return hash;
@@ -2053,6 +2093,209 @@ namespace UnityRemix
             
             return (AlphaMode.Opaque, "default");
         }
+
+        /// <summary>
+        /// Detect if a material represents a physical translucent material (Water body or Glass thin wall) for OpenRemix.
+        /// </summary>
+        private (TranslucentKind kind, float ior, float distance, Color color, string reason) DetectTranslucentKind(
+            Material material, string matName, string shaderName, Renderer renderer, AlphaMode alphaMode, Color albedoColor, float roughness)
+        {
+            if (waterManager != null && !waterManager.ConfigEnableTranslucents.Value)
+                return (TranslucentKind.None, 1.0f, 0f, Color.white, "disabled");
+
+            int layer = renderer != null ? renderer.gameObject.layer : -1;
+            string layerName = layer >= 0 ? LayerMask.LayerToName(layer) : null;
+            string goName = renderer != null ? renderer.gameObject.name : null;
+            string mName = matName ?? "";
+            string sName = shaderName ?? "";
+
+            bool enableWater = waterManager == null || waterManager.ConfigEnableWater.Value;
+            bool enableGlass = waterManager == null || waterManager.ConfigEnableGlass.Value;
+
+            // 1. Water Detection (Translucent Body with refraction, TIR, Snell's window, and volumetric depth fog)
+            if (enableWater)
+            {
+                bool isWater = false;
+                string reason = null;
+
+                // Built-in Unity Water layer (Layer 4)
+                if (layer == 4 || (layerName != null && layerName.IndexOf("water", StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    isWater = true;
+                    reason = $"layer:{layerName ?? layer.ToString()}";
+                }
+                // Shader name heuristics
+                else if (MatchesAnyKeyword(sName, "water", "ocean", "river", "lake", "pond", "waterfall", "fluid", "aquatic", "puddle", "stream"))
+                {
+                    isWater = true;
+                    reason = $"shader:{sName}";
+                }
+                // Material name heuristics
+                else if (MatchesAnyKeyword(mName, "water", "ocean", "river", "lake", "pond", "waterfall", "liquid", "aquatic", "puddle", "stream") &&
+                         !MatchesAnyKeyword(mName, "watermark", "resistwater", "resistWater", "waterproof"))
+                {
+                    isWater = true;
+                    reason = $"matName:{mName}";
+                }
+                // GameObject name heuristics
+                else if (goName != null && MatchesAnyKeyword(goName, "waterfall", "water_plane", "waterplane", "ocean", "river", "pond", "lake") &&
+                         !MatchesAnyKeyword(goName, "watermark", "resistwater", "resistWater", "underwateroverlay"))
+                {
+                    isWater = true;
+                    reason = $"goName:{goName}";
+                }
+                // Shader properties
+                else if (material != null && (material.HasProperty("_WaterColor") || material.HasProperty("_DepthColor") || material.HasProperty("_WaveSpeed") || material.HasProperty("_WaveScale")))
+                {
+                    isWater = true;
+                    reason = "waterProperties";
+                }
+
+                if (isWater)
+                {
+                    float ior = waterManager != null ? waterManager.ConfigWaterIOR.Value : 1.333f;
+                    float dist = waterManager != null ? waterManager.ConfigWaterClarity.Value : 15.0f;
+                    Color waterCol = ExtractWaterColor(material, albedoColor);
+
+                    if (renderer != null && waterManager != null)
+                    {
+                        waterManager.RegisterWaterSurface(renderer, waterCol, dist);
+                    }
+                    if (waterManager != null)
+                    {
+                        waterManager.WaterMaterialCount++;
+                    }
+
+                    return (TranslucentKind.Water, ior, dist, waterCol, reason);
+                }
+            }
+
+            // 2. Glass Detection (Thin Wall specular transmission sheet with Fresnel reflection)
+            if (enableGlass)
+            {
+                bool isGlass = false;
+                string reason = null;
+
+                // Layer heuristics (e.g. ULTRAKILL Layer 17 'BrokenGlass')
+                if (layerName != null && layerName.IndexOf("glass", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    isGlass = true;
+                    reason = $"layer:{layerName}";
+                }
+                // Shader name heuristics
+                else if (MatchesAnyKeyword(sName, "glass", "window", "windshield", "visor", "lens", "refractive", "stainedglass", "crystal", "ice"))
+                {
+                    isGlass = true;
+                    reason = $"shader:{sName}";
+                }
+                // Material name heuristics
+                else if (MatchesAnyKeyword(mName, "glass", "window", "windshield", "visor", "lens", "bottle", "jar", "stainedglass", "crystal", "ice") &&
+                         !MatchesAnyKeyword(mName, "hourglass", "sunglasses"))
+                {
+                    isGlass = true;
+                    reason = $"matName:{mName}";
+                }
+                // GameObject name heuristics (e.g. ULTRAKILL 'SandCan_Glass_Low')
+                else if (goName != null && MatchesAnyKeyword(goName, "glass", "window", "windshield", "visor", "lens", "bottle", "jar") &&
+                         !MatchesAnyKeyword(goName, "hourglass"))
+                {
+                    isGlass = true;
+                    reason = $"goName:{goName}";
+                }
+                // PBR Glass heuristic: transparent queue + low alpha + smooth (not particle/smoke/blood/fire)
+                else if (material != null)
+                {
+                    int queue = material.renderQueue;
+                    if (queue >= 2900 && alphaMode == AlphaMode.Blend)
+                    {
+                        if (roughness <= 0.25f && albedoColor.a <= 0.75f)
+                        {
+                            if (!MatchesAnyKeyword(mName, "particle", "smoke", "fire", "blood", "decal", "glow", "halo", "trail", "spark", "explosion") &&
+                                !MatchesAnyKeyword(sName, "particle", "smoke", "fire", "blood", "decal", "glow", "halo", "trail", "spark", "explosion"))
+                            {
+                                isGlass = true;
+                                reason = $"pbrGlass(queue={queue},rough={roughness:F2},alpha={albedoColor.a:F2})";
+                            }
+                        }
+                    }
+                }
+
+                if (isGlass)
+                {
+                    float ior = waterManager != null ? waterManager.ConfigGlassIOR.Value : 1.52f;
+                    Color glassCol = ExtractGlassColor(material, albedoColor);
+
+                    if (waterManager != null)
+                    {
+                        waterManager.GlassMaterialCount++;
+                    }
+
+                    return (TranslucentKind.Glass, ior, 0.0f, glassCol, reason);
+                }
+            }
+
+            return (TranslucentKind.None, 1.0f, 0f, Color.white, "none");
+        }
+
+        private static bool MatchesAnyKeyword(string text, params string[] keywords)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            for (int i = 0; i < keywords.Length; i++)
+            {
+                if (text.IndexOf(keywords[i], StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
+        private static Color ExtractWaterColor(Material mat, Color fallbackColor)
+        {
+            if (mat != null)
+            {
+                string[] waterColorProps = { "_WaterColor", "_DepthColor", "_ShallowColor", "_UnderwaterColor", "_Color", "_BaseColor" };
+                for (int i = 0; i < waterColorProps.Length; i++)
+                {
+                    if (mat.HasProperty(waterColorProps[i]))
+                    {
+                        Color c = mat.GetColor(waterColorProps[i]);
+                        if (c.maxColorComponent > 0.05f && (c.r < 0.95f || c.g < 0.95f || c.b < 0.95f))
+                        {
+                            return new Color(c.r, c.g, c.b, 1.0f);
+                        }
+                    }
+                }
+            }
+            if (fallbackColor.maxColorComponent > 0.05f && (fallbackColor.r < 0.95f || fallbackColor.g < 0.95f || fallbackColor.b < 0.95f))
+            {
+                return new Color(fallbackColor.r, fallbackColor.g, fallbackColor.b, 1.0f);
+            }
+            // Natural clean water cyan/blue
+            return new Color(0.20f, 0.70f, 0.90f, 1.0f);
+        }
+
+        private static Color ExtractGlassColor(Material mat, Color fallbackColor)
+        {
+            if (fallbackColor.a < 0.95f && (fallbackColor.r < 0.95f || fallbackColor.g < 0.95f || fallbackColor.b < 0.95f))
+            {
+                return new Color(fallbackColor.r, fallbackColor.g, fallbackColor.b, 1.0f);
+            }
+            if (mat != null)
+            {
+                if (mat.HasProperty("_Color"))
+                {
+                    Color c = mat.GetColor("_Color");
+                    if (c.r < 0.98f || c.g < 0.98f || c.b < 0.98f)
+                        return new Color(c.r, c.g, c.b, 1.0f);
+                }
+                if (mat.HasProperty("_TintColor"))
+                {
+                    Color c = mat.GetColor("_TintColor");
+                    if (c.r < 0.98f || c.g < 0.98f || c.b < 0.98f)
+                        return new Color(c.r, c.g, c.b, 1.0f);
+                }
+            }
+            return Color.white;
+        }
         
         private IntPtr CreateRemixMaterialSimple(ref MaterialTextureData matData, int materialId)
         {
@@ -2090,78 +2333,111 @@ namespace UnityRemix
 
                 string emissivePath = GetTexturePathFromHandle(matData.emissiveHandle);
                 if (verboseTextureLogging.Value)
-                    logger.LogInfo($"[MaterialCreate] '{matData.materialName}': albedo={albedoPath ?? "none"}, normal={normalPath ?? "none"}, emissive={emissivePath ?? "none"}, emColor=({matData.emissiveColor.r:F3},{matData.emissiveColor.g:F3},{matData.emissiveColor.b:F3}), emIntensity={matData.emissiveIntensity:F3}, alphaMode={matData.alphaMode}");
+                    logger.LogInfo($"[MaterialCreate] '{matData.materialName}': albedo={albedoPath ?? "none"}, normal={normalPath ?? "none"}, emissive={emissivePath ?? "none"}, emColor=({matData.emissiveColor.r:F3},{matData.emissiveColor.g:F3},{matData.emissiveColor.b:F3}), emIntensity={matData.emissiveIntensity:F3}, alphaMode={matData.alphaMode}, transKind={matData.translucentKind}");
                 
-                // Build the OpaqueEXT using the blittable Raw struct for safe pNext chaining
-                var opaqueExt = new RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw
+                GCHandle extHandle;
+                IntPtr extPtr;
+                RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw transExt = default;
+                RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw opaqueExt = default;
+
+                if (matData.translucentKind != TranslucentKind.None)
                 {
-                    sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT,
-                    pNext = IntPtr.Zero,
-                    roughnessTexture = IntPtr.Zero,
-                    metallicTexture = IntPtr.Zero,
-                    anisotropy = 0.0f,
-                    albedoConstant_x = matData.albedoColor.r,
-                    albedoConstant_y = matData.albedoColor.g,
-                    albedoConstant_z = matData.albedoColor.b,
-                    opacityConstant = matData.alphaMode == AlphaMode.Opaque ? 1.0f : matData.albedoColor.a,
-                    roughnessConstant = (!string.IsNullOrEmpty(matData.materialName) && matData.materialName.IndexOf("blood", StringComparison.OrdinalIgnoreCase) >= 0) ? 0.15f : matData.roughness,
-                    metallicConstant = matData.metallic,
-                    thinFilmThickness_hasvalue = 0,
-                    thinFilmThickness_value = 0.0f,
-                    alphaIsThinFilmThickness = 0,
-                    heightTexture = IntPtr.Zero,
-                    displaceIn = 0.0f,
-                    useDrawCallAlphaState = 0,
-                    blendType_hasvalue = 0,
-                    blendType_value = 0,
-                    invertedBlend = 0,
-                    // VkCompareOp: 0=NEVER, 6=GREATER_OR_EQUAL, 7=ALWAYS
-                    alphaTestType = 7, // kAlways — default: pass all pixels (no alpha test)
-                    alphaReferenceValue = 0,
-                    displaceOut = 0.0f
-                };
-                
-                // Configure alpha based on detected mode
-                switch (matData.alphaMode)
-                {
-                    case AlphaMode.Cutout:
-                        // VkCompareOp 6 = GREATER_OR_EQUAL: pass pixels with alpha >= reference
-                        opaqueExt.alphaTestType = 6;
-                        opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
-                            ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
-                            : (byte)1;
-                        break;
-                    case AlphaMode.Blend:
-                        // DXVK-Remix compatibility
-                        opaqueExt.blendType_hasvalue = 1; // remixapi_Bool.True
-                        opaqueExt.blendType_value = 1;
-                        // OpenRemix: enable alpha testing (GREATER_OR_EQUAL) so alpha==0 texels are discarded in acceptCandidate
-                        opaqueExt.alphaTestType = 6;
-                        opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
-                            ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
-                            : (byte)1;
-                        // Ensure opacityConstant < 1.0f so OpenRemix sets material->translucent = true
-                        // and enables coverageBlended layer traversal for semi-transparent particles and sheets.
-                        if (opaqueExt.opacityConstant >= 1.0f)
+                    transExt = new RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw
+                    {
+                        sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT,
+                        pNext = IntPtr.Zero,
+                        transmittanceTexture = IntPtr.Zero,
+                        refractiveIndex = matData.refractiveIndex,
+                        transmittanceColor = new RemixAPI.remixapi_Float3D
                         {
-                            opaqueExt.opacityConstant = 0.999f;
-                        }
-                        break;
+                            x = matData.transmittanceColor.r,
+                            y = matData.transmittanceColor.g,
+                            z = matData.transmittanceColor.b
+                        },
+                        transmittanceMeasurementDistance = matData.transmittanceDistance,
+                        thinWallThickness_hasvalue = matData.translucentKind == TranslucentKind.Glass ? 1 : 0,
+                        thinWallThickness_value = matData.translucentKind == TranslucentKind.Glass ? 0.005f : 0.0f,
+                        useDiffuseLayer = 0
+                    };
+                    extHandle = GCHandle.Alloc(transExt, GCHandleType.Pinned);
+                    extPtr = extHandle.AddrOfPinnedObject();
+
+                    logger.LogInfo($"[TranslucentEXT] '{matData.materialName}': created {matData.translucentKind} (IOR={transExt.refractiveIndex:F3}, dist={transExt.transmittanceMeasurementDistance:F1}m, thinWall={transExt.thinWallThickness_hasvalue}, color=({transExt.transmittanceColor.x:F2},{transExt.transmittanceColor.y:F2},{transExt.transmittanceColor.z:F2}))");
                 }
-                
-                // Log all OpaqueEXT values being sent to Remix
-                if (verboseTextureLogging.Value)
-                    logger.LogInfo($"[OpaqueEXT] '{matData.materialName}': " +
-                    $"sType={opaqueExt.sType} " +
-                    $"albedo=({opaqueExt.albedoConstant_x:F3},{opaqueExt.albedoConstant_y:F3},{opaqueExt.albedoConstant_z:F3}) " +
-                    $"opacity={opaqueExt.opacityConstant:F3} " +
-                    $"roughness={opaqueExt.roughnessConstant:F3} metallic={opaqueExt.metallicConstant:F3} " +
-                    $"alphaTestType={opaqueExt.alphaTestType} alphaRef={opaqueExt.alphaReferenceValue} " +
-                    $"blendHasValue={opaqueExt.blendType_hasvalue} blendValue={opaqueExt.blendType_value} " +
-                    $"invertedBlend={opaqueExt.invertedBlend} useDrawCallAlpha={opaqueExt.useDrawCallAlphaState} " +
-                    $"structSize={System.Runtime.InteropServices.Marshal.SizeOf<RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw>()}");
-                
-                GCHandle opaqueHandle = GCHandle.Alloc(opaqueExt, GCHandleType.Pinned);
+                else
+                {
+                    // Build the OpaqueEXT using the blittable Raw struct for safe pNext chaining
+                    opaqueExt = new RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw
+                    {
+                        sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT,
+                        pNext = IntPtr.Zero,
+                        roughnessTexture = IntPtr.Zero,
+                        metallicTexture = IntPtr.Zero,
+                        anisotropy = 0.0f,
+                        albedoConstant_x = matData.albedoColor.r,
+                        albedoConstant_y = matData.albedoColor.g,
+                        albedoConstant_z = matData.albedoColor.b,
+                        opacityConstant = matData.alphaMode == AlphaMode.Opaque ? 1.0f : matData.albedoColor.a,
+                        roughnessConstant = (!string.IsNullOrEmpty(matData.materialName) && matData.materialName.IndexOf("blood", StringComparison.OrdinalIgnoreCase) >= 0) ? 0.15f : matData.roughness,
+                        metallicConstant = matData.metallic,
+                        thinFilmThickness_hasvalue = 0,
+                        thinFilmThickness_value = 0.0f,
+                        alphaIsThinFilmThickness = 0,
+                        heightTexture = IntPtr.Zero,
+                        displaceIn = 0.0f,
+                        useDrawCallAlphaState = 0,
+                        blendType_hasvalue = 0,
+                        blendType_value = 0,
+                        invertedBlend = 0,
+                        // VkCompareOp: 0=NEVER, 6=GREATER_OR_EQUAL, 7=ALWAYS
+                        alphaTestType = 7, // kAlways — default: pass all pixels (no alpha test)
+                        alphaReferenceValue = 0,
+                        displaceOut = 0.0f
+                    };
+                    
+                    // Configure alpha based on detected mode
+                    switch (matData.alphaMode)
+                    {
+                        case AlphaMode.Cutout:
+                            // VkCompareOp 6 = GREATER_OR_EQUAL: pass pixels with alpha >= reference
+                            opaqueExt.alphaTestType = 6;
+                            opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
+                                ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
+                                : (byte)1;
+                            break;
+                        case AlphaMode.Blend:
+                            // DXVK-Remix compatibility
+                            opaqueExt.blendType_hasvalue = 1; // remixapi_Bool.True
+                            opaqueExt.blendType_value = 1;
+                            // OpenRemix: enable alpha testing (GREATER_OR_EQUAL) so alpha==0 texels are discarded in acceptCandidate
+                            opaqueExt.alphaTestType = 6;
+                            opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
+                                ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
+                                : (byte)1;
+                            // Ensure opacityConstant < 1.0f so OpenRemix sets material->translucent = true
+                            // and enables coverageBlended layer traversal for semi-transparent particles and sheets.
+                            if (opaqueExt.opacityConstant >= 1.0f)
+                            {
+                                opaqueExt.opacityConstant = 0.999f;
+                            }
+                            break;
+                    }
+                    
+                    // Log all OpaqueEXT values being sent to Remix
+                    if (verboseTextureLogging.Value)
+                        logger.LogInfo($"[OpaqueEXT] '{matData.materialName}': " +
+                        $"sType={opaqueExt.sType} " +
+                        $"albedo=({opaqueExt.albedoConstant_x:F3},{opaqueExt.albedoConstant_y:F3},{opaqueExt.albedoConstant_z:F3}) " +
+                        $"opacity={opaqueExt.opacityConstant:F3} " +
+                        $"roughness={opaqueExt.roughnessConstant:F3} metallic={opaqueExt.metallicConstant:F3} " +
+                        $"alphaTestType={opaqueExt.alphaTestType} alphaRef={opaqueExt.alphaReferenceValue} " +
+                        $"blendHasValue={opaqueExt.blendType_hasvalue} blendValue={opaqueExt.blendType_value} " +
+                        $"invertedBlend={opaqueExt.invertedBlend} useDrawCallAlpha={opaqueExt.useDrawCallAlphaState} " +
+                        $"structSize={System.Runtime.InteropServices.Marshal.SizeOf<RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw>()}");
+                    
+                    extHandle = GCHandle.Alloc(opaqueExt, GCHandleType.Pinned);
+                    extPtr = extHandle.AddrOfPinnedObject();
+                }
                 
                 try
                 {
@@ -2173,7 +2449,7 @@ namespace UnityRemix
                     var materialInfo = new RemixAPI.remixapi_MaterialInfo
                     {
                         sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO,
-                        pNext = opaqueHandle.AddrOfPinnedObject(),
+                        pNext = extPtr,
                         hash = matHash,
                         albedoTexture = albedoPath,
                         normalTexture = normalPath,
@@ -2212,7 +2488,7 @@ namespace UnityRemix
                 }
                 finally
                 {
-                    opaqueHandle.Free();
+                    extHandle.Free();
                 }
             }
             catch (Exception ex)

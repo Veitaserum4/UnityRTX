@@ -101,6 +101,7 @@ namespace UnityRemix
         private RemixDebugHUD debugHUD;
         private RemixSkyboxManager skyboxManager;
         private RemixFogManager fogManager;
+        private RemixWaterManager waterManager;
         
         private int frameCount = 0;
         private static bool isQuitting = false;
@@ -582,6 +583,9 @@ namespace UnityRemix
             renderThread.SetTerrainManager(terrainManager);
             
             fogManager = new RemixFogManager(LogSource, Config);
+            waterManager = new RemixWaterManager(LogSource, Config);
+            materialManager.SetWaterManager(waterManager);
+            cameraHandler.SetWaterManager(waterManager);
             
             // Initialize ImGui overlay
             if (RemixImGui.Initialize(LogSource))
@@ -1069,6 +1073,8 @@ namespace UnityRemix
         public RemixSkyboxManager SkyboxManager => skyboxManager;
  
         public RemixFogManager FogManager => fogManager;
+
+        public RemixWaterManager WaterManager => waterManager;
 
         #endregion
     }

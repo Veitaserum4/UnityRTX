@@ -1353,7 +1353,7 @@ namespace UnityRemix
                                 }
                                 catch { }
                                 submeshMaterialIds.Add(matId);
-                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor);
+                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer);
                             }
                             else
                             {
@@ -1671,7 +1671,7 @@ namespace UnityRemix
                 int matId = mat != null ? mat.GetInstanceID() : 0;
                 if (mat != null)
                 {
-                    materialManager.CaptureMaterialTextures(mat, matId);
+                    materialManager.CaptureMaterialTextures(mat, matId, renderer: renderer);
                 }
 
                 uint catFlags = 0;

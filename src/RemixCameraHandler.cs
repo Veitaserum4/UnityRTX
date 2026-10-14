@@ -32,6 +32,9 @@ namespace UnityRemix
         public Camera CurrentCamera => currentCamera;
         public string ActiveCameraName => lastCameraName;
         
+        private RemixWaterManager waterManager;
+        public void SetWaterManager(RemixWaterManager manager) => this.waterManager = manager;
+        
         /// <summary>
         /// Immutable snapshot of a Unity camera's properties, safe to read from any thread.
         /// </summary>
@@ -300,6 +303,9 @@ namespace UnityRemix
         {
             if (setupCameraFunc == null)
                 return;
+
+            waterManager?.UpdateCameraState(position);
+            bool isUnderwater = waterManager != null && waterManager.IsCameraUnderwater;
             
             // Convert from Unity Y-up to Z-up coordinate system
             var paramCamera = new RemixAPI.remixapi_CameraInfoParameterizedEXT
@@ -315,6 +321,28 @@ namespace UnityRemix
                 nearPlane = nearPlane,
                 farPlane = farPlane
             };
+
+            GCHandle mediumHandle = default;
+            bool hasMedium = false;
+
+            if (isUnderwater)
+            {
+                var medium = new RemixAPI.remixapi_CameraMediumEXT
+                {
+                    sType = unchecked((int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT),
+                    pNext = IntPtr.Zero,
+                    inside = 1,
+                    transmittanceColor = new RemixAPI.remixapi_Float3D(
+                        waterManager.CurrentUnderwaterColor.r,
+                        waterManager.CurrentUnderwaterColor.g,
+                        waterManager.CurrentUnderwaterColor.b
+                    ),
+                    transmittanceMeasurementDistance = waterManager.CurrentUnderwaterDistance
+                };
+                mediumHandle = GCHandle.Alloc(medium, GCHandleType.Pinned);
+                paramCamera.pNext = mediumHandle.AddrOfPinnedObject();
+                hasMedium = true;
+            }
             
             GCHandle paramHandle = GCHandle.Alloc(paramCamera, GCHandleType.Pinned);
             try
@@ -335,6 +363,10 @@ namespace UnityRemix
             finally
             {
                 paramHandle.Free();
+                if (hasMedium)
+                {
+                    mediumHandle.Free();
+                }
             }
 
             // Also setup REMIXAPI_CAMERA_TYPE_SKY (centered at origin with same orientation and projection)

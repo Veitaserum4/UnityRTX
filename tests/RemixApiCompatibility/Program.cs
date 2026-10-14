@@ -174,4 +174,22 @@ if (args.Length == 1)
     Console.WriteLine("Release DLL verified: table order, struct sizes, field offsets, and shared enum values.");
 }
 
+Check(Marshal.SizeOf<remixapi_MaterialInfoTranslucentEXT_Raw>() == 56, "remixapi_MaterialInfoTranslucentEXT_Raw size must be 56 bytes");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("sType") == (IntPtr)0, "sType offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("pNext") == (IntPtr)8, "pNext offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("transmittanceTexture") == (IntPtr)16, "transmittanceTexture offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("refractiveIndex") == (IntPtr)24, "refractiveIndex offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("transmittanceColor") == (IntPtr)28, "transmittanceColor offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("transmittanceMeasurementDistance") == (IntPtr)40, "transmittanceMeasurementDistance offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("thinWallThickness_hasvalue") == (IntPtr)44, "thinWallThickness_hasvalue offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("thinWallThickness_value") == (IntPtr)48, "thinWallThickness_value offset");
+Check(Marshal.OffsetOf<remixapi_MaterialInfoTranslucentEXT_Raw>("useDiffuseLayer") == (IntPtr)52, "useDiffuseLayer offset");
+
+Check(Marshal.SizeOf<remixapi_CameraMediumEXT>() == 40, "remixapi_CameraMediumEXT size must be 40 bytes");
+Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("sType") == (IntPtr)0, "sType offset");
+Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("pNext") == (IntPtr)8, "pNext offset");
+Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("inside") == (IntPtr)16, "inside offset");
+Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("transmittanceColor") == (IntPtr)20, "transmittanceColor offset");
+Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("transmittanceMeasurementDistance") == (IntPtr)32, "transmittanceMeasurementDistance offset");
+
 Console.WriteLine("Passed: current, legacy and openremix API negotiation and pointer mapping, retry clearing, error propagation, and incompatible-layout rejection.");

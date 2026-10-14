@@ -103,6 +103,7 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT = 0x7fff1002,
             REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT = 0x7fff1008,
             REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
+            REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT = unchecked((int)0x7fff101c),
         }
 
         public enum remixapi_InstanceClassEXT : uint
@@ -542,6 +543,43 @@ namespace UnityRemix
             public byte alphaReferenceValue;
             // 3 bytes implicit padding (C# Sequential matches C struct packing)
             public float displaceOut;
+        }
+
+        /// <summary>
+        /// Layout matches remixapi_MaterialInfoTranslucentEXT exactly (56 bytes on x64).
+        /// Used for path-traced translucent materials in OpenRemix (Water and Glass).
+        /// - Without thin wall (thinWallThickness_hasvalue=0, transmittanceMeasurementDistance>0):
+        ///   Treated as a translucent liquid body (water) with Snell's law refraction, TIR, and Beer-Lambert volumetric absorption.
+        /// - With thin wall (thinWallThickness_hasvalue=1):
+        ///   Treated as a thin transmission sheet (glass/window) with Fresnel reflection and transmission tint.
+        /// </summary>
+        [StructLayout(LayoutKind.Explicit, Size = 56)]
+        public struct remixapi_MaterialInfoTranslucentEXT_Raw
+        {
+            [FieldOffset(0)] public int sType;                                 // REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT (4)
+            [FieldOffset(8)] public IntPtr pNext;
+            [FieldOffset(16)] public IntPtr transmittanceTexture;               // UTF-8 const char* or null
+            [FieldOffset(24)] public float refractiveIndex;
+            [FieldOffset(28)] public remixapi_Float3D transmittanceColor;       // 12 bytes
+            [FieldOffset(40)] public float transmittanceMeasurementDistance;
+            [FieldOffset(44)] public int thinWallThickness_hasvalue;            // remixapi_Bool (int32)
+            [FieldOffset(48)] public float thinWallThickness_value;
+            [FieldOffset(52)] public int useDiffuseLayer;                       // remixapi_Bool (int32)
+        }
+
+        /// <summary>
+        /// Optional pNext on a world CameraInfo (REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT = 0x7fff101c, 40 bytes on x64).
+        /// Notifies OpenRemix when the camera is submerged inside a translucent body (underwater).
+        /// When inside=1, primary rays undergo volumetric absorption and looking up at the water surface renders Snell's window.
+        /// </summary>
+        [StructLayout(LayoutKind.Explicit, Size = 40)]
+        public struct remixapi_CameraMediumEXT
+        {
+            [FieldOffset(0)] public int sType;                                 // 0x7fff101c
+            [FieldOffset(8)] public IntPtr pNext;
+            [FieldOffset(16)] public int inside;                                // remixapi_Bool: 1=underwater, 0=air
+            [FieldOffset(20)] public remixapi_Float3D transmittanceColor;       // 12 bytes
+            [FieldOffset(32)] public float transmittanceMeasurementDistance;
         }
 
         #endregion
