@@ -613,6 +613,14 @@ namespace UnityRemix
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate remixapi_ErrorCode PFN_remixapi_DestroyTexture(IntPtr handle);
 
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_DrawScreenOverlay(
+            IntPtr pixels,
+            uint width,
+            uint height,
+            remixapi_Format format,
+            float opacity);
+
         #endregion
 
         #region Interface Struct
@@ -711,6 +719,7 @@ namespace UnityRemix
 
         public static PFN_remixapi_GetUIState GetUIStateFunc;
         public static PFN_remixapi_SetUIState SetUIStateFunc;
+        public static PFN_remixapi_DrawScreenOverlay DrawScreenOverlayFunc;
         public static PFN_remixapi_PumpEvents NativePumpEvents { get; private set; }
 
         private static IntPtr _remixDll = IntPtr.Zero;
@@ -775,6 +784,10 @@ namespace UnityRemix
             if (setUIStatePtr != IntPtr.Zero)
             {
                 SetUIStateFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_SetUIState>(setUIStatePtr);
+            }
+            if (remixInterface.DrawScreenOverlay != IntPtr.Zero)
+            {
+                DrawScreenOverlayFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_DrawScreenOverlay>(remixInterface.DrawScreenOverlay);
             }
 
             LoadedApiVersion = apiVersion;

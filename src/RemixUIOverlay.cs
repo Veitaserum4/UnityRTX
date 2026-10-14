@@ -59,6 +59,7 @@ namespace UnityRemix
         private int dibHeight = 0;
         private readonly object dibLock = new object();
         private byte[] processPixels;
+        private byte[] nativeProcessPixels;
 
         #region Win32 Constants and P/Invoke
 
@@ -376,6 +377,13 @@ namespace UnityRemix
                 return false;
             }
 
+            if (RemixAPI.DrawScreenOverlayFunc != null)
+            {
+                logger?.LogInfo("[RemixUIOverlay] Using native OpenRemix DrawScreenOverlay (no Win32 overlay window needed).");
+                SubscribeSRPEvents();
+                return true;
+            }
+
             if (!overlayClassRegistered)
             {
                 overlayWndProcDelegate = OverlayWndProc;
@@ -588,7 +596,8 @@ namespace UnityRemix
 
         public void OnRemixUIStateChanged(bool open)
         {
-            if (overlayWindow == IntPtr.Zero) return;
+            bool isNative = RemixAPI.DrawScreenOverlayFunc != null;
+            if (!isNative && overlayWindow == IntPtr.Zero) return;
 
             bool hideOnMenu = configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value;
 
@@ -596,7 +605,14 @@ namespace UnityRemix
             {
                 if (hideOnMenu && isOverlayVisible)
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
+                    if (isNative)
+                    {
+                        RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    }
+                    else if (overlayWindow != IntPtr.Zero)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                    }
                     isOverlayVisible = false;
                     logger?.LogInfo("[RemixUIOverlay] Hidden UI overlay for Remix menu.");
                 }
@@ -604,12 +620,15 @@ namespace UnityRemix
             else
             {
                 lastPresentedNonZero = -1;
-                SetWindowPos(
-                    overlayWindow,
-                    HWND_TOP,
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                );
+                if (!isNative && overlayWindow != IntPtr.Zero)
+                {
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOP,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
+                }
                 isOverlayVisible = true;
                 logger?.LogInfo("[RemixUIOverlay] Restored UI overlay after Remix menu closed.");
             }
@@ -617,45 +636,66 @@ namespace UnityRemix
 
         public void HideOverlayImmediate()
         {
-            if (overlayWindow != IntPtr.Zero && isOverlayVisible)
+            if (isOverlayVisible)
             {
-                ShowWindow(overlayWindow, SW_HIDE);
+                if (RemixAPI.DrawScreenOverlayFunc != null)
+                {
+                    RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                }
+                else if (overlayWindow != IntPtr.Zero)
+                {
+                    ShowWindow(overlayWindow, SW_HIDE);
+                }
                 isOverlayVisible = false;
             }
         }
 
         public void RestoreOverlayImmediate()
         {
-            if (overlayWindow != IntPtr.Zero && !isOverlayVisible && !RemixWindowManager.IsRemixUIOpen)
+            if (!isOverlayVisible && !RemixWindowManager.IsRemixUIOpen)
             {
                 lastPresentedNonZero = -1;
-                SetWindowPos(
-                    overlayWindow,
-                    HWND_TOP,
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                );
+                if (RemixAPI.DrawScreenOverlayFunc == null && overlayWindow != IntPtr.Zero)
+                {
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOP,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
+                }
                 isOverlayVisible = true;
             }
         }
 
         /// <summary>
-        /// Updates the transparent Win32 layered overlay with the contents of the UI RenderTexture.
+        /// Updates the transparent overlay with the contents of the UI RenderTexture.
+        /// When OpenRemix is present, uses native DrawScreenOverlay inside the Vulkan swapchain.
+        /// Otherwise falls back to a transparent Win32 layered overlay window.
         /// Uses non-blocking AsyncGPUReadback to eliminate GPU stalls and Parallel.For for scanline conversion.
         /// </summary>
         public void UpdateOverlay()
         {
-            if (overlayWindow == IntPtr.Zero) return;
+            if (overlayWindow == IntPtr.Zero && RemixAPI.DrawScreenOverlayFunc == null) return;
 
             RemixWatchdog.BeatMain("UIOverlay.UpdateOverlay");
             isAppFocused = Application.isFocused;
 
-            // If game is unfocused and Remix menu is not open, hide the overlay window so it does not float over other apps on Alt-Tab.
+            bool isNative = RemixAPI.DrawScreenOverlayFunc != null;
+
+            // If game is unfocused and Remix menu is not open, hide the overlay so it does not float over other apps on Alt-Tab.
             if (!isAppFocused && !RemixWindowManager.IsRemixUIOpen)
             {
                 if (isOverlayVisible)
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
+                    if (isNative)
+                    {
+                        RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    }
+                    else if (overlayWindow != IntPtr.Zero)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                    }
                     isOverlayVisible = false;
                 }
                 return;
@@ -667,7 +707,14 @@ namespace UnityRemix
             {
                 if (isOverlayVisible)
                 {
-                    ShowWindow(overlayWindow, SW_HIDE);
+                    if (isNative)
+                    {
+                        RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                    }
+                    else if (overlayWindow != IntPtr.Zero)
+                    {
+                        ShowWindow(overlayWindow, SW_HIDE);
+                    }
                     isOverlayVisible = false;
                 }
                 return;
@@ -676,12 +723,15 @@ namespace UnityRemix
             {
                 // Fallback: Ensure overlay window is unhidden and in front of remixWindow once Remix menu is closed
                 lastPresentedNonZero = -1;
-                SetWindowPos(
-                    overlayWindow,
-                    HWND_TOP,
-                    0, 0, 0, 0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
-                );
+                if (!isNative && overlayWindow != IntPtr.Zero)
+                {
+                    SetWindowPos(
+                        overlayWindow,
+                        HWND_TOP,
+                        0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW
+                    );
+                }
                 isOverlayVisible = true;
                 logger?.LogInfo("[RemixUIOverlay] Restored UI overlay in UpdateOverlay fallback.");
             }
@@ -736,7 +786,8 @@ namespace UnityRemix
                 return;
             }
 
-            if (overlayWindow == IntPtr.Zero || uiRenderTexture == null || isProcessingOverlay)
+            bool isNative = RemixAPI.DrawScreenOverlayFunc != null;
+            if ((!isNative && overlayWindow == IntPtr.Zero) || uiRenderTexture == null || isProcessingOverlay)
                 return;
 
             int width = request.width;
@@ -745,19 +796,8 @@ namespace UnityRemix
 
             if (readbackCompletionCount <= 5)
             {
-                logger?.LogInfo($"[RemixUIOverlay] Readback success #{readbackCompletionCount}: res={width}x{height}, frame={currentFrame}");
+                logger?.LogInfo($"[RemixUIOverlay] Readback success #{readbackCompletionCount}: res={width}x{height}, frame={currentFrame}, native={isNative}");
             }
-            // Layered window and DIB must match physical gameWindow client area so overlay covers entire window
-            int destWidth = width;
-            int destHeight = height;
-            if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
-            {
-                destWidth = clientRect.Width;
-                destHeight = clientRect.Height;
-            }
-
-            EnsureDIB(destWidth, destHeight);
-            if (overlayHdc == IntPtr.Zero || overlayBits == IntPtr.Zero) return;
 
             var rawData = request.GetData<byte>();
             if (!rawData.IsCreated || rawData.Length < width * height * 4) return;
@@ -768,9 +808,47 @@ namespace UnityRemix
             }
             rawData.CopyTo(processPixels);
 
+            isProcessingOverlay = true;
+
+            if (isNative)
+            {
+                // Native OpenRemix overlay: Offload parallel vertical flip and DrawScreenOverlay to thread pool
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    try
+                    {
+                        ProcessAndPresentNativeOverlay(width, height, currentFrame);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.LogError($"[RemixUIOverlay] Background native overlay update failed: {ex.Message}");
+                    }
+                    finally
+                    {
+                        isProcessingOverlay = false;
+                    }
+                });
+                return;
+            }
+
+            // Layered window and DIB must match physical gameWindow client area so overlay covers entire window
+            int destWidth = width;
+            int destHeight = height;
+            if (GetClientRect(gameWindow, out RECT clientRect) && clientRect.Width > 0 && clientRect.Height > 0)
+            {
+                destWidth = clientRect.Width;
+                destHeight = clientRect.Height;
+            }
+
+            EnsureDIB(destWidth, destHeight);
+            if (overlayHdc == IntPtr.Zero || overlayBits == IntPtr.Zero)
+            {
+                isProcessingOverlay = false;
+                return;
+            }
+
             // Offload scanline processing and UpdateLayeredWindow to background thread pool!
             // Unity's main thread returns immediately (~0.2ms), completely eliminating slow-motion stutters!
-            isProcessingOverlay = true;
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
                 try
@@ -786,6 +864,180 @@ namespace UnityRemix
                     isProcessingOverlay = false;
                 }
             });
+        }
+
+        private void ProcessAndPresentNativeOverlay(int width, int height, int currentFrame)
+        {
+            using (RemixTracy.Zone("ProcessAndPresentNativeOverlay"))
+            {
+                var totalSw = System.Diagnostics.Stopwatch.StartNew();
+
+                if (RemixAPI.DrawScreenOverlayFunc == null || processPixels == null)
+                    return;
+
+                if (configHideUIOnRemixMenu != null && configHideUIOnRemixMenu.Value && RemixWindowManager.IsRemixUIOpen)
+                    return;
+
+                int byteCount = width * height * 4;
+                if (nativeProcessPixels == null || nativeProcessPixels.Length != byteCount)
+                {
+                    nativeProcessPixels = new byte[byteCount];
+                }
+
+                int totalPixels = width * height;
+                int nonZeroPixelCount = 0;
+                int opaquePixelCount = 0;
+                int blackOpaqueCount = 0;
+                int colorOpaqueCount = 0;
+                int colorSemiCount = 0;
+                int colorZeroACount = 0;
+
+                unsafe
+                {
+                    fixed (byte* pSrc = processPixels)
+                    fixed (byte* pDst = nativeProcessPixels)
+                    {
+                        IntPtr srcPtr = (IntPtr)pSrc;
+                        IntPtr dstPtr = (IntPtr)pDst;
+                        bool clearBlack = configUIOverlayClearBlack != null && configUIOverlayClearBlack.Value;
+
+                        // Parallel vertical flip + pixel conversion:
+                        // Unity AsyncGPUReadback row 0 is at the bottom of the image.
+                        // OpenRemix / Vulkan DrawScreenOverlay row 0 is at the top of the image.
+                        // So destination row y comes from source row (height - 1 - y).
+                        System.Threading.Tasks.Parallel.For(0, height, y =>
+                        {
+                            int srcRowOffset = (height - 1 - y) * width * 4;
+                            int dstRowOffset = y * width * 4;
+                            byte* s = (byte*)srcPtr + srcRowOffset;
+                            byte* d = (byte*)dstPtr + dstRowOffset;
+
+                            int localNonZero = 0;
+                            int localOpaque = 0;
+                            int localBlackOpaque = 0;
+                            int localColorOpaque = 0;
+                            int localColorSemi = 0;
+                            int localColorZeroA = 0;
+
+                            for (int x = 0; x < width; x++)
+                            {
+                                uint px = *(uint*)s;
+                                // Fast path for transparent empty pixels (typically >90% of screen)
+                                if (px == 0)
+                                {
+                                    *(uint*)d = 0;
+                                    s += 4;
+                                    d += 4;
+                                    continue;
+                                }
+
+                                byte r = s[0];
+                                byte g = s[1];
+                                byte b = s[2];
+                                byte a = s[3];
+
+                                bool isColor = (r > 0 || g > 0 || b > 0);
+
+                                if (!isColor)
+                                {
+                                    // If RGB is black (0,0,0) and alpha is 255:
+                                    // When clearBlack is true (e.g. URP games where target clears alpha to 1.0), treat as transparent.
+                                    // Otherwise (e.g. ULTRAKILL), preserve opaque black so UI boxes/panels remain solid.
+                                    if (a == 0 || (clearBlack && a == 255))
+                                    {
+                                        *(uint*)d = 0;
+                                        s += 4;
+                                        d += 4;
+                                        continue;
+                                    }
+
+                                    localNonZero++;
+                                    if (a == 255)
+                                    {
+                                        localOpaque++;
+                                        localBlackOpaque++;
+                                    }
+                                    d[0] = 0;
+                                    d[1] = 0;
+                                    d[2] = 0;
+                                    d[3] = a;
+                                    s += 4;
+                                    d += 4;
+                                    continue;
+                                }
+
+                                // Fallback for additive / unlit UI shaders that output color with a == 0
+                                byte effA = a;
+                                if (effA == 0)
+                                {
+                                    effA = (byte)Math.Max(r, Math.Max(g, b));
+                                    localColorZeroA++;
+                                }
+
+                                localNonZero++;
+                                if (effA == 255)
+                                {
+                                    localOpaque++;
+                                    localColorOpaque++;
+                                }
+                                else
+                                {
+                                    localColorSemi++;
+                                }
+
+                                // OpenRemix uses straight alpha (VK_BLEND_FACTOR_SRC_ALPHA) and REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                                d[0] = r;
+                                d[1] = g;
+                                d[2] = b;
+                                d[3] = effA;
+
+                                s += 4;
+                                d += 4;
+                            }
+
+                            if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
+                            if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
+                            if (localBlackOpaque > 0) System.Threading.Interlocked.Add(ref blackOpaqueCount, localBlackOpaque);
+                            if (localColorOpaque > 0) System.Threading.Interlocked.Add(ref colorOpaqueCount, localColorOpaque);
+                            if (localColorSemi > 0) System.Threading.Interlocked.Add(ref colorSemiCount, localColorSemi);
+                            if (localColorZeroA > 0) System.Threading.Interlocked.Add(ref colorZeroACount, localColorZeroA);
+                        });
+
+                        if (readbackCompletionCount <= 5 || currentFrame % 180 == 0)
+                        {
+                            logger?.LogInfo($"[RemixUIOverlay] Native overlay stats (frame {currentFrame}): total={totalPixels}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, blackOpaque={blackOpaqueCount}, colorOpaque={colorOpaqueCount}, colorSemi={colorSemiCount}, colorZeroA={colorZeroACount}, res={width}x{height}");
+                        }
+
+                        if (nonZeroPixelCount == 0)
+                        {
+                            if (lastPresentedNonZero == 0)
+                            {
+                                // Already cleared; skip redundant call
+                                return;
+                            }
+                            lastPresentedNonZero = 0;
+                            RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                            return;
+                        }
+
+                        lastPresentedNonZero = nonZeroPixelCount;
+
+                        double drawOverlayMs = 0;
+                        using (RemixTracy.Zone("DrawScreenOverlay"))
+                        {
+                            var sw = System.Diagnostics.Stopwatch.StartNew();
+                            var status = RemixAPI.DrawScreenOverlayFunc((IntPtr)pDst, (uint)width, (uint)height, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 1.0f);
+                            drawOverlayMs = sw.Elapsed.TotalMilliseconds;
+                            if (status != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                            {
+                                logger?.LogError($"[RemixUIOverlay] DrawScreenOverlay failed: {status}");
+                            }
+                        }
+
+                        RemixProfiler.RecordOverlayThread(totalSw.Elapsed.TotalMilliseconds, drawOverlayMs);
+                    }
+                }
+            }
         }
 
         private void ProcessAndPresentOverlay(int srcWidth, int srcHeight, int destWidth, int destHeight, int currentFrame)
@@ -1291,6 +1543,15 @@ namespace UnityRemix
             UnsubscribeSRPEvents();
             RestoreUICameras();
             CleanupDIB();
+
+            if (RemixAPI.DrawScreenOverlayFunc != null)
+            {
+                try
+                {
+                    RemixAPI.DrawScreenOverlayFunc(IntPtr.Zero, 0, 0, RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM, 0.0f);
+                }
+                catch { }
+            }
 
             if (Instance == this)
             {

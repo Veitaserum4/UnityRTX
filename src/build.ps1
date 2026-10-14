@@ -66,9 +66,12 @@ if ($Deploy -and $UnityPath -ne "") {
     Write-Host "Plugin deployed successfully!" -ForegroundColor Green
     
     # Check for Remix DLL
-    $remixDll = Join-Path $UnityPath "d3d9.dll"
+    $remixDll = Join-Path $UnityPath "remix.dll"
     if (-not (Test-Path $remixDll)) {
-        Write-Host "`nWARNING: d3d9.dll (RTX Remix) not found in game folder!" -ForegroundColor Yellow
+        $remixDll = Join-Path $UnityPath "d3d9.dll"
+    }
+    if (-not (Test-Path $remixDll)) {
+        Write-Host "`nWARNING: remix.dll or d3d9.dll (RTX Remix) not found in game folder!" -ForegroundColor Yellow
         Write-Host "Please install RTX Remix runtime to: $UnityPath" -ForegroundColor Yellow
     } else {
         Write-Host "RTX Remix DLL found!" -ForegroundColor Green
