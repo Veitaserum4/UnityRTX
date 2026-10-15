@@ -971,6 +971,8 @@ namespace UnityRemix
 
         private void DrainStreamingBatch()
         {
+            materialManager.ProcessPendingTextureUploads();
+
             ScannedMeshData[] batch;
             lock (streamLock)
             {
@@ -1097,9 +1099,25 @@ namespace UnityRemix
                     if (surf.Indices == null || surf.Indices.Length < 3 || (surf.Indices.Length % 3) != 0)
                         continue;
 
-                    uint[] surfIndices = new uint[surf.Indices.Length];
-                    for (int i = 0; i < surf.Indices.Length; i++)
-                        surfIndices[i] = (uint)surf.Indices[i];
+                    var validIndices = new List<uint>(surf.Indices.Length);
+                    for (int i = 0; i + 2 < surf.Indices.Length; i += 3)
+                    {
+                        int i0 = surf.Indices[i];
+                        int i1 = surf.Indices[i + 1];
+                        int i2 = surf.Indices[i + 2];
+                        if (i0 >= 0 && (ulong)i0 < (ulong)verts.Length &&
+                            i1 >= 0 && (ulong)i1 < (ulong)verts.Length &&
+                            i2 >= 0 && (ulong)i2 < (ulong)verts.Length)
+                        {
+                            validIndices.Add((uint)i0);
+                            validIndices.Add((uint)i1);
+                            validIndices.Add((uint)i2);
+                        }
+                    }
+                    if (validIndices.Count < 3)
+                        continue;
+
+                    uint[] surfIndices = validIndices.ToArray();
 
                     GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
                     indexHandles.Add(idxHandle);
@@ -1107,6 +1125,8 @@ namespace UnityRemix
                     IntPtr materialHandle = IntPtr.Zero;
                     if (surf.MaterialId != 0)
                         materialHandle = materialManager.GetOrCreateMaterial(surf.MaterialId);
+                    if (materialHandle == IntPtr.Zero && data.Surfaces.Length > 0 && data.Surfaces[0].MaterialId != 0)
+                        materialHandle = materialManager.GetOrCreateMaterial(data.Surfaces[0].MaterialId);
 
                     IntPtr vertsPtr;
                     ulong vertsCount;

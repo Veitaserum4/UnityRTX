@@ -498,7 +498,8 @@ namespace UnityRemix
                 configCaptureMaterials,
                 configVerboseTextureLogging,
                 remixInterface,
-                remixApiLock
+                remixApiLock,
+                Config
             );
             
             meshConverter = new RemixMeshConverter(
@@ -818,6 +819,21 @@ namespace UnityRemix
 
                 // Send to render thread (mesh creation moved to render thread to avoid deadlocks)
                 renderThread.UpdateFrameState(nextState);
+
+                // Update water & underwater camera medium detection on the main thread
+                if (waterManager != null)
+                {
+                    try
+                    {
+                        Camera cam = cameraHandler != null ? cameraHandler.GetPreferredCamera() : Camera.main;
+                        Vector3 camPos = cam != null ? cam.transform.position : (nextState.camera.valid ? nextState.camera.position : Vector3.zero);
+                        waterManager.UpdateMainThread(cam, camPos);
+                    }
+                    catch (Exception ex)
+                    {
+                        LogSource.LogError($"waterManager UpdateMainThread exception: {ex}");
+                    }
+                }
             }
 
             fogManager?.Update();

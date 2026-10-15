@@ -23,6 +23,8 @@ namespace UnityRemix
         public ConfigEntry<bool> ConfigEnableGlass { get; }
         public ConfigEntry<float> ConfigWaterIOR { get; }
         public ConfigEntry<float> ConfigWaterClarity { get; }
+        public ConfigEntry<float> ConfigBloodIOR { get; }
+        public ConfigEntry<float> ConfigBloodClarity { get; }
         public ConfigEntry<float> ConfigGlassIOR { get; }
         public ConfigEntry<bool> ConfigEnableUnderwaterMedium { get; }
 
@@ -30,9 +32,25 @@ namespace UnityRemix
         public int WaterMaterialCount { get; internal set; }
         public int GlassMaterialCount { get; internal set; }
         public int ActiveWaterSurfaceCount => waterSurfaces.Count;
-        public bool IsCameraUnderwater { get; private set; }
-        public Color CurrentUnderwaterColor { get; private set; } = new Color(0.15f, 0.55f, 0.75f, 1.0f);
-        public float CurrentUnderwaterDistance { get; private set; } = 15.0f;
+
+        private volatile bool isCameraUnderwater = false;
+        public bool IsCameraUnderwater => isCameraUnderwater;
+
+        private readonly object mediumLock = new object();
+        private Color currentUnderwaterColor = new Color(0.15f, 0.55f, 0.75f, 1.0f);
+        private float currentUnderwaterDistance = 15.0f;
+
+        public Color CurrentUnderwaterColor
+        {
+            get { lock (mediumLock) return currentUnderwaterColor; }
+            private set { lock (mediumLock) currentUnderwaterColor = value; }
+        }
+
+        public float CurrentUnderwaterDistance
+        {
+            get { lock (mediumLock) return currentUnderwaterDistance; }
+            private set { lock (mediumLock) currentUnderwaterDistance = value; }
+        }
 
         // Registered water surface tracking
         private struct WaterSurfaceInfo
@@ -97,6 +115,16 @@ namespace UnityRemix
                 "Transmittance measurement distance in meters for water. Light is absorbed exponentially with depth (Beer-Lambert law)."
             );
 
+            ConfigBloodIOR = config.Bind(
+                "Translucents", "BloodRefractiveIndex", 1.34f,
+                "Index of refraction for blood and visceral fluids (standard blood is ~1.34 - 1.35)."
+            );
+
+            ConfigBloodClarity = config.Bind(
+                "Translucents", "BloodClarityDistance", 2.0f,
+                "Transmittance measurement distance in meters for blood and visceral fluids. Lower values make blood deep and dark crimson faster."
+            );
+
             ConfigGlassIOR = config.Bind(
                 "Translucents", "GlassRefractiveIndex", 1.52f,
                 "Index of refraction for glass (crown glass is ~1.50 - 1.52)."
@@ -116,33 +144,46 @@ namespace UnityRemix
         public void RegisterWaterSurface(Renderer renderer, Color waterColor, float clarity)
         {
             if (renderer == null) return;
+            if (!renderer.enabled || !renderer.gameObject.activeInHierarchy) return;
+            var sm = renderer.sharedMaterial;
+            if (sm != null && SceneMeshScanner.IsMaterialOrShaderInvisible(sm)) return;
 
-            int id = renderer.GetInstanceID();
-            Bounds b = renderer.bounds;
-            float topY = b.max.y;
-
-            lock (surfacesLock)
+            try
             {
-                waterSurfaces[id] = new WaterSurfaceInfo
+                int id = renderer.GetInstanceID();
+                Bounds b = renderer.bounds;
+                float topY = b.max.y;
+                float now = Environment.TickCount * 0.001f;
+
+                lock (surfacesLock)
                 {
-                    rendererId = id,
-                    worldBounds = b,
-                    surfaceY = topY,
-                    waterColor = waterColor,
-                    clarityDistance = clarity > 0f ? clarity : ConfigWaterClarity.Value,
-                    lastSeenTime = Time.time
-                };
+                    waterSurfaces[id] = new WaterSurfaceInfo
+                    {
+                        rendererId = id,
+                        worldBounds = b,
+                        surfaceY = topY,
+                        waterColor = waterColor,
+                        clarityDistance = clarity > 0f ? clarity : ConfigWaterClarity.Value,
+                        lastSeenTime = now
+                    };
+                }
             }
+            catch { }
         }
 
         /// <summary>
-        /// Evaluates camera position every frame to determine whether the camera is submerged in water.
+        /// Evaluates camera position and scene state on the Unity MAIN THREAD to determine whether the camera is submerged in water.
+        /// Thread-safe for background render thread to query properties at any time.
         /// </summary>
-        public void UpdateCameraState(Vector3 cameraPosition)
+        public void UpdateMainThread(Camera mainCam, Vector3 cameraPosition)
         {
             if (!ConfigEnableTranslucents.Value || !ConfigEnableUnderwaterMedium.Value)
             {
-                IsCameraUnderwater = false;
+                if (isCameraUnderwater)
+                {
+                    isCameraUnderwater = false;
+                    logger.LogInfo("[Translucents] Camera exited water body into air.");
+                }
                 return;
             }
 
@@ -150,7 +191,7 @@ namespace UnityRemix
             Color detectedColor = new Color(0.15f, 0.55f, 0.75f, 1.0f);
             float detectedDistance = ConfigWaterClarity.Value;
 
-            float now = Time.time;
+            float now = Environment.TickCount * 0.001f;
 
             // 1. Check against registered water surface bounding boxes
             lock (surfacesLock)
@@ -189,7 +230,7 @@ namespace UnityRemix
                 }
             }
 
-            // 2. Physics layer check (Layer 4 = Water) via reflection
+            // 2. Physics layer check (Layer 4 = Water) via reflection on main thread
             if (!underwater && physicsCheckSphereMethod != null)
             {
                 try
@@ -204,7 +245,7 @@ namespace UnityRemix
                 catch { }
             }
 
-            // 3. Game-specific underwater overlay / UI check (e.g. ULTRAKILL 'UnderwaterOverlay')
+            // 3. Game-specific underwater overlay / UI check (e.g. ULTRAKILL 'UnderwaterOverlay') on main thread
             if (!underwater && (now - lastOverlayCheckTime > 0.2f))
             {
                 lastOverlayCheckTime = now;
@@ -221,6 +262,10 @@ namespace UnityRemix
                             if (img.color.r > 0f || img.color.g > 0f || img.color.b > 0f)
                             {
                                 detectedColor = new Color(img.color.r, img.color.g, img.color.b, 1.0f);
+                                if (img.color.r > 0.35f && img.color.r > (img.color.g + img.color.b) * 0.7f)
+                                {
+                                    detectedDistance = ConfigBloodClarity.Value;
+                                }
                             }
                         }
                         else
@@ -244,19 +289,24 @@ namespace UnityRemix
                 underwater = true;
             }
 
-            if (underwater != IsCameraUnderwater)
+            if (underwater != isCameraUnderwater)
             {
-                IsCameraUnderwater = underwater;
+                isCameraUnderwater = underwater;
                 if (underwater)
                 {
                     CurrentUnderwaterColor = detectedColor;
                     CurrentUnderwaterDistance = detectedDistance;
-                    logger.LogInfo($"[Translucents] Camera entered water body! Color: ({detectedColor.r:F2}, {detectedColor.g:F2}, {detectedColor.b:F2}), depth: {detectedDistance:F1}m");
+                    logger.LogInfo($"[Translucents] Camera entered water/fluid body! Color: ({detectedColor.r:F2}, {detectedColor.g:F2}, {detectedColor.b:F2}), depth: {detectedDistance:F1}m");
                 }
                 else
                 {
-                    logger.LogInfo("[Translucents] Camera exited water body into air.");
+                    logger.LogInfo("[Translucents] Camera exited water/fluid body into air.");
                 }
+            }
+            else if (underwater)
+            {
+                CurrentUnderwaterColor = detectedColor;
+                CurrentUnderwaterDistance = detectedDistance;
             }
         }
 
@@ -266,7 +316,7 @@ namespace UnityRemix
             {
                 waterSurfaces.Clear();
             }
-            IsCameraUnderwater = false;
+            isCameraUnderwater = false;
         }
     }
 }

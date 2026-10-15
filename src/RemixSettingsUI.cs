@@ -70,6 +70,7 @@ namespace UnityRemix
             DrawLightingSection();
             DrawFogSection();
             DrawTranslucentsSection();
+            DrawExperimentalPBRSection();
             DrawPerformanceSection();
             DrawDebugSection();
 
@@ -644,7 +645,13 @@ namespace UnityRemix
                 if (RemixImGui.SliderFloat("Water Clarity Distance (m)", ref clarity, 1.0f, 100.0f))
                     water.ConfigWaterClarity.Value = clarity;
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Transmittance measurement distance in meters for volumetric Beer-Lambert depth absorption.");
+                    RemixImGui.SetTooltip("Transmittance measurement distance in meters for water depth absorption (default 15.0m).");
+
+                float bloodClarity = water.ConfigBloodClarity.Value;
+                if (RemixImGui.SliderFloat("Blood / Mulch Clarity Distance (m)", ref bloodClarity, 0.2f, 20.0f))
+                    water.ConfigBloodClarity.Value = bloodClarity;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Transmittance measurement distance in meters for blood and visceral fluids (default 2.0m). Lower values make blood deep, dense crimson faster.");
 
                 bool enableMedium = water.ConfigEnableUnderwaterMedium.Value;
                 if (RemixImGui.Checkbox("Underwater Camera Medium", ref enableMedium))
@@ -670,6 +677,65 @@ namespace UnityRemix
                     water.ConfigGlassIOR.Value = glassIOR;
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Index of refraction for glass (default 1.52). Determines Fresnel specular reflection strength.");
+                RemixImGui.Unindent();
+            }
+        }
+
+        private void DrawExperimentalPBRSection()
+        {
+            if (!RemixImGui.CollapsingHeader("PBR Generation (Experimental)"))
+                return;
+
+            var matMgr = _plugin.MaterialManager;
+            if (matMgr == null)
+            {
+                RemixImGui.Text("Material manager not initialized.");
+                return;
+            }
+
+            RemixImGui.TextColored(1.0f, 0.7f, 0.2f, 1.0f, "Experimental features for non-PBR & retro games (ULTRAKILL, classic Unity).");
+            RemixImGui.Spacing();
+
+            bool autoPbr = matMgr.ConfigAutoPBR != null && matMgr.ConfigAutoPBR.Value;
+            if (RemixImGui.Checkbox("Auto PBR Heuristics (Experimental)", ref autoPbr))
+            {
+                if (matMgr.ConfigAutoPBR != null)
+                    matMgr.ConfigAutoPBR.Value = autoPbr;
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Infers realistic metallic & roughness from material, texture, shader, and object names\nwhen a material lacks PBR maps (metals, marble, wood, fabrics, stone, plastic, etc.).");
+
+            if (autoPbr)
+            {
+                RemixImGui.Indent();
+                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"PBR Inferred Materials: {matMgr.AutoPbrMaterialCount}");
+                RemixImGui.Unindent();
+            }
+
+            RemixImGui.Spacing();
+
+            bool autoNormals = matMgr.ConfigAutoNormalMaps != null && matMgr.ConfigAutoNormalMaps.Value;
+            if (RemixImGui.Checkbox("Auto Normal Map Generation (Experimental)", ref autoNormals))
+            {
+                if (matMgr.ConfigAutoNormalMaps != null)
+                    matMgr.ConfigAutoNormalMaps.Value = autoNormals;
+            }
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Automatically generates tangent-space normal maps via a Sobel height filter on the albedo texture\nfor surfaces without a normal map, giving flat textures geometric depth.");
+
+            if (autoNormals)
+            {
+                RemixImGui.Indent();
+                float strength = matMgr.ConfigAutoNormalStrength != null ? matMgr.ConfigAutoNormalStrength.Value : 1.0f;
+                if (RemixImGui.SliderFloat("Auto Normal Strength", ref strength, 0.1f, 3.0f))
+                {
+                    if (matMgr.ConfigAutoNormalStrength != null)
+                        matMgr.ConfigAutoNormalStrength.Value = strength;
+                }
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Controls bump depth and height exaggeration of auto-generated normal maps (default 1.0).");
+
+                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Generated Normal Maps: {matMgr.AutoNormalMapCount}");
                 RemixImGui.Unindent();
             }
         }

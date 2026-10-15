@@ -304,7 +304,6 @@ namespace UnityRemix
             if (setupCameraFunc == null)
                 return;
 
-            waterManager?.UpdateCameraState(position);
             bool isUnderwater = waterManager != null && waterManager.IsCameraUnderwater;
             
             // Convert from Unity Y-up to Z-up coordinate system

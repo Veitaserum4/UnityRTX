@@ -156,6 +156,20 @@ namespace UnityRemix
         private RemixWaterManager waterManager;
         public void SetWaterManager(RemixWaterManager manager) => this.waterManager = manager;
         private HashSet<string> loggedShaderProperties = new HashSet<string>();
+
+        // Auto PBR & Normal Map Generation (Experimental)
+        public BepInEx.Configuration.ConfigEntry<bool> ConfigAutoPBR { get; private set; }
+        public BepInEx.Configuration.ConfigEntry<bool> ConfigAutoNormalMaps { get; private set; }
+        public BepInEx.Configuration.ConfigEntry<float> ConfigAutoNormalStrength { get; private set; }
+        private int autoPbrMaterialCount = 0;
+        private int autoNormalMapCount = 0;
+        public int AutoPbrMaterialCount => autoPbrMaterialCount;
+        public int AutoNormalMapCount => autoNormalMapCount;
+        private readonly Dictionary<int, (IntPtr handle, ulong hash)> autoNormalCache = new Dictionary<int, (IntPtr, ulong)>();
+        
+        // Track all texture hashes confirmed to be uploaded into OpenRemix native runtime
+        private readonly HashSet<ulong> uploadedTextureHashes = new HashSet<ulong>();
+        private IntPtr fallbackMaterialHandle = IntPtr.Zero;
         
         // Queue for async material creation
         private Queue<int> pendingMaterialCreation = new Queue<int>();
@@ -170,7 +184,8 @@ namespace UnityRemix
             BepInEx.Configuration.ConfigEntry<bool> captureMaterials,
             BepInEx.Configuration.ConfigEntry<bool> verboseTextureLogging,
             RemixAPI.remixapi_Interface remixInterface,
-            object apiLock)
+            object apiLock,
+            BepInEx.Configuration.ConfigFile config = null)
         {
             this.logger = logger;
             this.textureCategoryManager = categoryManager;
@@ -178,6 +193,16 @@ namespace UnityRemix
             this.captureMaterials = captureMaterials;
             this.verboseTextureLogging = verboseTextureLogging;
             this.apiLock = apiLock;
+
+            if (config != null)
+            {
+                ConfigAutoPBR = config.Bind("Materials", "AutoPBR", false,
+                    "Infer PBR metallic and roughness from material/texture names for non-PBR materials (Experimental).");
+                ConfigAutoNormalMaps = config.Bind("Materials", "AutoNormalMaps", false,
+                    "Generate tangent-space normal maps from albedo textures via Sobel filter when no normal map exists (Experimental).");
+                ConfigAutoNormalStrength = config.Bind("Materials", "AutoNormalStrength", 1.0f,
+                    "Strength/intensity of automatically generated normal maps (0.1 to 3.0) (Experimental).");
+            }
             
             // Cache delegates
             if (remixInterface.CreateTexture != IntPtr.Zero)
@@ -217,6 +242,94 @@ namespace UnityRemix
             return new Vector4(1, 1, 0, 0);
         }
         
+        public IntPtr GetOrCreateFallbackMaterial()
+        {
+            if (fallbackMaterialHandle != IntPtr.Zero)
+                return fallbackMaterialHandle;
+
+            if (createMaterialFunc == null)
+                return IntPtr.Zero;
+
+            try
+            {
+                EnsureDebugTexture();
+                string albedoPath = debugTextureHandle != IntPtr.Zero ? DebugTextureHashPath : null;
+
+                var opaqueExt = new RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw
+                {
+                    sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT,
+                    pNext = IntPtr.Zero,
+                    roughnessTexture = IntPtr.Zero,
+                    metallicTexture = IntPtr.Zero,
+                    anisotropy = 0.0f,
+                    albedoConstant_x = 0.8f,
+                    albedoConstant_y = 0.8f,
+                    albedoConstant_z = 0.8f,
+                    opacityConstant = 1.0f,
+                    roughnessConstant = 0.7f,
+                    metallicConstant = 0.0f,
+                    thinFilmThickness_hasvalue = 0,
+                    thinFilmThickness_value = 0.0f,
+                    alphaIsThinFilmThickness = 0,
+                    heightTexture = IntPtr.Zero,
+                    displaceIn = 0.0f,
+                    useDrawCallAlphaState = 0,
+                    blendType_hasvalue = 0,
+                    blendType_value = 0,
+                    invertedBlend = 0,
+                    alphaTestType = 7,
+                    alphaReferenceValue = 0,
+                    displaceOut = 0.0f
+                };
+
+                GCHandle extHandle = GCHandle.Alloc(opaqueExt, GCHandleType.Pinned);
+                try
+                {
+                    var materialInfo = new RemixAPI.remixapi_MaterialInfo
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO,
+                        pNext = extHandle.AddrOfPinnedObject(),
+                        hash = 0xDEADBEEFCAFE0001UL,
+                        albedoTexture = albedoPath,
+                        normalTexture = null,
+                        tangentTexture = null,
+                        emissiveTexture = null,
+                        emissiveIntensity = 0.0f,
+                        emissiveColorConstant = new RemixAPI.remixapi_Float3D { x = 0f, y = 0f, z = 0f },
+                        spriteSheetRow = 1,
+                        spriteSheetCol = 1,
+                        spriteSheetFps = 0,
+                        filterMode = 1,
+                        wrapModeU = 1,
+                        wrapModeV = 1
+                    };
+
+                    RemixAPI.remixapi_ErrorCode result;
+                    lock (apiLock)
+                    {
+                        result = createMaterialFunc(ref materialInfo, out fallbackMaterialHandle);
+                    }
+                    if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                    {
+                        logger.LogInfo($"Created fallback Remix material: handle 0x{fallbackMaterialHandle.ToInt64():X}");
+                    }
+                    else
+                    {
+                        logger.LogError($"Failed to create fallback Remix material: {result}");
+                    }
+                }
+                finally
+                {
+                    extHandle.Free();
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Exception creating fallback material: {ex.Message}");
+            }
+            return fallbackMaterialHandle;
+        }
+
         /// <summary>
         /// Get or create Remix material handle for a material ID (on-demand creation)
         /// </summary>
@@ -229,6 +342,9 @@ namespace UnityRemix
             if (matData.remixMaterialHandle != IntPtr.Zero)
                 return matData.remixMaterialHandle;
             
+            // Process any pending texture uploads first so textures are guaranteed to exist in OpenRemix runtime
+            ProcessPendingTextureUploads();
+
             // Create material on-demand (called from render thread)
             IntPtr handle = CreateRemixMaterialSimple(ref matData, materialId);
             
@@ -238,8 +354,19 @@ namespace UnityRemix
                 matData.remixMaterialHandle = handle;
                 materialTextureData[materialId] = matData;
             }
+            else
+            {
+                // Assign neutral fallback material so we do not retry every frame and cause API general failures
+                IntPtr fallback = GetOrCreateFallbackMaterial();
+                if (fallback != IntPtr.Zero)
+                {
+                    matData.remixMaterialHandle = fallback;
+                    materialTextureData[materialId] = matData;
+                    logger.LogWarning($"[MaterialFallback] Material '{matData.materialName}' (ID {materialId}) assigned fallback material.");
+                }
+            }
             
-            return handle;
+            return matData.remixMaterialHandle;
         }
 
         /// <summary>
@@ -604,52 +731,38 @@ namespace UnityRemix
 
             // Extract PBR metallic: prioritize _BaseMetallic if > 0 (designer value in stylized shaders like PEAK)
             float metallic = 0.0f;
-            if (material.HasProperty("_BaseMetallic") && material.GetFloat("_BaseMetallic") > 0f)
-                metallic = material.GetFloat("_BaseMetallic");
-            else if (material.HasProperty("_Metallic"))
-                metallic = material.GetFloat("_Metallic");
-            else if (material.HasProperty("_BaseMetallic"))
-                metallic = material.GetFloat("_BaseMetallic");
-            else if (material.HasProperty("_Metalic"))
-                metallic = material.GetFloat("_Metalic");
+            bool hasExplicitMetallic = false;
+            if (material.HasProperty("_BaseMetallic") && material.GetFloat("_BaseMetallic") > 0f) { metallic = material.GetFloat("_BaseMetallic"); hasExplicitMetallic = true; }
+            else if (material.HasProperty("_Metallic")) { metallic = material.GetFloat("_Metallic"); hasExplicitMetallic = true; }
+            else if (material.HasProperty("_Metalic")) { metallic = material.GetFloat("_Metalic"); hasExplicitMetallic = true; }
 
             float smoothness = 0.5f;
             bool hasSmoothness = false;
-            if (material.HasProperty("_BaseSmooth"))
-            {
-                smoothness = material.GetFloat("_BaseSmooth");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_Smoothness"))
-            {
-                smoothness = material.GetFloat("_Smoothness");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_Smooth"))
-            {
-                smoothness = material.GetFloat("_Smooth");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_Glossiness"))
-            {
-                smoothness = material.GetFloat("_Glossiness");
-                hasSmoothness = true;
-            }
-            else if (material.HasProperty("_GlossMapScale"))
-            {
-                smoothness = material.GetFloat("_GlossMapScale");
-                hasSmoothness = true;
-            }
+            if (material.HasProperty("_BaseSmooth")) { smoothness = material.GetFloat("_BaseSmooth"); hasSmoothness = true; }
+            else if (material.HasProperty("_Smoothness")) { smoothness = material.GetFloat("_Smoothness"); hasSmoothness = true; }
+            else if (material.HasProperty("_Smooth")) { smoothness = material.GetFloat("_Smooth"); hasSmoothness = true; }
+            else if (material.HasProperty("_Glossiness")) { smoothness = material.GetFloat("_Glossiness"); hasSmoothness = true; }
+            else if (material.HasProperty("_GlossMapScale")) { smoothness = material.GetFloat("_GlossMapScale"); hasSmoothness = true; }
 
             float roughness;
-            if (material.HasProperty("_Roughness"))
-                roughness = material.GetFloat("_Roughness");
-            else if (material.HasProperty("_Rough"))
-                roughness = material.GetFloat("_Rough");
-            else if (hasSmoothness)
-                roughness = 1.0f - Mathf.Clamp01(smoothness);
-            else
-                roughness = 0.7f;
+            bool hasExplicitRoughness = false;
+            if (material.HasProperty("_Roughness")) { roughness = material.GetFloat("_Roughness"); hasExplicitRoughness = true; }
+            else if (material.HasProperty("_Rough")) { roughness = material.GetFloat("_Rough"); hasExplicitRoughness = true; }
+            else if (hasSmoothness) { roughness = 1.0f - Mathf.Clamp01(smoothness); hasExplicitRoughness = true; }
+            else roughness = 0.7f;
+
+            // Auto PBR Heuristics (Experimental): infer physical metallic & roughness for non-PBR surfaces
+            if (ConfigAutoPBR != null && ConfigAutoPBR.Value && (!hasExplicitMetallic || !hasExplicitRoughness))
+            {
+                if (InferPbrProperties(material, tex, renderer, shaderName, out float infMetal, out float infRough, out string matchedCat))
+                {
+                    if (!hasExplicitMetallic) metallic = infMetal;
+                    if (!hasExplicitRoughness) roughness = infRough;
+                    autoPbrMaterialCount++;
+                    if (verboseTextureLogging.Value)
+                        logger.LogInfo($"[AutoPBR] Inferred '{material.name}': cat={matchedCat} metal={metallic:F2} rough={roughness:F2}");
+                }
+            }
 
             matData.metallic = Mathf.Clamp01(metallic);
             matData.roughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
@@ -1062,6 +1175,22 @@ namespace UnityRemix
                             }
                             break;
                         }
+                    }
+                }
+
+                // Auto Normal Map Generation (Experimental): Sobel height filter on albedo texture
+                if (matData.normalHandle == IntPtr.Zero && albedoTex != null
+                    && ConfigAutoNormalMaps != null && ConfigAutoNormalMaps.Value)
+                {
+                    float strength = ConfigAutoNormalStrength != null ? ConfigAutoNormalStrength.Value : 1.0f;
+                    var (genHandle, genHash) = GetOrCreateAutoNormalMap(albedoTex, strength);
+                    if (genHandle != IntPtr.Zero)
+                    {
+                        matData.normalHandle = genHandle;
+                        matData.normalTextureHash = genHash;
+                        autoNormalMapCount++;
+                        if (verboseTextureLogging.Value)
+                            logger.LogInfo($"[AutoNormal] Generated normal map for '{material.name}' from '{albedoTex.name}' (hash: 0x{genHash:X16})");
                     }
                 }
             }
@@ -1806,6 +1935,13 @@ namespace UnityRemix
                 hash ^= (ulong)matData.albedoHandle.ToInt64();
                 hash *= 1099511628211UL;
             }
+
+            // Factor in normal texture hash so variants with/without normal maps never collide
+            if (matData.normalHandle != IntPtr.Zero)
+            {
+                hash ^= (ulong)matData.normalHandle.ToInt64();
+                hash *= 1099511628211UL;
+            }
             
             // Incorporate emissive color directly since it's used for per-instance overrides
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveColor.r);
@@ -2109,64 +2245,105 @@ namespace UnityRemix
             string mName = matName ?? "";
             string sName = shaderName ?? "";
 
+            // Non-rendered or invisible materials (e.g. InvisibleFace triggers, blockers) must never be converted to translucent water or glass
+            if (SceneMeshScanner.IsMaterialOrShaderInvisible(material) ||
+                MatchesAnyKeyword(mName, "invisible", "nodraw", "trigger", "collisiononly", "zerostencilbuffer", "portalocclusion") ||
+                MatchesAnyKeyword(sName, "invisible", "nodraw", "clear"))
+            {
+                return (TranslucentKind.None, 1.0f, 0f, Color.white, "invisible");
+            }
+
             bool enableWater = waterManager == null || waterManager.ConfigEnableWater.Value;
             bool enableGlass = waterManager == null || waterManager.ConfigEnableGlass.Value;
 
-            // 1. Water Detection (Translucent Body with refraction, TIR, Snell's window, and volumetric depth fog)
+            // 1. Water & Fluid Body Detection (Translucent Body with refraction, TIR, Snell's window, and volumetric depth fog)
             if (enableWater)
             {
-                bool isWater = false;
+                bool isLiquid = false;
                 string reason = null;
 
                 // Built-in Unity Water layer (Layer 4)
                 if (layer == 4 || (layerName != null && layerName.IndexOf("water", StringComparison.OrdinalIgnoreCase) >= 0))
                 {
-                    isWater = true;
+                    isLiquid = true;
                     reason = $"layer:{layerName ?? layer.ToString()}";
                 }
                 // Shader name heuristics
-                else if (MatchesAnyKeyword(sName, "water", "ocean", "river", "lake", "pond", "waterfall", "fluid", "aquatic", "puddle", "stream"))
+                else if (MatchesAnyKeyword(sName, "water", "ocean", "river", "lake", "pond", "waterfall", "fluid", "aquatic", "puddle", "stream",
+                         "blood", "mulch", "gore", "slime", "toxic", "acid", "sewer", "poison"))
                 {
-                    isWater = true;
+                    isLiquid = true;
                     reason = $"shader:{sName}";
                 }
                 // Material name heuristics
-                else if (MatchesAnyKeyword(mName, "water", "ocean", "river", "lake", "pond", "waterfall", "liquid", "aquatic", "puddle", "stream") &&
-                         !MatchesAnyKeyword(mName, "watermark", "resistwater", "resistWater", "waterproof"))
+                else if (MatchesAnyKeyword(mName, "water", "ocean", "river", "lake", "pond", "waterfall", "liquid", "aquatic", "puddle", "stream",
+                         "blood", "mulch", "gore", "flesh", "slime", "toxic", "acid", "sewer", "poison") &&
+                         !MatchesAnyKeyword(mName, "watermark", "resistwater", "resistWater", "waterproof", "decal", "splatter", "spray", "particle"))
                 {
-                    isWater = true;
+                    isLiquid = true;
                     reason = $"matName:{mName}";
                 }
                 // GameObject name heuristics
-                else if (goName != null && MatchesAnyKeyword(goName, "waterfall", "water_plane", "waterplane", "ocean", "river", "pond", "lake") &&
-                         !MatchesAnyKeyword(goName, "watermark", "resistwater", "resistWater", "underwateroverlay"))
+                else if (goName != null && MatchesAnyKeyword(goName, "waterfall", "water_plane", "waterplane", "ocean", "river", "pond", "lake",
+                         "blood", "mulch", "gore", "slime", "toxic", "acid") &&
+                         !MatchesAnyKeyword(goName, "watermark", "resistwater", "resistWater", "underwateroverlay", "decal", "splatter", "spray", "particle"))
                 {
-                    isWater = true;
+                    isLiquid = true;
                     reason = $"goName:{goName}";
                 }
                 // Shader properties
-                else if (material != null && (material.HasProperty("_WaterColor") || material.HasProperty("_DepthColor") || material.HasProperty("_WaveSpeed") || material.HasProperty("_WaveScale")))
+                else if (material != null && (material.HasProperty("_WaterColor") || material.HasProperty("_DepthColor") || material.HasProperty("_WaveSpeed") || material.HasProperty("_WaveScale") || material.HasProperty("_BloodColor")))
                 {
-                    isWater = true;
-                    reason = "waterProperties";
+                    isLiquid = true;
+                    reason = "liquidProperties";
                 }
 
-                if (isWater)
+                if (isLiquid)
                 {
-                    float ior = waterManager != null ? waterManager.ConfigWaterIOR.Value : 1.333f;
-                    float dist = waterManager != null ? waterManager.ConfigWaterClarity.Value : 15.0f;
-                    Color waterCol = ExtractWaterColor(material, albedoColor);
+                    // Classify specific liquid subtype: Blood/Mulch, Acid/Slime, or Clean Water
+                    bool isBlood = MatchesAnyKeyword(mName, "blood", "mulch", "gore", "flesh", "bleed") ||
+                                   MatchesAnyKeyword(sName, "blood", "mulch", "gore", "flesh") ||
+                                   (goName != null && MatchesAnyKeyword(goName, "blood", "mulch", "gore", "flesh"));
+
+                    bool isAcid = !isBlood && (MatchesAnyKeyword(mName, "acid", "slime", "toxic", "poison", "ooze") ||
+                                   MatchesAnyKeyword(sName, "acid", "slime", "toxic", "poison", "ooze") ||
+                                   (goName != null && MatchesAnyKeyword(goName, "acid", "slime", "toxic", "poison", "ooze")));
+
+                    float ior;
+                    float dist;
+                    Color liquidCol;
+
+                    if (isBlood)
+                    {
+                        ior = waterManager != null ? waterManager.ConfigBloodIOR.Value : 1.34f;
+                        dist = waterManager != null ? waterManager.ConfigBloodClarity.Value : 2.0f;
+                        liquidCol = ExtractBloodColor(material, albedoColor);
+                        reason += ":blood";
+                    }
+                    else if (isAcid)
+                    {
+                        ior = 1.35f;
+                        dist = 2.5f;
+                        liquidCol = ExtractToxicColor(material, albedoColor);
+                        reason += ":acid";
+                    }
+                    else
+                    {
+                        ior = waterManager != null ? waterManager.ConfigWaterIOR.Value : 1.333f;
+                        dist = waterManager != null ? waterManager.ConfigWaterClarity.Value : 15.0f;
+                        liquidCol = ExtractWaterColor(material, albedoColor);
+                    }
 
                     if (renderer != null && waterManager != null)
                     {
-                        waterManager.RegisterWaterSurface(renderer, waterCol, dist);
+                        waterManager.RegisterWaterSurface(renderer, liquidCol, dist);
                     }
                     if (waterManager != null)
                     {
                         waterManager.WaterMaterialCount++;
                     }
 
-                    return (TranslucentKind.Water, ior, dist, waterCol, reason);
+                    return (TranslucentKind.Water, ior, dist, liquidCol, reason);
                 }
             }
 
@@ -2210,8 +2387,8 @@ namespace UnityRemix
                     {
                         if (roughness <= 0.25f && albedoColor.a <= 0.75f)
                         {
-                            if (!MatchesAnyKeyword(mName, "particle", "smoke", "fire", "blood", "decal", "glow", "halo", "trail", "spark", "explosion") &&
-                                !MatchesAnyKeyword(sName, "particle", "smoke", "fire", "blood", "decal", "glow", "halo", "trail", "spark", "explosion"))
+                            if (!MatchesAnyKeyword(mName, "particle", "smoke", "fire", "blood", "mulch", "gore", "flesh", "decal", "glow", "halo", "trail", "spark", "explosion") &&
+                                !MatchesAnyKeyword(sName, "particle", "smoke", "fire", "blood", "mulch", "gore", "flesh", "decal", "glow", "halo", "trail", "spark", "explosion"))
                             {
                                 isGlass = true;
                                 reason = $"pbrGlass(queue={queue},rough={roughness:F2},alpha={albedoColor.a:F2})";
@@ -2264,6 +2441,19 @@ namespace UnityRemix
                         }
                     }
                 }
+
+                if (mat.HasProperty("_MainTex") && mat.mainTexture is Texture2D tex && tex.isReadable)
+                {
+                    try
+                    {
+                        Color px = tex.GetPixel(tex.width / 2, tex.height / 2);
+                        if (px.maxColorComponent > 0.05f && (px.r < 0.95f || px.g < 0.95f || px.b < 0.95f))
+                        {
+                            return new Color(px.r, px.g, px.b, 1.0f);
+                        }
+                    }
+                    catch { }
+                }
             }
             if (fallbackColor.maxColorComponent > 0.05f && (fallbackColor.r < 0.95f || fallbackColor.g < 0.95f || fallbackColor.b < 0.95f))
             {
@@ -2271,6 +2461,77 @@ namespace UnityRemix
             }
             // Natural clean water cyan/blue
             return new Color(0.20f, 0.70f, 0.90f, 1.0f);
+        }
+
+        private static Color ExtractBloodColor(Material mat, Color fallbackColor)
+        {
+            Color candidate = Color.clear;
+            if (mat != null)
+            {
+                string[] bloodProps = { "_BloodColor", "_Color", "_BaseColor", "_TintColor", "_WaterColor", "_DepthColor" };
+                for (int i = 0; i < bloodProps.Length; i++)
+                {
+                    if (mat.HasProperty(bloodProps[i]))
+                    {
+                        Color c = mat.GetColor(bloodProps[i]);
+                        if (c.r > 0.30f && c.r > (c.g + c.b) * 0.65f)
+                        {
+                            candidate = c;
+                            break;
+                        }
+                    }
+                }
+
+                if (candidate == Color.clear && mat.HasProperty("_MainTex") && mat.mainTexture is Texture2D tex && tex.isReadable)
+                {
+                    try
+                    {
+                        Color px = tex.GetPixel(tex.width / 2, tex.height / 2);
+                        if (px.r > 0.25f && px.r > (px.g + px.b) * 0.6f)
+                        {
+                            candidate = px;
+                        }
+                    }
+                    catch { }
+                }
+            }
+
+            if (candidate == Color.clear && fallbackColor.r > 0.30f && fallbackColor.r > (fallbackColor.g + fallbackColor.b) * 0.65f)
+            {
+                candidate = fallbackColor;
+            }
+
+            if (candidate != Color.clear)
+            {
+                // Enforce physical blood absorption: red transmits, green and blue are heavily absorbed
+                float r = Mathf.Clamp(candidate.r, 0.65f, 0.95f);
+                float g = Mathf.Clamp(candidate.g * 0.1f, 0.01f, 0.05f);
+                float b = Mathf.Clamp(candidate.b * 0.1f, 0.01f, 0.05f);
+                return new Color(r, g, b, 1.0f);
+            }
+
+            // Default deep visceral blood red transmittance (Beer-Lambert: green and blue absorbed within ~2m)
+            return new Color(0.85f, 0.02f, 0.02f, 1.0f);
+        }
+
+        private static Color ExtractToxicColor(Material mat, Color fallbackColor)
+        {
+            if (mat != null)
+            {
+                string[] toxicProps = { "_AcidColor", "_SlimeColor", "_ToxicColor", "_Color", "_BaseColor" };
+                for (int i = 0; i < toxicProps.Length; i++)
+                {
+                    if (mat.HasProperty(toxicProps[i]))
+                    {
+                        Color c = mat.GetColor(toxicProps[i]);
+                        if (c.g > 0.30f && c.g > (c.r + c.b) * 0.65f)
+                        {
+                            return new Color(c.r * 0.15f, Mathf.Clamp(c.g, 0.7f, 0.95f), c.b * 0.15f, 1.0f);
+                        }
+                    }
+                }
+            }
+            return new Color(0.15f, 0.85f, 0.15f, 1.0f);
         }
 
         private static Color ExtractGlassColor(Material mat, Color fallbackColor)
@@ -2296,6 +2557,249 @@ namespace UnityRemix
             }
             return Color.white;
         }
+
+        #region Auto PBR & Normal Map Generation (Experimental)
+
+        private struct PbrTaxonomyEntry
+        {
+            public string categoryName;
+            public float metallic;
+            public float roughness;
+            public string[] keywords;
+
+            public PbrTaxonomyEntry(string categoryName, float metallic, float roughness, params string[] keywords)
+            {
+                this.categoryName = categoryName;
+                this.metallic = metallic;
+                this.roughness = roughness;
+                this.keywords = keywords;
+            }
+        }
+
+        private static readonly PbrTaxonomyEntry[] PbrTaxonomy = new PbrTaxonomyEntry[]
+        {
+            // 1. Precious & Polished Metals
+            new PbrTaxonomyEntry("Chrome/Mirror", 1.0f, 0.05f,
+                "chrome", "mirror", "silver", "polished_metal", "specular_metal"),
+            new PbrTaxonomyEntry("Gold", 1.0f, 0.15f,
+                "gold", "golden", "gilded", "brass", "bronze", "copper"),
+
+            // 2. Structural & Industrial Metals
+            new PbrTaxonomyEntry("Smooth Metal/Steel", 1.0f, 0.25f,
+                "steel", "iron", "aluminum", "metal_smooth", "metallic", "metal_trim", "gunmetal"),
+            new PbrTaxonomyEntry("Standard Metal/Machinery", 1.0f, 0.38f,
+                "metal", "machinery", "machine", "armor", "armour", "chassis", "engine", "hull",
+                "pipe", "pipeline", "barrel", "rebar", "grate", "grating", "girder", "beam",
+                "scaffold", "vent", "panel_metal", "sheet_metal", "weapon", "sword", "blade", "bullet"),
+            new PbrTaxonomyEntry("Rusted/Oxidized Metal", 0.35f, 0.75f,
+                "rust", "rusted", "rusty", "corrosion", "corroded", "oxidized"),
+
+            // 3. High-Gloss Dielectrics
+            new PbrTaxonomyEntry("Marble/Polished Stone", 0.0f, 0.12f,
+                "marble", "porcelain", "polished_stone", "polished_rock", "granite_polished"),
+            new PbrTaxonomyEntry("Ceramic/Tile", 0.0f, 0.18f,
+                "ceramic", "tile", "tiles", "tiling", "mosaic", "glazed"),
+            new PbrTaxonomyEntry("Glossy Plastic/Car Paint/Glassy", 0.0f, 0.22f,
+                "plastic", "shiny", "glossy", "varnish", "acrylic", "lacquer", "enamel", "polymer"),
+            new PbrTaxonomyEntry("Crystal/Gemstone", 0.0f, 0.10f,
+                "crystal", "gem", "gemstone", "diamond", "ruby", "emerald", "sapphire", "amethyst", "obsidian"),
+
+            // 4. Semi-Gloss & Organic Surfaces
+            new PbrTaxonomyEntry("Polished Wood", 0.0f, 0.28f,
+                "wood_polished", "parquet", "varnished_wood", "lacquered_wood", "wood_shiny"),
+            new PbrTaxonomyEntry("Leather/Rubber", 0.0f, 0.55f,
+                "leather", "rubber", "tire", "vinyl", "tarp", "latex"),
+            new PbrTaxonomyEntry("Flesh/Skin", 0.0f, 0.42f,
+                "skin", "flesh", "meat", "organ", "muscle", "guts", "viscera", "tongue"),
+
+            // 5. Standard Matte & Rough Surfaces
+            new PbrTaxonomyEntry("Rough Wood/Bark", 0.0f, 0.65f,
+                "wood", "plank", "planks", "timber", "bark", "log", "branch", "lumber", "fence", "crate", "barrel_wood"),
+            new PbrTaxonomyEntry("Cardboard/Paper", 0.0f, 0.82f,
+                "paper", "cardboard", "carton", "book", "scroll", "poster", "document"),
+            new PbrTaxonomyEntry("Foliage/Vegetation", 0.0f, 0.60f,
+                "grass", "leaf", "leaves", "foliage", "moss", "plant", "bush", "vine", "tree", "flora"),
+            new PbrTaxonomyEntry("Stone/Rock/Masonry", 0.0f, 0.85f,
+                "stone", "rock", "boulder", "cliff", "cobble", "cobblestone", "masonry", "slate", "granite", "monument"),
+            new PbrTaxonomyEntry("Concrete/Brick/Asphalt", 0.0f, 0.88f,
+                "concrete", "brick", "bricks", "asphalt", "cement", "pavement", "sidewalk", "plaster", "stucco"),
+            new PbrTaxonomyEntry("Fabric/Cloth/Carpet", 0.0f, 0.92f,
+                "fabric", "cloth", "carpet", "rug", "canvas", "curtain", "flag", "banner", "linen", "wool",
+                "cotton", "towel", "blanket", "cushion", "upholstery", "velvet", "silk"),
+            new PbrTaxonomyEntry("Dirt/Mud/Sand/Ground", 0.0f, 0.95f,
+                "dirt", "soil", "mud", "sand", "ground", "earth", "gravel", "dust", "terrain", "clay")
+        };
+
+        private bool InferPbrProperties(Material material, Texture2D albedoTex, Renderer renderer, string shaderName, out float inferredMetallic, out float inferredRoughness, out string matchedCategory)
+        {
+            inferredMetallic = 0.0f;
+            inferredRoughness = 0.7f;
+            matchedCategory = null;
+
+            string matName = material != null ? material.name : null;
+            string texName = albedoTex != null ? albedoTex.name : null;
+            string goName = renderer != null ? renderer.gameObject.name : null;
+
+            for (int i = 0; i < PbrTaxonomy.Length; i++)
+            {
+                var entry = PbrTaxonomy[i];
+                if (MatchesAnyKeyword(matName, entry.keywords) ||
+                    MatchesAnyKeyword(texName, entry.keywords) ||
+                    MatchesAnyKeyword(goName, entry.keywords) ||
+                    MatchesAnyKeyword(shaderName, entry.keywords))
+                {
+                    inferredMetallic = entry.metallic;
+                    inferredRoughness = entry.roughness;
+                    matchedCategory = entry.categoryName;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Generates a tangent-space normal map from an albedo texture via a Sobel height filter on luminance.
+        /// Caches generated normal maps by texture instance ID to prevent redundant GPU/CPU work.
+        /// </summary>
+        private (IntPtr handle, ulong hash) GetOrCreateAutoNormalMap(Texture2D albedoTex, float bumpStrength)
+        {
+            if (albedoTex == null || createTextureFunc == null)
+                return (IntPtr.Zero, 0);
+
+            int texId = albedoTex.GetInstanceID();
+            lock (autoNormalCache)
+            {
+                if (autoNormalCache.TryGetValue(texId, out var cached))
+                    return cached;
+            }
+
+            try
+            {
+                Color32[] pixels;
+                int w = albedoTex.width;
+                int h = albedoTex.height;
+
+                // Clamp processing resolution to at most 1024x1024 for instant processing (<1ms)
+                int maxDim = 1024;
+                if (w > maxDim || h > maxDim || !albedoTex.isReadable)
+                {
+                    int targetW = Mathf.Min(w, maxDim);
+                    int targetH = Mathf.Min(h, maxDim);
+                    RenderTexture tmp = RenderTexture.GetTemporary(targetW, targetH, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                    RenderTexture prev = RenderTexture.active;
+                    Graphics.Blit(albedoTex, tmp);
+                    RenderTexture.active = tmp;
+                    Texture2D readable = new Texture2D(targetW, targetH, TextureFormat.RGBA32, false, false);
+                    readable.ReadPixels(new Rect(0, 0, targetW, targetH), 0, 0);
+                    readable.Apply();
+                    RenderTexture.active = prev;
+                    RenderTexture.ReleaseTemporary(tmp);
+                    pixels = readable.GetPixels32();
+                    w = readable.width;
+                    h = readable.height;
+                    UnityEngine.Object.Destroy(readable);
+                }
+                else
+                {
+                    pixels = albedoTex.GetPixels32();
+                }
+
+                int numPixels = w * h;
+                if (pixels == null || pixels.Length < numPixels)
+                    return (IntPtr.Zero, 0);
+
+                // 1. Precalculate luminance for Sobel convolution
+                byte[] lum = new byte[numPixels];
+                for (int i = 0; i < numPixels; i++)
+                {
+                    lum[i] = (byte)((pixels[i].r * 77 + pixels[i].g * 150 + pixels[i].b * 29) >> 8);
+                }
+
+                // 2. Sobel 3x3 filter to calculate tangent-space normal vectors (X, Y, Z)
+                byte[] normalPixelData = new byte[numPixels * 4];
+                float scale = (Mathf.Clamp(bumpStrength, 0.1f, 5.0f) * 2.5f) / 1020f;
+
+                for (int y = 0; y < h; y++)
+                {
+                    int yPrev = (y > 0 ? y - 1 : h - 1) * w;
+                    int yCurr = y * w;
+                    int yNext = (y < h - 1 ? y + 1 : 0) * w;
+
+                    for (int x = 0; x < w; x++)
+                    {
+                        int xPrev = (x > 0 ? x - 1 : w - 1);
+                        int xNext = (x < w - 1 ? x + 1 : 0);
+
+                        int tl = lum[yPrev + xPrev];
+                        int tc = lum[yPrev + x];
+                        int tr = lum[yPrev + xNext];
+
+                        int ml = lum[yCurr + xPrev];
+                        int mr = lum[yCurr + xNext];
+
+                        int bl = lum[yNext + xPrev];
+                        int bc = lum[yNext + x];
+                        int br = lum[yNext + xNext];
+
+                        // Sobel gradients
+                        int dX = (tr + (mr << 1) + br) - (tl + (ml << 1) + bl);
+                        int dY = (bl + (bc << 1) + br) - (tl + (tc << 1) + tr);
+
+                        // Tangent-space normal vector
+                        float nx = -dX * scale;
+                        float ny = -dY * scale;
+                        float nz = 1.0f;
+
+                        float invLen = 1.0f / Mathf.Sqrt(nx * nx + ny * ny + 1.0f);
+                        nx *= invLen;
+                        ny *= invLen;
+                        nz *= invLen;
+
+                        int idx = (yCurr + x) * 4;
+                        normalPixelData[idx + 0] = (byte)((nx * 0.5f + 0.5f) * 255f); // R = Tangent X
+                        normalPixelData[idx + 1] = (byte)((ny * 0.5f + 0.5f) * 255f); // G = Tangent Y
+                        normalPixelData[idx + 2] = (byte)((nz * 0.5f + 0.5f) * 255f); // B = Tangent Z
+                        normalPixelData[idx + 3] = 255;                                // A
+                    }
+                }
+
+                // 3. Compute hash and queue for deferred upload on render thread
+                ulong hash = XXHash64.ComputeHash(normalPixelData, 0, normalPixelData.Length);
+                if (hash == 0) hash = 1;
+
+                lock (pendingTextureLock)
+                {
+                    pendingTextureUploads.Enqueue(new PendingTextureUpload
+                    {
+                        texId = -1,
+                        tintedCacheKey = 0,
+                        pixelData = normalPixelData,
+                        hash = hash,
+                        width = (uint)w,
+                        height = (uint)h,
+                        mipLevels = 1,
+                        format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                    });
+                }
+
+                var result = (new IntPtr((long)hash), hash);
+                lock (autoNormalCache)
+                {
+                    autoNormalCache[texId] = result;
+                }
+                return result;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Failed to generate auto normal map for '{albedoTex.name}': {ex.Message}");
+                return (IntPtr.Zero, 0);
+            }
+        }
+
+        #endregion
+
+        private static bool IsFinite(float x) => !float.IsNaN(x) && !float.IsInfinity(x);
         
         private IntPtr CreateRemixMaterialSimple(ref MaterialTextureData matData, int materialId)
         {
@@ -2304,6 +2808,9 @@ namespace UnityRemix
                 
             try
             {
+                // Ensure all pending texture uploads are processed before creating material
+                ProcessPendingTextureUploads();
+
                 string albedoPath = GetTexturePathFromHandle(matData.albedoHandle);
                 string normalPath = GetTexturePathFromHandle(matData.normalHandle);
                 ulong matHash = GenerateMaterialHash(matData);
@@ -2330,8 +2837,44 @@ namespace UnityRemix
                             placeholderMaterialNames.Add(matData.materialName ?? $"mat_{materialId}");
                     }
                 }
+                else if (albedoPath != DebugTextureHashPath)
+                {
+                    // Verify albedo texture actually exists in OpenRemix runtime
+                    ulong h = (ulong)matData.albedoHandle.ToInt64();
+                    bool exists;
+                    lock (uploadedTextureHashes) { exists = uploadedTextureHashes.Contains(h); }
+                    if (!exists)
+                    {
+                        EnsureDebugTexture();
+                        albedoPath = debugTextureHandle != IntPtr.Zero ? DebugTextureHashPath : null;
+                    }
+                }
 
+                // Verify normal texture actually exists in OpenRemix runtime
+                if (normalPath != null)
+                {
+                    ulong h = (ulong)matData.normalHandle.ToInt64();
+                    bool exists;
+                    lock (uploadedTextureHashes) { exists = uploadedTextureHashes.Contains(h); }
+                    if (!exists)
+                    {
+                        normalPath = null;
+                    }
+                }
+
+                // Verify emissive texture actually exists in OpenRemix runtime
                 string emissivePath = GetTexturePathFromHandle(matData.emissiveHandle);
+                if (emissivePath != null)
+                {
+                    ulong h = (ulong)matData.emissiveHandle.ToInt64();
+                    bool exists;
+                    lock (uploadedTextureHashes) { exists = uploadedTextureHashes.Contains(h); }
+                    if (!exists)
+                    {
+                        emissivePath = null;
+                    }
+                }
+
                 if (verboseTextureLogging.Value)
                     logger.LogInfo($"[MaterialCreate] '{matData.materialName}': albedo={albedoPath ?? "none"}, normal={normalPath ?? "none"}, emissive={emissivePath ?? "none"}, emColor=({matData.emissiveColor.r:F3},{matData.emissiveColor.g:F3},{matData.emissiveColor.b:F3}), emIntensity={matData.emissiveIntensity:F3}, alphaMode={matData.alphaMode}, transKind={matData.translucentKind}");
                 
@@ -2342,19 +2885,25 @@ namespace UnityRemix
 
                 if (matData.translucentKind != TranslucentKind.None)
                 {
+                    float transR = IsFinite(matData.transmittanceColor.r) ? Mathf.Clamp01(matData.transmittanceColor.r) : 1f;
+                    float transG = IsFinite(matData.transmittanceColor.g) ? Mathf.Clamp01(matData.transmittanceColor.g) : 1f;
+                    float transB = IsFinite(matData.transmittanceColor.b) ? Mathf.Clamp01(matData.transmittanceColor.b) : 1f;
+                    float ior = IsFinite(matData.refractiveIndex) && matData.refractiveIndex >= 1f ? matData.refractiveIndex : 1.5f;
+                    float dist = IsFinite(matData.transmittanceDistance) && matData.transmittanceDistance >= 0f ? matData.transmittanceDistance : 0f;
+
                     transExt = new RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw
                     {
                         sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT,
                         pNext = IntPtr.Zero,
                         transmittanceTexture = IntPtr.Zero,
-                        refractiveIndex = matData.refractiveIndex,
+                        refractiveIndex = ior,
                         transmittanceColor = new RemixAPI.remixapi_Float3D
                         {
-                            x = matData.transmittanceColor.r,
-                            y = matData.transmittanceColor.g,
-                            z = matData.transmittanceColor.b
+                            x = transR,
+                            y = transG,
+                            z = transB
                         },
-                        transmittanceMeasurementDistance = matData.transmittanceDistance,
+                        transmittanceMeasurementDistance = dist,
                         thinWallThickness_hasvalue = matData.translucentKind == TranslucentKind.Glass ? 1 : 0,
                         thinWallThickness_value = matData.translucentKind == TranslucentKind.Glass ? 0.005f : 0.0f,
                         useDiffuseLayer = 0
@@ -2366,6 +2915,14 @@ namespace UnityRemix
                 }
                 else
                 {
+                    float rNorm = (!string.IsNullOrEmpty(matData.materialName) && matData.materialName.IndexOf("blood", StringComparison.OrdinalIgnoreCase) >= 0) ? 0.15f : matData.roughness;
+                    float clampedRoughness = Mathf.Clamp(IsFinite(rNorm) ? rNorm : 0.7f, 0.04f, 1.0f);
+                    float clampedMetallic = Mathf.Clamp01(IsFinite(matData.metallic) ? matData.metallic : 0.0f);
+                    float clampedOpacity = matData.alphaMode == AlphaMode.Opaque ? 1.0f : (IsFinite(matData.albedoColor.a) ? Mathf.Clamp01(matData.albedoColor.a) : 1.0f);
+                    float albedoR = IsFinite(matData.albedoColor.r) ? Mathf.Max(0f, matData.albedoColor.r) : 1f;
+                    float albedoG = IsFinite(matData.albedoColor.g) ? Mathf.Max(0f, matData.albedoColor.g) : 1f;
+                    float albedoB = IsFinite(matData.albedoColor.b) ? Mathf.Max(0f, matData.albedoColor.b) : 1f;
+
                     // Build the OpaqueEXT using the blittable Raw struct for safe pNext chaining
                     opaqueExt = new RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw
                     {
@@ -2374,12 +2931,12 @@ namespace UnityRemix
                         roughnessTexture = IntPtr.Zero,
                         metallicTexture = IntPtr.Zero,
                         anisotropy = 0.0f,
-                        albedoConstant_x = matData.albedoColor.r,
-                        albedoConstant_y = matData.albedoColor.g,
-                        albedoConstant_z = matData.albedoColor.b,
-                        opacityConstant = matData.alphaMode == AlphaMode.Opaque ? 1.0f : matData.albedoColor.a,
-                        roughnessConstant = (!string.IsNullOrEmpty(matData.materialName) && matData.materialName.IndexOf("blood", StringComparison.OrdinalIgnoreCase) >= 0) ? 0.15f : matData.roughness,
-                        metallicConstant = matData.metallic,
+                        albedoConstant_x = albedoR,
+                        albedoConstant_y = albedoG,
+                        albedoConstant_z = albedoB,
+                        opacityConstant = clampedOpacity,
+                        roughnessConstant = clampedRoughness,
+                        metallicConstant = clampedMetallic,
                         thinFilmThickness_hasvalue = 0,
                         thinFilmThickness_value = 0.0f,
                         alphaIsThinFilmThickness = 0,
@@ -2443,8 +3000,14 @@ namespace UnityRemix
                 {
                     // Emissive color: Remix expects a normalized direction color + scalar intensity.
                     // Compute combined intensity = colorBrightness * separateIntensity, then normalize color.
-                    float emMaxCh = Mathf.Max(matData.emissiveColor.r, Mathf.Max(matData.emissiveColor.g, matData.emissiveColor.b));
-                    float emCombinedIntensity = emMaxCh > 0f ? matData.emissiveIntensity * emMaxCh : matData.emissiveIntensity;
+                    float emR = IsFinite(matData.emissiveColor.r) ? Mathf.Max(0f, matData.emissiveColor.r) : 0f;
+                    float emG = IsFinite(matData.emissiveColor.g) ? Mathf.Max(0f, matData.emissiveColor.g) : 0f;
+                    float emB = IsFinite(matData.emissiveColor.b) ? Mathf.Max(0f, matData.emissiveColor.b) : 0f;
+                    float emIntensity = IsFinite(matData.emissiveIntensity) ? Mathf.Max(0f, matData.emissiveIntensity) : 0f;
+
+                    float emMaxCh = Mathf.Max(emR, Mathf.Max(emG, emB));
+                    float emCombinedIntensity = emMaxCh > 0f ? emIntensity * emMaxCh : emIntensity;
+                    if (!IsFinite(emCombinedIntensity) || emCombinedIntensity < 0f) emCombinedIntensity = 0f;
                     
                     var materialInfo = new RemixAPI.remixapi_MaterialInfo
                     {
@@ -2457,16 +3020,16 @@ namespace UnityRemix
                         emissiveTexture = emissivePath,
                         emissiveIntensity = emCombinedIntensity,
                         emissiveColorConstant = new RemixAPI.remixapi_Float3D {
-                            x = emMaxCh > 0f ? matData.emissiveColor.r / emMaxCh : 0f,
-                            y = emMaxCh > 0f ? matData.emissiveColor.g / emMaxCh : 0f,
-                            z = emMaxCh > 0f ? matData.emissiveColor.b / emMaxCh : 0f
+                            x = emMaxCh > 0f ? emR / emMaxCh : 0f,
+                            y = emMaxCh > 0f ? emG / emMaxCh : 0f,
+                            z = emMaxCh > 0f ? emB / emMaxCh : 0f
                         },
                         spriteSheetRow = 1,
                         spriteSheetCol = 1,
                         spriteSheetFps = 0,
-                        filterMode = matData.filterMode,
-                        wrapModeU = matData.wrapModeU,
-                        wrapModeV = matData.wrapModeV
+                        filterMode = (byte)(matData.filterMode <= 1 ? matData.filterMode : 1),
+                        wrapModeU = (byte)(matData.wrapModeU <= 4 ? matData.wrapModeU : 1),
+                        wrapModeV = (byte)(matData.wrapModeV <= 4 ? matData.wrapModeV : 1)
                     };
                     
                     IntPtr materialHandle;
@@ -2538,6 +3101,10 @@ namespace UnityRemix
                     
                     if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                     {
+                        lock (uploadedTextureHashes)
+                        {
+                            uploadedTextureHashes.Add(upload.hash);
+                        }
                         lock (pendingTextureLock)
                         {
                             if (upload.texId >= 0)
@@ -2632,6 +3199,10 @@ namespace UnityRemix
 
                 if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                 {
+                    lock (uploadedTextureHashes)
+                    {
+                        uploadedTextureHashes.Add(debugTextureHash);
+                    }
                     logger.LogInfo($"Created debug placeholder texture (hash: 0x{debugTextureHash:X16})");
                 }
                 else
@@ -2676,6 +3247,14 @@ namespace UnityRemix
                 }
             }
             textureCache.Clear();
+            lock (autoNormalCache)
+            {
+                autoNormalCache.Clear();
+            }
+            lock (uploadedTextureHashes)
+            {
+                uploadedTextureHashes.Clear();
+            }
         }
 
         // --- Diagnostic getters for debug HUD ---

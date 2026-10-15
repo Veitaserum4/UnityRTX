@@ -420,7 +420,26 @@ namespace UnityRemix
                     if (surfIndices == null || surfIndices.Length < 3 || (surfIndices.Length % 3) != 0)
                         continue;
 
-                    GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
+                    var validIndices = new List<uint>(surfIndices.Length);
+                    for (int i = 0; i + 2 < surfIndices.Length; i += 3)
+                    {
+                        uint i0 = surfIndices[i];
+                        uint i1 = surfIndices[i + 1];
+                        uint i2 = surfIndices[i + 2];
+                        if (i0 < (uint)vertices.Length &&
+                            i1 < (uint)vertices.Length &&
+                            i2 < (uint)vertices.Length)
+                        {
+                            validIndices.Add(i0);
+                            validIndices.Add(i1);
+                            validIndices.Add(i2);
+                        }
+                    }
+                    if (validIndices.Count < 3)
+                        continue;
+
+                    uint[] validatedIndices = validIndices.ToArray();
+                    GCHandle idxHandle = GCHandle.Alloc(validatedIndices, GCHandleType.Pinned);
                     indexHandles.Add(idxHandle);
 
                     Material mat = (s < submeshMaterials.Count) ? submeshMaterials[s] : null;
@@ -432,6 +451,10 @@ namespace UnityRemix
                     if (targetMatId != 0)
                     {
                         materialHandle = materialManager.GetOrCreateMaterial(targetMatId);
+                    }
+                    if (materialHandle == IntPtr.Zero && primaryMatId != 0)
+                    {
+                        materialHandle = materialManager.GetOrCreateMaterial(primaryMatId);
                     }
 
                     IntPtr vertsPtr;
@@ -472,7 +495,7 @@ namespace UnityRemix
                         vertices_values = vertsPtr,
                         vertices_count = vertsCount,
                         indices_values = idxHandle.AddrOfPinnedObject(),
-                        indices_count = (ulong)surfIndices.Length,
+                        indices_count = (ulong)validatedIndices.Length,
                         skinning_hasvalue = 0,
                         skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
                         material = materialHandle
@@ -601,8 +624,23 @@ namespace UnityRemix
                 );
             }
             
-            for (int i = 0; i < triangles.Length; i++)
-                poolData.indices[i] = (uint)triangles[i];
+            int validIdxCount = 0;
+            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                int i0 = triangles[i];
+                int i1 = triangles[i + 1];
+                int i2 = triangles[i + 2];
+                if (i0 >= 0 && i0 < vertices.Length &&
+                    i1 >= 0 && i1 < vertices.Length &&
+                    i2 >= 0 && i2 < vertices.Length)
+                {
+                    poolData.indices[validIdxCount++] = (uint)i0;
+                    poolData.indices[validIdxCount++] = (uint)i1;
+                    poolData.indices[validIdxCount++] = (uint)i2;
+                }
+            }
+            if (validIdxCount < 3)
+                return IntPtr.Zero;
             
             // Get or create material handle for skinned mesh (on render thread)
             IntPtr materialHandle = IntPtr.Zero;
@@ -619,7 +657,7 @@ namespace UnityRemix
                 vertices_values = poolData.vertexHandle.AddrOfPinnedObject(),
                 vertices_count = (ulong)vertices.Length,
                 indices_values = poolData.indexHandle.AddrOfPinnedObject(),
-                indices_count = (ulong)triangles.Length,
+                indices_count = (ulong)validIdxCount,
                 skinning_hasvalue = 0,
                 skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
                 material = materialHandle
@@ -811,9 +849,25 @@ namespace UnityRemix
                 );
             }
             
-            var indices = new uint[triangles.Length];
-            for (int i = 0; i < triangles.Length; i++)
-                indices[i] = (uint)triangles[i];
+            var validIndices = new List<uint>(triangles.Length);
+            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                int i0 = triangles[i];
+                int i1 = triangles[i + 1];
+                int i2 = triangles[i + 2];
+                if (i0 >= 0 && i0 < vertices.Length &&
+                    i1 >= 0 && i1 < vertices.Length &&
+                    i2 >= 0 && i2 < vertices.Length)
+                {
+                    validIndices.Add((uint)i0);
+                    validIndices.Add((uint)i1);
+                    validIndices.Add((uint)i2);
+                }
+            }
+            if (validIndices.Count < 3)
+                return IntPtr.Zero;
+
+            var indices = validIndices.ToArray();
             
             // Pin all arrays
             GCHandle vertHandle = GCHandle.Alloc(remixVerts, GCHandleType.Pinned);
@@ -847,7 +901,7 @@ namespace UnityRemix
                     vertices_values = vertHandle.AddrOfPinnedObject(),
                     vertices_count = (ulong)vertices.Length,
                     indices_values = idxHandle.AddrOfPinnedObject(),
-                    indices_count = (ulong)triangles.Length,
+                    indices_count = (ulong)indices.Length,
                     skinning_hasvalue = 1,
                     skinning_value = skinning,
                     material = materialHandle

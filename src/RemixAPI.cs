@@ -1005,6 +1005,8 @@ namespace UnityRemix
 
         #region Helper Methods
 
+        private static bool IsFinite(float x) => !float.IsNaN(x) && !float.IsInfinity(x);
+
         /// <summary>
         /// Create a vertex with position, normal, texcoord and color
         /// </summary>
@@ -1014,9 +1016,14 @@ namespace UnityRemix
         {
             return new remixapi_HardcodedVertex
             {
-                position_x = x, position_y = y, position_z = z,
-                normal_x = nx, normal_y = ny, normal_z = nz,
-                texcoord_x = u, texcoord_y = v,
+                position_x = IsFinite(x) ? x : 0f,
+                position_y = IsFinite(y) ? y : 0f,
+                position_z = IsFinite(z) ? z : 0f,
+                normal_x = IsFinite(nx) ? nx : 0f,
+                normal_y = IsFinite(ny) ? ny : 0f,
+                normal_z = IsFinite(nz) ? nz : -1f,
+                texcoord_x = IsFinite(u) ? u : 0f,
+                texcoord_y = IsFinite(v) ? v : 0f,
                 color = color,
                 _pad0 = 0, _pad1 = 0, _pad2 = 0, _pad3 = 0, _pad4 = 0, _pad5 = 0, _pad6 = 0
             };
