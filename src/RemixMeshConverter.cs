@@ -1327,6 +1327,31 @@ namespace UnityRemix
         {
             return meshToMaterialMap.TryGetValue((ulong)(uint)meshId, out materialId);
         }
+
+        /// <summary>
+        /// Clears all cached static and skinned mesh handles, enqueueing them for safe deferred destruction.
+        /// Forces meshes to be recreated on the next frame with updated materials/hashes.
+        /// </summary>
+        public void ClearMeshCache()
+        {
+            int currentFrame = Time.frameCount;
+            foreach (var handle in meshCache.Values)
+            {
+                if (handle != IntPtr.Zero)
+                    deferredDestructionQueue.Enqueue(new DeferredMeshDestruction { handle = handle, frameSubmitted = currentFrame });
+            }
+            meshCache.Clear();
+
+            foreach (var handle in skinnedMeshHandles.Values)
+            {
+                if (handle != IntPtr.Zero)
+                    deferredDestructionQueue.Enqueue(new DeferredMeshDestruction { handle = handle, frameSubmitted = currentFrame });
+            }
+            skinnedMeshHandles.Clear();
+            meshToMaterialMap.Clear();
+
+            logger?.LogInfo("[RemixMeshConverter] Cleared mesh cache and retired handles for material update.");
+        }
         
         /// <summary>
         /// Cleanup all resources

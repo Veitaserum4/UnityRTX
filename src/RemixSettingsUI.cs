@@ -25,6 +25,7 @@ namespace UnityRemix
         private bool _enableGameGeometry;
         private bool _enableDistanceCulling;
         private bool _enableVisibilityCulling;
+        private bool _detectScrollingTextures = true;
         private bool _enableLights;
         private bool _captureStaticMeshes;
         private bool _captureSkinnedMeshes;
@@ -353,6 +354,11 @@ namespace UnityRemix
                 _plugin.SetConfig("PersistDisabledRenderers", _persistDisabledRenderers);
             if (RemixImGui.IsItemHovered())
                 RemixImGui.SetTooltip("Keep drawing meshes after the game deactivates them.\nEnable for games that temporarily hide visible geometry (e.g. ULTRAKILL CyberGrind).");
+
+            if (RemixImGui.Checkbox("Detect Scrolling Textures", ref _detectScrollingTextures))
+                _plugin.SetConfig("DetectScrollingTextures", _detectScrollingTextures);
+            if (RemixImGui.IsItemHovered())
+                RemixImGui.SetTooltip("Automatically detects renderers with animated or scrolling UV textures (water, conveyors, lava)\nand captures them dynamically with live UV offsets every frame.\nDisable to treat them as normal static geometry.");
         }
 
         private void DrawCameraSection()
@@ -696,46 +702,37 @@ namespace UnityRemix
             RemixImGui.TextColored(1.0f, 0.7f, 0.2f, 1.0f, "Experimental features for non-PBR & retro games (ULTRAKILL, classic Unity).");
             RemixImGui.Spacing();
 
-            bool autoPbr = matMgr.ConfigAutoPBR != null && matMgr.ConfigAutoPBR.Value;
-            if (RemixImGui.Checkbox("Auto PBR Heuristics (Experimental)", ref autoPbr))
+            bool autoPbrEnabled = (matMgr.ConfigAutoPBR != null && matMgr.ConfigAutoPBR.Value) ||
+                                 (matMgr.ConfigAutoNormalMaps != null && matMgr.ConfigAutoNormalMaps.Value);
+
+            if (RemixImGui.Checkbox("Auto PBR & Normal Maps (Experimental)", ref autoPbrEnabled))
             {
                 if (matMgr.ConfigAutoPBR != null)
-                    matMgr.ConfigAutoPBR.Value = autoPbr;
-            }
-            if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Infers realistic metallic & roughness from material, texture, shader, and object names\nwhen a material lacks PBR maps (metals, marble, wood, fabrics, stone, plastic, etc.).");
-
-            if (autoPbr)
-            {
-                RemixImGui.Indent();
-                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"PBR Inferred Materials: {matMgr.AutoPbrMaterialCount}");
-                RemixImGui.Unindent();
-            }
-
-            RemixImGui.Spacing();
-
-            bool autoNormals = matMgr.ConfigAutoNormalMaps != null && matMgr.ConfigAutoNormalMaps.Value;
-            if (RemixImGui.Checkbox("Auto Normal Map Generation (Experimental)", ref autoNormals))
-            {
+                    matMgr.ConfigAutoPBR.Value = autoPbrEnabled;
                 if (matMgr.ConfigAutoNormalMaps != null)
-                    matMgr.ConfigAutoNormalMaps.Value = autoNormals;
+                    matMgr.ConfigAutoNormalMaps.Value = autoPbrEnabled;
+
+                _plugin.OnAutoPbrSettingChanged();
             }
             if (RemixImGui.IsItemHovered())
-                RemixImGui.SetTooltip("Automatically generates tangent-space normal maps via a Sobel height filter on the albedo texture\nfor surfaces without a normal map, giving flat textures geometric depth.");
+                RemixImGui.SetTooltip("Infers realistic metallic & roughness and generates tangent-space normal maps\nfor surfaces lacking PBR maps, updating materials live on screen.");
 
-            if (autoNormals)
+            if (autoPbrEnabled)
             {
                 RemixImGui.Indent();
+
                 float strength = matMgr.ConfigAutoNormalStrength != null ? matMgr.ConfigAutoNormalStrength.Value : 1.0f;
                 if (RemixImGui.SliderFloat("Auto Normal Strength", ref strength, 0.1f, 3.0f))
                 {
                     if (matMgr.ConfigAutoNormalStrength != null)
                         matMgr.ConfigAutoNormalStrength.Value = strength;
+
+                    _plugin.OnAutoPbrSettingChanged();
                 }
                 if (RemixImGui.IsItemHovered())
-                    RemixImGui.SetTooltip("Controls bump depth and height exaggeration of auto-generated normal maps (default 1.0).");
+                    RemixImGui.SetTooltip("Controls bump depth and height exaggeration of auto-generated normal maps (default 1.0).\n(Updates live)");
 
-                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"Generated Normal Maps: {matMgr.AutoNormalMapCount}");
+                RemixImGui.TextColored(0.7f, 0.7f, 0.7f, 1.0f, $"PBR Inferred Materials: {matMgr.AutoPbrMaterialCount} | Generated Normal Maps: {matMgr.AutoNormalMapCount}");
                 RemixImGui.Unindent();
             }
         }
@@ -789,6 +786,7 @@ namespace UnityRemix
             _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
             _skyboxFiltering = _plugin.GetConfigInt("SkyboxFiltering");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
+            _detectScrollingTextures = _plugin.GetConfigBool("DetectScrollingTextures");
             _enableSceneScan = _plugin.GetConfigBool("EnableSceneScan");
             _sceneScanActiveOnly = _plugin.GetConfigBool("ActiveRenderersOnly");
             _persistDisabledRenderers = _plugin.GetConfigBool("PersistDisabledRenderers");

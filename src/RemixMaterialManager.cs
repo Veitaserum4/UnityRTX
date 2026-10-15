@@ -151,6 +151,16 @@ namespace UnityRemix
             public float refractiveIndex;
             public float transmittanceDistance;
             public Color transmittanceColor;
+
+            // Auto PBR & Normal Map state for live updates
+            public float baseMetallic;
+            public float baseRoughness;
+            public float inferredMetallic;
+            public float inferredRoughness;
+            public bool hasInferredPbr;
+            public IntPtr originalNormalHandle;
+            public ulong originalNormalTextureHash;
+            public Texture2D albedoTex;
         }
         private System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData> materialTextureData = new System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData>();
         private RemixWaterManager waterManager;
@@ -165,7 +175,7 @@ namespace UnityRemix
         private int autoNormalMapCount = 0;
         public int AutoPbrMaterialCount => autoPbrMaterialCount;
         public int AutoNormalMapCount => autoNormalMapCount;
-        private readonly Dictionary<int, (IntPtr handle, ulong hash)> autoNormalCache = new Dictionary<int, (IntPtr, ulong)>();
+        private readonly Dictionary<long, (IntPtr handle, ulong hash)> autoNormalCache = new Dictionary<long, (IntPtr, ulong)>();
         
         // Track all texture hashes confirmed to be uploaded into OpenRemix native runtime
         private readonly HashSet<ulong> uploadedTextureHashes = new HashSet<ulong>();
@@ -414,7 +424,13 @@ namespace UnityRemix
                 roughness = roughness,
                 metallic = metallic,
                 emissiveColor = Color.black,
-                emissiveIntensity = 0f
+                emissiveIntensity = 0f,
+                baseMetallic = metallic,
+                baseRoughness = roughness,
+                hasInferredPbr = false,
+                originalNormalHandle = normalHandle,
+                originalNormalTextureHash = normalHash,
+                albedoTex = albedo
             };
 
             materialTextureData[matId] = matData;
@@ -751,16 +767,28 @@ namespace UnityRemix
             else if (hasSmoothness) { roughness = 1.0f - Mathf.Clamp01(smoothness); hasExplicitRoughness = true; }
             else roughness = 0.7f;
 
+            matData.baseMetallic = Mathf.Clamp01(metallic);
+            matData.baseRoughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
+            matData.hasInferredPbr = false;
+            matData.inferredMetallic = matData.baseMetallic;
+            matData.inferredRoughness = matData.baseRoughness;
+
             // Auto PBR Heuristics (Experimental): infer physical metallic & roughness for non-PBR surfaces
-            if (ConfigAutoPBR != null && ConfigAutoPBR.Value && (!hasExplicitMetallic || !hasExplicitRoughness))
+            if (!hasExplicitMetallic || !hasExplicitRoughness)
             {
                 if (InferPbrProperties(material, tex, renderer, shaderName, out float infMetal, out float infRough, out string matchedCat))
                 {
-                    if (!hasExplicitMetallic) metallic = infMetal;
-                    if (!hasExplicitRoughness) roughness = infRough;
-                    autoPbrMaterialCount++;
-                    if (verboseTextureLogging.Value)
-                        logger.LogInfo($"[AutoPBR] Inferred '{material.name}': cat={matchedCat} metal={metallic:F2} rough={roughness:F2}");
+                    matData.hasInferredPbr = true;
+                    matData.inferredMetallic = Mathf.Clamp01(!hasExplicitMetallic ? infMetal : metallic);
+                    matData.inferredRoughness = Mathf.Clamp(!hasExplicitRoughness ? infRough : roughness, 0.04f, 1.0f);
+                    if (ConfigAutoPBR != null && ConfigAutoPBR.Value)
+                    {
+                        if (!hasExplicitMetallic) metallic = infMetal;
+                        if (!hasExplicitRoughness) roughness = infRough;
+                        autoPbrMaterialCount++;
+                        if (verboseTextureLogging.Value)
+                            logger.LogInfo($"[AutoPBR] Inferred '{material.name}': cat={matchedCat} metal={metallic:F2} rough={roughness:F2}");
+                    }
                 }
             }
 
@@ -1177,6 +1205,10 @@ namespace UnityRemix
                         }
                     }
                 }
+
+                matData.originalNormalHandle = matData.normalHandle;
+                matData.originalNormalTextureHash = matData.normalTextureHash;
+                matData.albedoTex = albedoTex;
 
                 // Auto Normal Map Generation (Experimental): Sobel height filter on albedo texture
                 if (matData.normalHandle == IntPtr.Zero && albedoTex != null
@@ -2668,9 +2700,10 @@ namespace UnityRemix
                 return (IntPtr.Zero, 0);
 
             int texId = albedoTex.GetInstanceID();
+            long cacheKey = ((long)texId << 32) | (uint)(Mathf.RoundToInt(bumpStrength * 100f) & 0xFFFFFFFF);
             lock (autoNormalCache)
             {
-                if (autoNormalCache.TryGetValue(texId, out var cached))
+                if (autoNormalCache.TryGetValue(cacheKey, out var cached))
                     return cached;
             }
 
@@ -2786,7 +2819,7 @@ namespace UnityRemix
                 var result = (new IntPtr((long)hash), hash);
                 lock (autoNormalCache)
                 {
-                    autoNormalCache[texId] = result;
+                    autoNormalCache[cacheKey] = result;
                 }
                 return result;
             }
@@ -2795,6 +2828,78 @@ namespace UnityRemix
                 logger.LogError($"Failed to generate auto normal map for '{albedoTex.name}': {ex.Message}");
                 return (IntPtr.Zero, 0);
             }
+        }
+
+        /// <summary>
+        /// Updates all captured materials to apply or remove auto PBR heuristics and auto normal maps live.
+        /// Resets remixMaterialHandle for altered materials so Remix creates new material instances.
+        /// </summary>
+        public void UpdateAllAutoPbrMaterials()
+        {
+            bool pbrEnabled = ConfigAutoPBR != null && ConfigAutoPBR.Value;
+            bool normalEnabled = ConfigAutoNormalMaps != null && ConfigAutoNormalMaps.Value;
+            float normalStrength = ConfigAutoNormalStrength != null ? ConfigAutoNormalStrength.Value : 1.0f;
+
+            int newPbrCount = 0;
+            int newNormalCount = 0;
+
+            foreach (var kvp in materialTextureData.ToArray())
+            {
+                var matData = kvp.Value;
+                bool changed = false;
+
+                // 1. Update Metallic & Roughness
+                float targetMetallic = matData.baseMetallic;
+                float targetRoughness = matData.baseRoughness;
+
+                if (pbrEnabled && matData.hasInferredPbr)
+                {
+                    targetMetallic = matData.inferredMetallic;
+                    targetRoughness = matData.inferredRoughness;
+                    newPbrCount++;
+                }
+
+                if (Mathf.Abs(matData.metallic - targetMetallic) > 0.001f ||
+                    Mathf.Abs(matData.roughness - targetRoughness) > 0.001f)
+                {
+                    matData.metallic = targetMetallic;
+                    matData.roughness = targetRoughness;
+                    changed = true;
+                }
+
+                // 2. Update Normal Map
+                IntPtr targetNormalHandle = matData.originalNormalHandle;
+                ulong targetNormalHash = matData.originalNormalTextureHash;
+
+                if (normalEnabled && matData.originalNormalHandle == IntPtr.Zero && matData.albedoTex != null)
+                {
+                    var (genHandle, genHash) = GetOrCreateAutoNormalMap(matData.albedoTex, normalStrength);
+                    if (genHandle != IntPtr.Zero)
+                    {
+                        targetNormalHandle = genHandle;
+                        targetNormalHash = genHash;
+                        newNormalCount++;
+                    }
+                }
+
+                if (matData.normalHandle != targetNormalHandle || matData.normalTextureHash != targetNormalHash)
+                {
+                    matData.normalHandle = targetNormalHandle;
+                    matData.normalTextureHash = targetNormalHash;
+                    changed = true;
+                }
+
+                if (changed)
+                {
+                    matData.remixMaterialHandle = IntPtr.Zero;
+                    materialTextureData[kvp.Key] = matData;
+                }
+            }
+
+            autoPbrMaterialCount = newPbrCount;
+            autoNormalMapCount = newNormalCount;
+
+            logger?.LogInfo($"[AutoPBR] Live update completed: PBR={pbrEnabled} ({autoPbrMaterialCount} active), AutoNormal={normalEnabled} ({autoNormalMapCount} active, strength={normalStrength:F2})");
         }
 
         #endregion

@@ -22,6 +22,24 @@ namespace UnityRemix
         // Cache of renderer instance ID -> is scrolling to avoid repeated reflection / component queries
         private static readonly Dictionary<int, bool> _rendererScrollCache = new Dictionary<int, bool>();
         private static int _lastClearFrame = -1;
+        private static bool _enabled = true;
+
+        /// <summary>
+        /// Gets or sets whether scrolling texture detection is active.
+        /// When disabled, renderers with UV scrollers are treated as standard static geometry.
+        /// </summary>
+        public static bool Enabled
+        {
+            get => _enabled;
+            set
+            {
+                if (_enabled != value)
+                {
+                    _enabled = value;
+                    ClearCache();
+                }
+            }
+        }
 
         // Cached reflection for ScrollingTexture component
         private static FieldInfo _scrollerOffsetField;
@@ -43,7 +61,7 @@ namespace UnityRemix
         /// </summary>
         public static bool IsScrollingRenderer(Renderer renderer)
         {
-            if (renderer == null) return false;
+            if (!_enabled || renderer == null) return false;
 
             int id = renderer.GetInstanceID();
             int currentFrame = Time.frameCount;
@@ -216,7 +234,7 @@ namespace UnityRemix
         public static bool TryGetAnimatedUVTransform(Renderer renderer, MaterialPropertyBlock tempMpb, out Vector4 uvST)
         {
             uvST = new Vector4(1f, 1f, 0f, 0f);
-            if (renderer == null) return false;
+            if (!_enabled || renderer == null) return false;
 
             bool hasOffset = false;
 

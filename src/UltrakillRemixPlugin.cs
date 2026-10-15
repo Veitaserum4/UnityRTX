@@ -32,6 +32,7 @@ namespace UnityRemix
         private ConfigEntry<bool> configEnableSkybox;
         private ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
         private ConfigEntry<bool> configUseVisibilityCulling;
+        private ConfigEntry<bool> configDetectScrollingTextures;
         private ConfigEntry<int> configRendererCacheDuration;
         private ConfigEntry<int> configDebugLogInterval;
         private ConfigEntry<bool> configEnableLights;
@@ -222,6 +223,10 @@ namespace UnityRemix
             
             configUseVisibilityCulling = Config.Bind("Rendering", "UseVisibilityCulling", false,
                 "Use Unity's renderer.isVisible check to filter out invisible renderers. May cause visual issues in some games - disable if you see missing geometry.");
+            
+            configDetectScrollingTextures = Config.Bind("Rendering", "DetectScrollingTextures", true,
+                "Automatically detect renderers with animated or scrolling UV textures (e.g. water, conveyors, lava) and capture them dynamically with live UV offsets every frame. When disabled, treated as standard static geometry.");
+            RemixScrollingTextureDetector.Enabled = configDetectScrollingTextures.Value;
             
             configRendererCacheDuration = Config.Bind("Performance", "RendererCacheDuration", 300,
                 new ConfigDescription("Number of frames to cache renderer list before refreshing.",
@@ -940,6 +945,7 @@ namespace UnityRemix
                 case "EnableDistanceCulling": return configUseDistanceCulling.Value;
                 case "EnableSkybox": return configEnableSkybox.Value;
                 case "UseVisibilityCulling": return configUseVisibilityCulling.Value;
+                case "DetectScrollingTextures": return configDetectScrollingTextures.Value;
                 case "EnableLights": return configEnableLights.Value;
                 case "CaptureStaticMeshes": return configCaptureStaticMeshes.Value;
                 case "CaptureSkinnedMeshes": return configCaptureSkinnedMeshes.Value;
@@ -1014,6 +1020,11 @@ namespace UnityRemix
                 case "EnableDistanceCulling": configUseDistanceCulling.Value = value; break;
                 case "EnableSkybox": configEnableSkybox.Value = value; break;
                 case "UseVisibilityCulling": configUseVisibilityCulling.Value = value; break;
+                case "DetectScrollingTextures":
+                    configDetectScrollingTextures.Value = value;
+                    RemixScrollingTextureDetector.Enabled = value;
+                    frameCapture?.InvalidateCaches();
+                    break;
                 case "EnableLights": configEnableLights.Value = value; break;
                 case "CaptureStaticMeshes": configCaptureStaticMeshes.Value = value; break;
                 case "CaptureSkinnedMeshes": configCaptureSkinnedMeshes.Value = value; break;
@@ -1069,6 +1080,27 @@ namespace UnityRemix
         }
 
         public void SaveConfig() => Config.Save();
+
+        /// <summary>
+        /// Called when Auto PBR or Auto Normal Map settings are changed in the UI.
+        /// Immediately updates all captured materials, clears mesh caches, and invalidates frame renderers
+        /// so changes reflect on screen live without scene reload or restart.
+        /// </summary>
+        public void OnAutoPbrSettingChanged()
+        {
+            materialManager?.UpdateAllAutoPbrMaterials();
+            meshConverter?.ClearMeshCache();
+            frameCapture?.InvalidateCaches();
+            if (sceneMeshScanner != null)
+            {
+                sceneMeshScanner.ClearData();
+                var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+                if (activeScene.IsValid())
+                {
+                    sceneMeshScanner.OnSceneLoaded(activeScene);
+                }
+            }
+        }
 
         public RemixCameraHandler CameraHandler => cameraHandler;
 
