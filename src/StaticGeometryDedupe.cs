@@ -118,10 +118,22 @@ namespace UnityRemix
                 return default;
 
             Bounds bounds = renderer.bounds;
-            return new StaticGeometryKey(
+            return BuildKey(
                 mesh.GetInstanceID(),
                 renderer.gameObject.layer,
                 ComputeMaterialSignature(renderer.sharedMaterials),
+                in bounds);
+        }
+
+        public static StaticGeometryKey BuildKey(int meshId, int layer, int materialSignature, in Bounds bounds)
+        {
+            if (meshId == 0)
+                return default;
+
+            return new StaticGeometryKey(
+                meshId,
+                layer,
+                materialSignature,
                 Quantize(bounds.center.x),
                 Quantize(bounds.center.y),
                 Quantize(bounds.center.z),

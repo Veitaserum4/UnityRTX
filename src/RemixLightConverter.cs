@@ -43,6 +43,25 @@ namespace UnityRemix
         // Cache for Unity lights - maps Light instance ID to Remix handle
         private readonly object cacheLock = new object();
         private readonly Dictionary<int, IntPtr> lightCache = new Dictionary<int, IntPtr>();
+        private readonly Dictionary<int, UnityLightData> lastSubmittedLightData = new Dictionary<int, UnityLightData>();
+        private float lastSubmittedIntensityMultiplier = -1f;
+        private readonly HashSet<int> reusableActiveLightIds = new HashSet<int>();
+        private readonly List<int> reusableLightsToRemove = new List<int>();
+
+        // Main-thread cached Light component references to avoid per-frame FindObjectsOfType<Light>() and string path building
+        private struct CachedSceneLight
+        {
+            public Light light;
+            public Transform transform;
+            public int instanceId;
+            public ulong hash;
+            public string name;
+        }
+        private readonly List<CachedSceneLight> cachedSceneLights = new List<CachedSceneLight>(64);
+        private readonly HashSet<int> cachedSceneLightIds = new HashSet<int>();
+        private readonly List<UnityLightData> reusableLightList = new List<UnityLightData>(64);
+        private int lightDiscoveryCounter = -1;
+        private const int LightDiscoveryIntervalFrames = 30;
 
         // Thread-safe snapshot of light data transferred from main thread to render thread
         private readonly object lightDataLock = new object();
@@ -100,14 +119,61 @@ namespace UnityRemix
         {
             if (!configEnableLights.Value)
                 return;
-                
-            Light[] allLights = UnityEngine.Object.FindObjectsOfType<Light>();
-            var lightList = new List<UnityLightData>(allLights.Length);
 
+            lightDiscoveryCounter++;
+            if (lightDiscoveryCounter <= 0 || lightDiscoveryCounter >= LightDiscoveryIntervalFrames || cachedSceneLights.Count == 0)
+            {
+                lightDiscoveryCounter = 1;
+                DiscoverSceneLights();
+            }
+
+            reusableLightList.Clear();
+
+            for (int i = cachedSceneLights.Count - 1; i >= 0; i--)
+            {
+                var entry = cachedSceneLights[i];
+                Light l = entry.light;
+                if (l == null)
+                {
+                    cachedSceneLightIds.Remove(entry.instanceId);
+                    cachedSceneLights.RemoveAt(i);
+                    continue;
+                }
+
+                if (!l.enabled || !l.gameObject.activeInHierarchy || l.intensity <= 0.001f || (l.type != LightType.Directional && l.range <= 0.001f))
+                    continue;
+
+                Transform t = entry.transform;
+                reusableLightList.Add(new UnityLightData
+                {
+                    instanceId = entry.instanceId,
+                    hash = entry.hash,
+                    type = l.type,
+                    color = l.color,
+                    intensity = l.intensity,
+                    range = l.range,
+                    position = t.position,
+                    forward = t.forward,
+                    spotAngle = l.spotAngle,
+                    name = entry.name
+                });
+            }
+
+            lock (lightDataLock)
+            {
+                currentLightData = reusableLightList.Count > 0 ? reusableLightList.ToArray() : Array.Empty<UnityLightData>();
+            }
+        }
+
+        private void DiscoverSceneLights()
+        {
+            Light[] allLights = UnityCompat.FindSceneComponentsIncludingInactive<Light>();
             for (int i = 0; i < allLights.Length; i++)
             {
                 Light l = allLights[i];
-                if (l == null || !l.enabled || !l.gameObject.activeInHierarchy || l.intensity <= 0.001f || (l.type != LightType.Directional && l.range <= 0.001f))
+                if (l == null) continue;
+                int id = l.GetInstanceID();
+                if (!cachedSceneLightIds.Add(id))
                     continue;
 
                 Transform t = l.transform;
@@ -118,27 +184,17 @@ namespace UnityRemix
                 // include instance ID in hash to avoid hash collisions between multiple clones.
                 if (path.Contains("(Clone)"))
                 {
-                    hash ^= ((ulong)(uint)l.GetInstanceID() * 1099511628211UL);
+                    hash ^= ((ulong)(uint)id * 1099511628211UL);
                 }
 
-                lightList.Add(new UnityLightData
+                cachedSceneLights.Add(new CachedSceneLight
                 {
-                    instanceId = l.GetInstanceID(),
+                    light = l,
+                    transform = t,
+                    instanceId = id,
                     hash = hash,
-                    type = l.type,
-                    color = l.color,
-                    intensity = l.intensity,
-                    range = l.range,
-                    position = t.position,
-                    forward = t.forward,
-                    spotAngle = l.spotAngle,
                     name = l.name
                 });
-            }
-
-            lock (lightDataLock)
-            {
-                currentLightData = lightList.ToArray();
             }
         }
         
@@ -147,6 +203,10 @@ namespace UnityRemix
         /// </summary>
         public void ClearCache()
         {
+            cachedSceneLights.Clear();
+            cachedSceneLightIds.Clear();
+            lightDiscoveryCounter = -1;
+
             lock (cacheLock)
             {
                 lock (apiLock)
@@ -160,12 +220,28 @@ namespace UnityRemix
                     }
                 }
                 lightCache.Clear();
+                lastSubmittedLightData.Clear();
+                lastSubmittedIntensityMultiplier = -1f;
             }
 
             lock (lightDataLock)
             {
                 currentLightData = Array.Empty<UnityLightData>();
             }
+        }
+
+        private static bool LightDataEquals(in UnityLightData a, in UnityLightData b)
+        {
+            if (a.type != b.type || a.hash != b.hash) return false;
+            if (Mathf.Abs(a.intensity - b.intensity) > 0.0005f) return false;
+            if (Mathf.Abs(a.range - b.range) > 0.001f) return false;
+            if (Mathf.Abs(a.spotAngle - b.spotAngle) > 0.01f) return false;
+            if ((a.position - b.position).sqrMagnitude > 0.00001f) return false;
+            if ((a.forward - b.forward).sqrMagnitude > 0.00001f) return false;
+            if (Mathf.Abs(a.color.r - b.color.r) > 0.001f ||
+                Mathf.Abs(a.color.g - b.color.g) > 0.001f ||
+                Mathf.Abs(a.color.b - b.color.b) > 0.001f) return false;
+            return true;
         }
         
         /// <summary>
@@ -190,6 +266,7 @@ namespace UnityRemix
                             }
                         }
                         lightCache.Clear();
+                        lastSubmittedLightData.Clear();
                     }
                 }
                 return;
@@ -207,20 +284,37 @@ namespace UnityRemix
             if (lightsSnapshot == null)
                 return;
 
+            float currentMultiplier = configLightIntensityMultiplier.Value;
+            bool multiplierChanged = Mathf.Abs(currentMultiplier - lastSubmittedIntensityMultiplier) > 0.0001f;
+            lastSubmittedIntensityMultiplier = currentMultiplier;
+
             lock (cacheLock)
             {
-                HashSet<int> activeLightIds = new HashSet<int>();
+                reusableActiveLightIds.Clear();
 
                 for (int i = 0; i < lightsSnapshot.Length; i++)
                 {
                     ref UnityLightData lightData = ref lightsSnapshot[i];
-                    activeLightIds.Add(lightData.instanceId);
+                    reusableActiveLightIds.Add(lightData.instanceId);
 
-                    IntPtr lightHandle = CreateRemixLightFromData(ref lightData, frameCount);
+                    IntPtr lightHandle;
+                    bool hasExisting = lightCache.TryGetValue(lightData.instanceId, out lightHandle) && lightHandle != IntPtr.Zero;
+                    bool needsRecreate = !hasExisting || multiplierChanged ||
+                                         !lastSubmittedLightData.TryGetValue(lightData.instanceId, out var prevData) ||
+                                         !LightDataEquals(in lightData, in prevData);
+
+                    if (needsRecreate)
+                    {
+                        lightHandle = CreateRemixLightFromData(ref lightData, frameCount);
+                        if (lightHandle != IntPtr.Zero)
+                        {
+                            lightCache[lightData.instanceId] = lightHandle;
+                            lastSubmittedLightData[lightData.instanceId] = lightData;
+                        }
+                    }
 
                     if (lightHandle != IntPtr.Zero)
                     {
-                        lightCache[lightData.instanceId] = lightHandle;
                         lock (apiLock)
                         {
                             drawLightInstanceFunc(lightHandle);
@@ -229,14 +323,12 @@ namespace UnityRemix
                 }
 
                 // Destroy persistent Remix lights that are no longer active in Unity
-                List<int> toRemove = null;
+                reusableLightsToRemove.Clear();
                 foreach (var kvp in lightCache)
                 {
-                    if (!activeLightIds.Contains(kvp.Key))
+                    if (!reusableActiveLightIds.Contains(kvp.Key))
                     {
-                        if (toRemove == null)
-                            toRemove = new List<int>();
-                        toRemove.Add(kvp.Key);
+                        reusableLightsToRemove.Add(kvp.Key);
 
                         if (kvp.Value != IntPtr.Zero && destroyLightFunc != null)
                         {
@@ -248,12 +340,11 @@ namespace UnityRemix
                     }
                 }
 
-                if (toRemove != null)
+                for (int i = 0; i < reusableLightsToRemove.Count; i++)
                 {
-                    for (int i = 0; i < toRemove.Count; i++)
-                    {
-                        lightCache.Remove(toRemove[i]);
-                    }
+                    int remId = reusableLightsToRemove[i];
+                    lightCache.Remove(remId);
+                    lastSubmittedLightData.Remove(remId);
                 }
             }
         }

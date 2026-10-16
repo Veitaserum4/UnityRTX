@@ -93,11 +93,21 @@ namespace UnityRemix
             };
         }
 
+        private int _snapshotFrameCounter;
+        private string[] _cachedPlaceholders = Array.Empty<string>();
+        private StaticGeometryStats _cachedStaticStats;
+
         /// <summary>
         /// Called from the Unity main thread each frame to snapshot diagnostic data.
         /// </summary>
         public void UpdateSnapshot()
         {
+            if (!_visible)
+                return;
+
+            _snapshotFrameCounter++;
+            bool refreshHeavyStats = (_snapshotFrameCounter % 15 == 1);
+
             var snap = new HUDSnapshot();
 
             var mc = _plugin.MeshConverter;
@@ -117,7 +127,9 @@ namespace UnityRemix
             {
                 snap.TextureCache = mm.TextureCacheCount;
                 snap.MaterialData = mm.MaterialDataCount;
-                snap.PlaceholderMaterials = mm.GetPlaceholderMaterialNames();
+                if (refreshHeavyStats)
+                    _cachedPlaceholders = mm.GetPlaceholderMaterialNames();
+                snap.PlaceholderMaterials = _cachedPlaceholders;
             }
             else
             {
@@ -131,7 +143,9 @@ namespace UnityRemix
                 snap.PersistentStatic = fc.PersistentStaticCount;
                 snap.CachedStaticRenderers = fc.CachedStaticRendererCount;
                 snap.CachedSkinnedRenderers = fc.CachedSkinnedRendererCount;
-                snap.StaticGeometryStats = fc.GetStaticGeometryStats(sc);
+                if (refreshHeavyStats)
+                    _cachedStaticStats = fc.GetStaticGeometryStats(sc);
+                snap.StaticGeometryStats = _cachedStaticStats;
             }
 
             if (sc != null)

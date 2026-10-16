@@ -727,16 +727,134 @@ namespace UnityRemix
             this.configStaticMeshFrameSkip = staticMeshFrameSkip;
         }
         
+        private class CachedStaticRendererInfo
+        {
+            public int rendererId;
+            public MeshFilter filter;
+            public Transform transform;
+            public GameObject gameObject;
+            public Material primarySharedMaterial;
+            public Material[] sharedMaterials;
+            public int materialSignature;
+        }
+
+        private class CachedSkinnedRendererInfo
+        {
+            public int rendererId;
+            public int hierarchyHash;
+            public Transform transform;
+            public GameObject gameObject;
+            public Animator animator;
+            public Material primarySharedMaterial;
+            public Material[] sharedMaterials;
+            public Transform[] bones;
+            public ulong[] boneNameHashes;
+            public Matrix4x4[] boneMatricesA;
+            public Matrix4x4[] boneMatricesB;
+        }
+
+        private readonly Dictionary<int, CachedStaticRendererInfo> cachedStaticInfo = new Dictionary<int, CachedStaticRendererInfo>(1024);
+        private readonly Dictionary<int, CachedSkinnedRendererInfo> cachedSkinnedInfo = new Dictionary<int, CachedSkinnedRendererInfo>(128);
+        private readonly HashSet<int> reusableValidSkinnedIds = new HashSet<int>();
+        private readonly List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)> reusableBakeFallbackQueue = new List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)>();
+        private readonly List<int> reusableStaleSkinnedKeys = new List<int>();
+        private Camera lastTrackedCamera;
+        private int lastCameraTrackFrame = -100;
+
+        private CachedStaticRendererInfo GetOrCreateStaticInfo(MeshRenderer r)
+        {
+            int id = r.GetInstanceID();
+            if (!cachedStaticInfo.TryGetValue(id, out var info))
+            {
+                var mats = r.sharedMaterials;
+                info = new CachedStaticRendererInfo
+                {
+                    rendererId = id,
+                    filter = r.GetComponent<MeshFilter>(),
+                    transform = r.transform,
+                    gameObject = r.gameObject,
+                    primarySharedMaterial = (mats != null && mats.Length > 0) ? mats[0] : null,
+                    sharedMaterials = mats,
+                    materialSignature = StaticGeometryDedupe.ComputeMaterialSignature(mats)
+                };
+                cachedStaticInfo[id] = info;
+                return info;
+            }
+
+            if (info.filter == null)
+                info.filter = r.GetComponent<MeshFilter>();
+
+            var currentPrimary = r.sharedMaterial;
+            if (!ReferenceEquals(currentPrimary, info.primarySharedMaterial))
+            {
+                var mats = r.sharedMaterials;
+                info.primarySharedMaterial = currentPrimary;
+                info.sharedMaterials = mats;
+                info.materialSignature = StaticGeometryDedupe.ComputeMaterialSignature(mats);
+            }
+
+            return info;
+        }
+
+        private CachedSkinnedRendererInfo GetOrCreateSkinnedInfo(SkinnedMeshRenderer sr)
+        {
+            int id = sr.GetInstanceID();
+            if (!cachedSkinnedInfo.TryGetValue(id, out var info))
+            {
+                var tr = sr.transform;
+                var mats = sr.sharedMaterials;
+                var bones = sr.bones;
+                ulong[] boneHashes = null;
+                if (bones != null && bones.Length > 0)
+                {
+                    boneHashes = new ulong[bones.Length];
+                    for (int b = 0; b < bones.Length; b++)
+                    {
+                        boneHashes[b] = bones[b] != null ? HashUtils.HashStringFNV(bones[b].name) : 0UL;
+                    }
+                }
+
+                info = new CachedSkinnedRendererInfo
+                {
+                    rendererId = id,
+                    hierarchyHash = HashUtils.GetHierarchyHashInt(tr),
+                    transform = tr,
+                    gameObject = sr.gameObject,
+                    animator = sr.GetComponentInParent<Animator>(),
+                    primarySharedMaterial = (mats != null && mats.Length > 0) ? mats[0] : null,
+                    sharedMaterials = mats,
+                    bones = bones,
+                    boneNameHashes = boneHashes
+                };
+                cachedSkinnedInfo[id] = info;
+                return info;
+            }
+
+            var currentPrimary = sr.sharedMaterial;
+            if (!ReferenceEquals(currentPrimary, info.primarySharedMaterial))
+            {
+                var mats = sr.sharedMaterials;
+                info.primarySharedMaterial = currentPrimary;
+                info.sharedMaterials = mats;
+            }
+
+            return info;
+        }
+
         /// <summary>
         /// Invalidate caches on scene change
         /// </summary>
         public void InvalidateCaches()
         {
             rendererCacheFrame = -1;
+            lastCameraTrackFrame = -100;
+            lastTrackedCamera = null;
             cachedRenderers.Clear();
             cachedSkinnedRenderers.Clear();
             cachedRendererIds.Clear();
             cachedSkinnedRendererIds.Clear();
+            cachedStaticInfo.Clear();
+            cachedSkinnedInfo.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
             lastSkinnedTransforms.Clear();
@@ -778,6 +896,9 @@ namespace UnityRemix
             cachedSkinnedRenderers.Clear();
             cachedRendererIds.Clear();
             cachedSkinnedRendererIds.Clear();
+            cachedStaticInfo.Clear();
+            cachedSkinnedInfo.Clear();
+            lastCameraTrackFrame = -100;
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
             trackedTrailRenderers.Clear();
@@ -802,6 +923,7 @@ namespace UnityRemix
                         cachedScrollingRenderers.Add(r);
                     }
                     cachedRenderers.Add(r);
+                    GetOrCreateStaticInfo(r);
                 }
             }
 
@@ -814,9 +936,9 @@ namespace UnityRemix
                     cachedSkinnedRenderers.Add(sr);
                     if (!sr.updateWhenOffscreen)
                         sr.updateWhenOffscreen = true;
-                    var anim = sr.GetComponentInParent<Animator>();
-                    if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
-                        anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                    var info = GetOrCreateSkinnedInfo(sr);
+                    if (info.animator != null && info.animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        info.animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 }
             }
 
@@ -877,7 +999,8 @@ namespace UnityRemix
                 {
                     if (r == null) continue;
                     if (!r.enabled || !r.gameObject.activeInHierarchy) { disabledCount++; continue; }
-                    var mf = r.GetComponent<MeshFilter>();
+                    var info = GetOrCreateStaticInfo(r);
+                    var mf = info.filter;
                     if (mf == null || mf.sharedMesh == null) { noMeshCount++; continue; }
                     string mn = mf.sharedMesh.name;
                     if (mn != null && mn.Contains("Endless")) gridCount++;
@@ -965,11 +1088,17 @@ namespace UnityRemix
         
         /// <summary>
         /// Ensures all active renderers parented under the camera (viewmodels, weapons, arms) are tracked immediately.
-        /// This avoids any delay when switching weapons or activating arms.
+        /// Throttled to once every 10 frames (or immediately on camera change) to avoid redundant GetComponentsInChildren allocations.
         /// </summary>
-        public void EnsureCameraRenderersTracked(Camera cam)
+        public void EnsureCameraRenderersTracked(Camera cam, int frameCount = -1)
         {
             if (cam == null) return;
+            if (frameCount >= 0 && ReferenceEquals(cam, lastTrackedCamera) && (frameCount - lastCameraTrackFrame) < 10)
+                return;
+
+            lastTrackedCamera = cam;
+            if (frameCount >= 0)
+                lastCameraTrackFrame = frameCount;
             
             var childRenderers = cam.GetComponentsInChildren<MeshRenderer>(false);
             for (int i = 0; i < childRenderers.Length; i++)
@@ -978,6 +1107,7 @@ namespace UnityRemix
                 if (r != null && cachedRendererIds.Add(r.GetInstanceID()))
                 {
                     cachedRenderers.Add(r);
+                    GetOrCreateStaticInfo(r);
                 }
             }
             
@@ -990,9 +1120,9 @@ namespace UnityRemix
                     cachedSkinnedRenderers.Add(sr);
                     if (!sr.updateWhenOffscreen)
                         sr.updateWhenOffscreen = true;
-                    var anim = sr.GetComponentInParent<Animator>();
-                    if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
-                        anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                    var info = GetOrCreateSkinnedInfo(sr);
+                    if (info.animator != null && info.animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        info.animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 }
             }
         }
@@ -1014,7 +1144,7 @@ namespace UnityRemix
 
             if (mainCam != null)
             {
-                EnsureCameraRenderersTracked(mainCam);
+                EnsureCameraRenderersTracked(mainCam, frameCount);
             }
             
             // Capture camera
@@ -1067,42 +1197,59 @@ namespace UnityRemix
             int totalDrawn = 0;
             
             // Capture static meshes
+            Transform mainCamTransform = mainCam != null ? mainCam.transform : null;
+            float maxDistSqr = configMaxRenderDistance.Value * configMaxRenderDistance.Value;
+            bool useDistCulling = configUseDistanceCulling.Value;
+            bool useVisCulling = configUseVisibilityCulling.Value;
+
             foreach (var renderer in cachedRenderers)
             {
-                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
+                if (renderer == null || !renderer.enabled)
                     continue;
 
-                var lossy = renderer.transform.lossyScale;
+                var info = GetOrCreateStaticInfo(renderer);
+                var go = info.gameObject;
+                if (go == null || !go.activeInHierarchy)
+                    continue;
+
+                int layer = go.layer;
+                if (IsLayerDisabled(layer))
+                    continue;
+
+                int rendererInstanceId = info.rendererId;
+                if (IsRendererDisabled(rendererInstanceId))
+                    continue;
+
+                var tr = info.transform;
+                var lossy = tr.lossyScale;
                 if (lossy.sqrMagnitude < 0.0001f)
                     continue;
                 
-                if (IsLayerDisabled(renderer.gameObject.layer))
+                // Optional visibility culling (can cause issues in some games)
+                if (useVisCulling && !renderer.isVisible)
                     continue;
 
-                if (IsRendererDisabled(renderer.GetInstanceID()))
+                var meshFilter = info.filter;
+                if (meshFilter == null)
                     continue;
-                
-                // Optional visibility culling (can cause issues in some games)
-                if (configUseVisibilityCulling.Value && !renderer.isVisible)
+                var mesh = meshFilter.sharedMesh;
+                if (mesh == null)
                     continue;
+
+                Bounds bounds = renderer.bounds;
                 
                 // Optional distance culling
-                if (configUseDistanceCulling.Value)
+                if (useDistCulling)
                 {
-                    float maxDist = configMaxRenderDistance.Value;
-                    float sqrDistance = (renderer.bounds.center - camPos).sqrMagnitude;
-                    if (sqrDistance > maxDist * maxDist)
+                    float sqrDistance = (bounds.center - camPos).sqrMagnitude;
+                    if (sqrDistance > maxDistSqr)
                         continue;
                 }
                 
-                var meshFilter = renderer.GetComponent<MeshFilter>();
-                if (meshFilter == null || meshFilter.sharedMesh == null)
-                    continue;
-                
-                var mesh = meshFilter.sharedMesh;
                 int meshId = mesh.GetInstanceID();
-                int rendererInstanceId = renderer.GetInstanceID();
-                var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
+                var materials = info.sharedMaterials;
+                int baseMatSig = info.materialSignature;
+                var dedupeKey = StaticGeometryDedupe.BuildKey(meshId, layer, baseMatSig, in bounds);
 
                 // Animated / scrolling UV meshes (water, lava, conveyor belts, scrolling textures)
                 // must be rendered dynamically via state.skinned with live UV offsets every frame.
@@ -1111,7 +1258,7 @@ namespace UnityRemix
                     if (scrollingRendererIds.Add(rendererInstanceId))
                     {
                         cachedScrollingRenderers.Add(renderer);
-                        logger.LogInfo($"[ScrollingTexture] Registered scrolling renderer '{renderer.gameObject.name}' (id={rendererInstanceId}, mesh='{mesh.name}') - total scrolling: {scrollingRendererIds.Count}");
+                        logger.LogInfo($"[ScrollingTexture] Registered scrolling renderer '{go.name}' (id={rendererInstanceId}, mesh='{mesh.name}') - total scrolling: {scrollingRendererIds.Count}");
                     }
                     lock (persistentStaticLock)
                     {
@@ -1129,8 +1276,6 @@ namespace UnityRemix
                     }
                     continue;
                 }
-
-                var materials = renderer.sharedMaterials;
 
                 Texture mpbMainTex = null;
                 Color? mpbColor = null;
@@ -1190,12 +1335,13 @@ namespace UnityRemix
                     }
                 }
 
-                int matSig = StaticGeometryDedupe.ComputeMaterialSignature(materials);
+                int matSig = baseMatSig;
                 if (mpbHash != 0)
                 {
                     matSig = HashCombine(matSig, mpbHash);
                 }
                 ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
+                bool isViewModel = mainCamTransform != null && tr.IsChildOf(mainCamTransform);
                 
                 // Queue mesh for creation if not cached, not already queued, and not previously failed
                 bool needsQueue;
@@ -1347,7 +1493,7 @@ namespace UnityRemix
                                             int cInt = Mathf.RoundToInt(c * 1000f);
                                             int sInt = Mathf.RoundToInt(s * 1000f);
                                             int hsbcHash = HashCombine(HashCombine(hInt, bInt), HashCombine(cInt, sInt));
-                                            matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(renderer.transform), hsbcHash));
+                                            matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(tr), hsbcHash));
                                         }
                                     }
                                 }
@@ -1361,8 +1507,6 @@ namespace UnityRemix
                             }
                         }
                     }
-                    
-                    bool isViewModel = mainCam != null && renderer.transform.IsChildOf(mainCam.transform);
 
                     // Queue pre-extracted mesh data
                     var preparedData = new PreparedMeshData
@@ -1398,7 +1542,7 @@ namespace UnityRemix
                 }
                 
                 // Add instance
-                var transform = renderer.transform.localToWorldMatrix;
+                var transform = tr.localToWorldMatrix;
                 var instanceData = new MeshInstanceData
                 {
                     meshKey = meshKey,
@@ -1412,8 +1556,7 @@ namespace UnityRemix
                 
                 // Remember this renderer's transform so we can keep drawing it if it gets disabled.
                 // Do NOT persist viewmodels/weapons (they should disappear when unequipped).
-                bool isCurrentViewModel = mainCam != null && renderer.transform.IsChildOf(mainCam.transform);
-                if (!isCurrentViewModel)
+                if (!isViewModel)
                 {
                     cachedStaticInstances.Add(instanceData);
                     lock (persistentStaticLock)
@@ -1850,41 +1993,54 @@ namespace UnityRemix
             int gpuSkinned = 0;
             int baked = 0;
             int skipNull = 0, skipLayer = 0, skipVis = 0, skipDist = 0, skipNoMesh = 0;
-            var validSkinnedIds = new HashSet<int>();
+            reusableValidSkinnedIds.Clear();
+            var validSkinnedIds = reusableValidSkinnedIds;
             
             Camera mainCam = cameraHandler.GetPreferredCamera();
             Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;
 
             if (mainCam != null)
             {
-                EnsureCameraRenderersTracked(mainCam);
+                EnsureCameraRenderersTracked(mainCam, frameCount);
             }
             
             // BakeMesh fallback budget
             var bakeSw = System.Diagnostics.Stopwatch.StartNew();
             const float bakeMaxMs = 100.0f;
             if (skinnedRoundRobinIndex >= total) skinnedRoundRobinIndex = 0;
-            var bakeFallbackQueue = new List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)>();
+            reusableBakeFallbackQueue.Clear();
+            var bakeFallbackQueue = reusableBakeFallbackQueue;
+
+            bool useDistCulling = configUseDistanceCulling.Value;
+            float maxDistSqr = configMaxRenderDistance.Value * configMaxRenderDistance.Value;
+            bool useHwSkinning = configHardwareSkinning.Value;
+            bool useEvenBuffer = (frameCount & 1) == 0;
             
             for (int i = 0; i < total; i++)
             {
                 var skinned = cachedSkinnedRenderers[i];
-                if (skinned == null || !skinned.enabled || !skinned.gameObject.activeInHierarchy)
+                if (skinned == null)
                 {
-                    if (skinned != null)
-                    {
-                        int staleId = HashUtils.GetHierarchyHashInt(skinned.transform);
-                        persistentSkinnedData.Remove(staleId);
-                    }
                     skipNull++;
                     continue;
                 }
 
-                var scale = skinned.transform.lossyScale;
-                if (scale.sqrMagnitude < 0.0001f)
+                var info = GetOrCreateSkinnedInfo(skinned);
+                int skinnedId = info.hierarchyHash;
+                var go = info.gameObject;
+
+                if (!skinned.enabled || go == null || !go.activeInHierarchy)
                 {
-                    int staleId = HashUtils.GetHierarchyHashInt(skinned.transform);
-                    persistentSkinnedData.Remove(staleId);
+                    persistentSkinnedData.Remove(skinnedId);
+                    skipNull++;
+                    continue;
+                }
+
+                var tr = info.transform;
+                var ls = tr.lossyScale;
+                if (ls.sqrMagnitude < 0.0001f)
+                {
+                    persistentSkinnedData.Remove(skinnedId);
                     skipNull++;
                     continue;
                 }
@@ -1892,76 +2048,59 @@ namespace UnityRemix
                 if (!skinned.updateWhenOffscreen)
                     skinned.updateWhenOffscreen = true;
 
-                var anim = skinned.GetComponentInParent<Animator>();
+                var anim = info.animator;
                 if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
                     anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
                 
-                if (IsLayerDisabled(skinned.gameObject.layer) || IsRendererDisabled(HashUtils.GetHierarchyHashInt(skinned.transform)))
+                if (IsLayerDisabled(go.layer) || IsRendererDisabled(skinnedId))
                 {
                     skipLayer++;
                     continue;
                 }
                 
-
-                
-                // Skinned meshes must NOT use Unity's isVisible frustum culling.
-                // Unity's SMR frustum culling frequently returns false for player/animated models
-                // with dynamic cameras or third-person views, which immediately prunes them from
-                // persistentSkinnedData and causes character parts to vanish or flicker.
-                // Remix performs native GPU occlusion and frustum culling.
-                /*
-                if (configUseVisibilityCulling.Value && !skinned.isVisible)
+                if (useDistCulling)
                 {
-                    skipVis++;
-                    continue;
-                }
-                */
-                
-                if (configUseDistanceCulling.Value)
-                {
-                    float maxDist = configMaxRenderDistance.Value;
                     float sqrDistance = (skinned.bounds.center - camPos).sqrMagnitude;
-                    if (sqrDistance > maxDist * maxDist)
+                    if (sqrDistance > maxDistSqr)
                     {
                         skipDist++;
                         continue;
                     }
                 }
                 
-                if (skinned.sharedMesh == null)
+                var sharedMesh = skinned.sharedMesh;
+                if (sharedMesh == null)
                 {
-                    if (configDebugLogInterval.Value > 0 && persistentSkinnedData.ContainsKey(HashUtils.GetHierarchyHashInt(skinned.transform)))
-                        logger.LogWarning($"[SkinSkip] '{skinned.gameObject.name}' id={HashUtils.GetHierarchyHashInt(skinned.transform)}: sharedMesh became NULL");
+                    if (configDebugLogInterval.Value > 0 && persistentSkinnedData.ContainsKey(skinnedId))
+                        logger.LogWarning($"[SkinSkip] '{go.name}' id={skinnedId}: sharedMesh became NULL");
                     skipNoMesh++;
                     continue;
                 }
                 
-                int skinnedId = HashUtils.GetHierarchyHashInt(skinned.transform);
                 validSkinnedIds.Add(skinnedId);
                 // Also register per-submesh sub-keys so they survive the stale-pruning pass
                 // Formula: sub0 = skinnedId, sub>0 = skinnedId ^ (sub * KNUTH_PRIME)
-                var smMatsEarly = skinned.sharedMaterials;
-                if (smMatsEarly != null)
+                var smMaterials = info.sharedMaterials;
+                if (smMaterials != null)
                 {
-                    for (int sub = 1; sub < smMatsEarly.Length; sub++)
+                    for (int sub = 1; sub < smMaterials.Length; sub++)
                         validSkinnedIds.Add((int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u)));
                 }
                 
                 // Compute unscaled transform (sign-only scale preserves winding)
-                Vector3 ls = skinned.transform.lossyScale;
                 Matrix4x4 unscaledMatrix = Matrix4x4.TRS(
-                    skinned.transform.position,
-                    skinned.transform.rotation,
+                    tr.position,
+                    tr.rotation,
                     new Vector3(Mathf.Sign(ls.x), Mathf.Sign(ls.y), Mathf.Sign(ls.z))
                 );
                 
-                Material primaryMat = (skinned.sharedMaterials != null && skinned.sharedMaterials.Length > 0) ? skinned.sharedMaterials[0] : null;
+                Material primaryMat = info.primarySharedMaterial;
                 int matId = ResolveMaterial(skinned, primaryMat, doLog);
-                int sharedMeshId = skinned.sharedMesh.GetInstanceID();
+                int sharedMeshId = sharedMesh.GetInstanceID();
 
                 // Compute BlendShape hash from active weights to support custom character creator proportions (belly, torso, etc.)
                 uint bsHash = 0;
-                int bsCount = skinned.sharedMesh.blendShapeCount;
+                int bsCount = sharedMesh.blendShapeCount;
                 if (bsCount > 0)
                 {
                     bsHash = 2166136261u;
@@ -1975,23 +2114,34 @@ namespace UnityRemix
                 
                 // Try GPU skinning path: extract bone weights once, compute bone transforms each frame
                 var skinData = (CachedSkinningData)null;
-                if (configHardwareSkinning.Value)
+                if (useHwSkinning)
                 {
-                    if (!cachedSkinning.ContainsKey(skinCacheKey))
+                    if (!cachedSkinning.TryGetValue(skinCacheKey, out skinData))
+                    {
                         CacheSkinningData(skinned, skinCacheKey);
-                    skinData = cachedSkinning.TryGetValue(skinCacheKey, out var sd) ? sd : null;
+                        cachedSkinning.TryGetValue(skinCacheKey, out skinData);
+                    }
                 }
-                if (skinData != null && skinned.bones != null && skinned.bones.Length > 0)
+
+                var bones = info.bones;
+                if (skinData != null && bones != null && bones.Length > 0)
                 {
-                    // Compute bone transforms for Remix GPU skinning
-                    var bones = skinned.bones;
+                    // Compute bone transforms for Remix GPU skinning using double-buffered array
                     int boneCount = skinData.boneCount;
-                    var boneMatrices = new Matrix4x4[boneCount];
+                    Matrix4x4[] boneMatrices;
+                    if (useEvenBuffer)
+                    {
+                        if (info.boneMatricesA == null || info.boneMatricesA.Length != boneCount)
+                            info.boneMatricesA = new Matrix4x4[boneCount];
+                        boneMatrices = info.boneMatricesA;
+                    }
+                    else
+                    {
+                        if (info.boneMatricesB == null || info.boneMatricesB.Length != boneCount)
+                            info.boneMatricesB = new Matrix4x4[boneCount];
+                        boneMatrices = info.boneMatricesB;
+                    }
                     
-                    // Bone transforms relative to instance transform:
-                    //   boneTransform[i] = instanceInverse * bones[i].l2w * bindPoses[i]
-                    // Remix applies: v_final = instanceTransform * Σ(w * boneTransform) * v_bind
-                    //   = unscaled * unscaled^-1 * Σ(w * bones.l2w * bindPoses) * v_bind = v_world
                     Matrix4x4 invInstance = unscaledMatrix.inverse;
                     for (int b = 0; b < boneCount; b++)
                     {
@@ -2000,72 +2150,67 @@ namespace UnityRemix
                             : Matrix4x4.identity;
                     }
                     
-                        ulong combinedMeshHash = RemixMeshConverter.GenerateMeshHash(skinned.sharedMesh);
-                        ulong baseMeshHash = combinedMeshHash; // save for logging
-                        if (skinned.bones != null)
+                    ulong combinedMeshHash = RemixMeshConverter.GenerateMeshHash(sharedMesh);
+                    var boneHashes = info.boneNameHashes;
+                    if (boneHashes != null)
+                    {
+                        for (int b = 0; b < boneHashes.Length; b++)
                         {
-                            foreach (var b in skinned.bones)
-                            {
-                                if (b != null)
-                                    combinedMeshHash ^= HashUtils.HashStringFNV(b.name);
-                                combinedMeshHash *= 1099511628211UL;
-                            }
-                        }
-                        if (bsHash != 0)
-                        {
-                            combinedMeshHash ^= (ulong)bsHash;
+                            if (boneHashes[b] != 0UL)
+                                combinedMeshHash ^= boneHashes[b];
                             combinedMeshHash *= 1099511628211UL;
                         }
+                    }
+                    if (bsHash != 0)
+                    {
+                        combinedMeshHash ^= (ulong)bsHash;
+                        combinedMeshHash *= 1099511628211UL;
+                    }
+                    
+                    // Emit one SkinnedMeshData per submesh so each submesh gets its correct material
+                    int subCount = (skinData.submeshTriangles != null) ? skinData.submeshTriangles.Length : 1;
+                    for (int sub = 0; sub < subCount; sub++)
+                    {
+                        int[] subTris = (skinData.submeshTriangles != null && sub < skinData.submeshTriangles.Length)
+                            ? skinData.submeshTriangles[sub]
+                            : skinData.triangles;
+                        if (subTris == null || subTris.Length == 0) continue;
                         
-
-                        
-                        // Emit one SkinnedMeshData per submesh so each submesh gets its correct material
-                        // (fixes ATLYSS face/body/hair UV + color mismatch)
-                        var smMaterials = skinned.sharedMaterials;
-                        int subCount = (skinData.submeshTriangles != null) ? skinData.submeshTriangles.Length : 1;
-                        for (int sub = 0; sub < subCount; sub++)
+                        // Resolve per-submesh material
+                        int subMatId = matId; // default to renderer-best material
+                        if (smMaterials != null && sub < smMaterials.Length && smMaterials[sub] != null)
                         {
-                            int[] subTris = (skinData.submeshTriangles != null && sub < skinData.submeshTriangles.Length)
-                                ? skinData.submeshTriangles[sub]
-                                : skinData.triangles;
-                            if (subTris == null || subTris.Length == 0) continue;
-                            
-                            // Resolve per-submesh material
-                            int subMatId = matId; // default to renderer-best material
-                            if (smMaterials != null && sub < smMaterials.Length && smMaterials[sub] != null)
-                            {
-                                var subMat = smMaterials[sub];
-                                subMatId = ResolveMaterial(skinned, subMat, doLog);
-                                if (subMatId == 0) subMatId = matId;
-                            }
-                            
-                            // Unique key per submesh: xor with Knuth multiplied submesh index
-                            int subSkinnedId = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
-                            ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
-                            
-                            persistentSkinnedData[subSkinnedId] = new SkinnedMeshData
-                            {
-                                meshId = subSkinnedId,
-                                remixMeshHash = subMeshHash,
-                                materialId = subMatId,
-                                vertices = skinData.bindVertices,
-                                normals = skinData.bindNormals,
-                                uvs = skinData.uvs,
-                                colors = skinData.colors,
-                                triangles = subTris,
-                                localToWorld = unscaledMatrix,
-                                boneTransforms = boneMatrices,
-                                skinningData = skinData
-                            };
-                            validSkinnedIds.Add(subSkinnedId);
+                            var subMat = smMaterials[sub];
+                            subMatId = (sub == 0) ? matId : ResolveMaterial(skinned, subMat, doLog);
+                            if (subMatId == 0) subMatId = matId;
                         }
+                        
+                        // Unique key per submesh: xor with Knuth multiplied submesh index
+                        int subSkinnedId = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
+                        ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
+                        
+                        persistentSkinnedData[subSkinnedId] = new SkinnedMeshData
+                        {
+                            meshId = subSkinnedId,
+                            remixMeshHash = subMeshHash,
+                            materialId = subMatId,
+                            vertices = skinData.bindVertices,
+                            normals = skinData.bindNormals,
+                            uvs = skinData.uvs,
+                            colors = skinData.colors,
+                            triangles = subTris,
+                            localToWorld = unscaledMatrix,
+                            boneTransforms = boneMatrices,
+                            skinningData = skinData
+                        };
+                        validSkinnedIds.Add(subSkinnedId);
+                    }
                     gpuSkinned++;
                     continue;
                 }
                 
                 // Update transform on existing persistent data (for all submesh entries of this renderer)
-                var smMatsForUpdate = skinned.sharedMaterials;
-                int subCountForUpdate = (smMatsForUpdate != null) ? smMatsForUpdate.Length : 1;
+                int subCountForUpdate = (smMaterials != null) ? smMaterials.Length : 1;
                 for (int sub = 0; sub < subCountForUpdate; sub++)
                 {
                     int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
@@ -2098,7 +2243,7 @@ namespace UnityRemix
                     {
                         baked++;
                         // Register all per-submesh keys as valid so they aren't pruned
-                        var smMatsForBake = skinned.sharedMaterials;
+                        var smMatsForBake = GetOrCreateSkinnedInfo(skinned).sharedMaterials;
                         int subCntBake = (smMatsForBake != null) ? smMatsForBake.Length : 1;
                         for (int sub = 0; sub < subCntBake; sub++)
                         {
@@ -2118,21 +2263,17 @@ namespace UnityRemix
             // Prune any persistent entries that are no longer valid (e.g. unequipped weapons, deactivated objects)
             if (persistentSkinnedData.Count > validSkinnedIds.Count)
             {
-                var staleIds = (List<int>)null;
+                reusableStaleSkinnedKeys.Clear();
                 foreach (var id in persistentSkinnedData.Keys)
                 {
                     if (!validSkinnedIds.Contains(id))
                     {
-                        if (staleIds == null) staleIds = new List<int>();
-                        staleIds.Add(id);
+                        reusableStaleSkinnedKeys.Add(id);
                     }
                 }
-                if (staleIds != null)
+                for (int s = 0; s < reusableStaleSkinnedKeys.Count; s++)
                 {
-                    for (int s = 0; s < staleIds.Count; s++)
-                    {
-                        persistentSkinnedData.Remove(staleIds[s]);
-                    }
+                    persistentSkinnedData.Remove(reusableStaleSkinnedKeys[s]);
                 }
             }
             

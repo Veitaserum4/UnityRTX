@@ -53,6 +53,8 @@ namespace UnityRemix
         private RemixSkyboxManager skyboxManager;
         private RemixTerrainManager terrainManager;
         private readonly HashSet<ulong> updatedMeshes = new HashSet<ulong>();
+        private readonly HashSet<int> claimedRendererIds = new HashSet<int>();
+        private readonly HashSet<StaticGeometryKey> claimedStaticKeys = new HashSet<StaticGeometryKey>();
         
         public void SetSkyboxManager(RemixSkyboxManager manager)
         {
@@ -343,8 +345,8 @@ namespace UnityRemix
             
             // Draw static mesh instances
             uint objectPickingValue = 1;
-            var claimedRendererIds = new HashSet<int>();
-            var claimedStaticKeys = new HashSet<StaticGeometryKey>();
+            claimedRendererIds.Clear();
+            claimedStaticKeys.Clear();
             
             foreach (var instance in state.instances)
             {

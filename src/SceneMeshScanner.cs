@@ -60,6 +60,8 @@ namespace UnityRemix
             public StaticGeometryKey DedupeKey;
             public int RendererInstanceId;
             public RemixAPI.remixapi_Transform Transform;
+            public Matrix4x4 LastLocalToWorld;
+            public Vector3 LocalBoundsCenter;
             public int Layer;
             public Vector3 BoundsCenter;
             public InstanceFlags Flags;
@@ -81,6 +83,7 @@ namespace UnityRemix
         // Completed instances drawn every frame
         private readonly List<InstanceData> currentInstances = new List<InstanceData>();
         private readonly List<Renderer> instanceRenderers = new List<Renderer>();
+        private readonly List<InstanceData> reusableVisibleInstances = new List<InstanceData>();
         private readonly object instanceLock = new object();
 
         // Visibility-filtered snapshot: built on main thread, read on render thread
@@ -371,7 +374,10 @@ namespace UnityRemix
                     return;
                 }
 
-                var visible = new List<InstanceData>(currentInstances.Count);
+                reusableVisibleInstances.Clear();
+                if (reusableVisibleInstances.Capacity < currentInstances.Count)
+                    reusableVisibleInstances.Capacity = currentInstances.Count;
+
                 float maxDistSqr = maxRenderDistance * maxRenderDistance;
 
                 int culledNull = 0, culledDisabled = 0, culledInactive = 0, culledLayer = 0, culledScale = 0, culledVis = 0, culledDist = 0;
@@ -405,22 +411,13 @@ namespace UnityRemix
                             continue;
                         }
 
-                        // 3. Hierarchical active state check:
-                        // - If activeInHierarchy is true, all ancestors are active -> fast path.
-                        // - If activeInHierarchy is false:
-                        //     a) If this object itself is deactivated (activeSelf == false) -> cull!
-                        //     b) If any intermediate parent between this object and the root is deactivated
-                        //        (e.g. prototype folders, unspawned traps, disabled UI previews) -> cull!
-                        //     c) If the ONLY inactive ancestor is the scene root (parent == null),
-                        //        this is an unvisited room deactivated by the game's room culling system.
-                        //        Allow it to render so the room remains visible through doorways!
-                        if (renderer.gameObject.activeInHierarchy)
+                        var go = renderer.gameObject;
+                        bool activeInHierarchy = go.activeInHierarchy;
+
+                        // 3. Hierarchical active state check
+                        if (!activeInHierarchy)
                         {
-                            // Fast path: fully active in hierarchy
-                        }
-                        else
-                        {
-                            if (!renderer.gameObject.activeSelf || IsIntermediateAncestorDisabled(renderer.transform))
+                            if (!go.activeSelf || IsIntermediateAncestorDisabled(renderer.transform))
                             {
                                 culledInactive++;
                                 continue;
@@ -430,7 +427,7 @@ namespace UnityRemix
                         // 4. Special toggleable objects that must follow activeInHierarchy (CheckPoint graphic, Door noPass skull lock)
                         if ((instance.Flags & (InstanceFlags.IsCheckPoint | InstanceFlags.IsNoPass)) != 0)
                         {
-                            if (!renderer.gameObject.activeInHierarchy)
+                            if (!activeInHierarchy)
                             {
                                 culledInactive++;
                                 continue;
@@ -438,38 +435,52 @@ namespace UnityRemix
                         }
 
                         // 5. Global active-only filtering (only if explicitly enabled by user in config)
-                        if (scanActiveOnly && !renderer.gameObject.activeInHierarchy)
+                        if (scanActiveOnly && !activeInHierarchy)
                         {
                             culledInactive++;
                             continue;
                         }
 
-                        // 6. Scale-zero check (only cull when ALL axes collapsed to zero)
-                        var scale = renderer.transform.lossyScale;
-                        if (scale.sqrMagnitude < 0.0001f)
-                        {
-                            culledScale++;
-                            continue;
-                        }
-
-                        // 7. Visibility culling (only if enabled in config)
+                        // 6. Visibility culling (only if enabled in config)
                         if (useVisibilityCulling && !renderer.isVisible)
                         {
                             culledVis++;
                             continue;
                         }
 
-                        // 8. Dynamically update transform and bounds for non-combined meshes (moving doors, platforms, etc.)
+                        // 7. Scale-zero check & dynamic transform update
                         if ((instance.Flags & InstanceFlags.IsCombinedMesh) == 0)
                         {
                             var m = renderer.transform.localToWorldMatrix;
-                            instance.Transform = RemixAPI.remixapi_Transform.FromMatrix(
-                                m.m00, m.m02, m.m01, m.m03,
-                                m.m20, m.m22, m.m21, m.m23,
-                                m.m10, m.m12, m.m11, m.m13
-                            );
-                            instance.BoundsCenter = renderer.bounds.center;
-                            currentInstances[i] = instance;
+                            float scaleSqr = (m.m00 * m.m00 + m.m10 * m.m10 + m.m20 * m.m20) +
+                                             (m.m01 * m.m01 + m.m11 * m.m11 + m.m21 * m.m21) +
+                                             (m.m02 * m.m02 + m.m12 * m.m12 + m.m22 * m.m22);
+                            if (scaleSqr < 0.0001f)
+                            {
+                                culledScale++;
+                                continue;
+                            }
+
+                            if (!MatrixEquals(in m, in instance.LastLocalToWorld))
+                            {
+                                instance.LastLocalToWorld = m;
+                                instance.Transform = RemixAPI.remixapi_Transform.FromMatrix(
+                                    m.m00, m.m02, m.m01, m.m03,
+                                    m.m20, m.m22, m.m21, m.m23,
+                                    m.m10, m.m12, m.m11, m.m13
+                                );
+                                instance.BoundsCenter = m.MultiplyPoint3x4(instance.LocalBoundsCenter);
+                                currentInstances[i] = instance;
+                            }
+                        }
+                        else
+                        {
+                            var scale = renderer.transform.lossyScale;
+                            if (scale.sqrMagnitude < 0.0001f)
+                            {
+                                culledScale++;
+                                continue;
+                            }
                         }
                     }
 
@@ -484,20 +495,28 @@ namespace UnityRemix
                         }
                     }
 
-                    visible.Add(instance);
+                    reusableVisibleInstances.Add(instance);
                 }
 
                 visLogTimer++;
                 if (visLogTimer % 180 == 1)
                 {
-                    logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={visible.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
+                    logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={reusableVisibleInstances.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
                 }
 
-                Volatile.Write(ref visibleInstances, visible.Count > 0 ? visible.ToArray() : Array.Empty<InstanceData>());
+                Volatile.Write(ref visibleInstances, reusableVisibleInstances.Count > 0 ? reusableVisibleInstances.ToArray() : Array.Empty<InstanceData>());
             }
         }
 
-        private static Vector3 ComputeBoundsCenter(Vector3[] vertices, Matrix4x4 localToWorld)
+        private static bool MatrixEquals(in Matrix4x4 a, in Matrix4x4 b)
+        {
+            return a.m03 == b.m03 && a.m13 == b.m13 && a.m23 == b.m23 &&
+                   a.m00 == b.m00 && a.m11 == b.m11 && a.m22 == b.m22 &&
+                   a.m01 == b.m01 && a.m02 == b.m02 && a.m10 == b.m10 &&
+                   a.m12 == b.m12 && a.m20 == b.m20 && a.m21 == b.m21;
+        }
+
+        private static Vector3 ComputeLocalBoundsCenter(Vector3[] vertices)
         {
             if (vertices == null || vertices.Length == 0)
                 return Vector3.zero;
@@ -507,12 +526,12 @@ namespace UnityRemix
                 min = Vector3.Min(min, vertices[i]);
                 max = Vector3.Max(max, vertices[i]);
             }
-            return localToWorld.MultiplyPoint3x4((min + max) * 0.5f);
+            return (min + max) * 0.5f;
         }
 
         public void ClearData()
         {
-            lock (instanceLock) { currentInstances.Clear(); instanceRenderers.Clear(); }
+            lock (instanceLock) { currentInstances.Clear(); instanceRenderers.Clear(); reusableVisibleInstances.Clear(); }
             lock (streamLock) { streamingQueue.Clear(); }
             meshHandles.Clear();
             scannedFilterIds.Clear();
@@ -1008,14 +1027,17 @@ namespace UnityRemix
                     m.m10, m.m12, m.m11, m.m13
                 );
 
+                Vector3 localCenter = ComputeLocalBoundsCenter(entry.Vertices);
                 newInstances.Add(new InstanceData
                 {
                     MeshHandle = meshHandle,
                     DedupeKey = entry.DedupeKey,
                     RendererInstanceId = entry.RendererInstanceId,
                     Transform = transform,
+                    LastLocalToWorld = m,
+                    LocalBoundsCenter = localCenter,
                     Layer = entry.Layer,
-                    BoundsCenter = ComputeBoundsCenter(entry.Vertices, entry.LocalToWorld),
+                    BoundsCenter = m.MultiplyPoint3x4(localCenter),
                     Flags = entry.Flags,
                 });
                 newRenderers.Add(entry.SourceRenderer);

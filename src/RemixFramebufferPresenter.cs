@@ -155,20 +155,34 @@ namespace UnityRemix
                     bool shouldSuppress = configDisableInEngineRendering != null && configDisableInEngineRendering.Value;
 
                     int currentCameraCount = Camera.allCamerasCount;
-                    var allCanvases = UnityCompat.FindSceneComponentsIncludingInactive<Canvas>();
-                    int currentCanvasCount = allCanvases.Length;
-                    int currentActiveCanvasCount = 0;
-                    for (int i = 0; i < allCanvases.Length; i++)
-                    {
-                        if (allCanvases[i] != null && allCanvases[i].isActiveAndEnabled)
-                            currentActiveCanvasCount++;
-                    }
-
                     int currentW = Screen.width;
                     int currentH = Screen.height;
                     bool resolutionChanged = (lastScreenWidth > 0 && lastScreenHeight > 0) &&
                                              (currentW != lastScreenWidth || currentH != lastScreenHeight);
                     bool cameraCountChanged = (currentCameraCount != lastCameraCount);
+
+                    bool pollCanvases = (shouldSuppress != inEngineRenderingSuppressed) ||
+                                        cameraCountChanged ||
+                                        resolutionChanged ||
+                                        (sceneRefreshCounter > 0) ||
+                                        escapePressed ||
+                                        (lastCanvasCount < 0) ||
+                                        (frameCount % 120 == 0);
+
+                    int currentCanvasCount = lastCanvasCount;
+                    int currentActiveCanvasCount = lastActiveCanvasCount;
+                    if (pollCanvases)
+                    {
+                        var allCanvases = UnityCompat.FindSceneComponentsIncludingInactive<Canvas>();
+                        currentCanvasCount = allCanvases.Length;
+                        currentActiveCanvasCount = 0;
+                        for (int i = 0; i < allCanvases.Length; i++)
+                        {
+                            if (allCanvases[i] != null && allCanvases[i].isActiveAndEnabled)
+                                currentActiveCanvasCount++;
+                        }
+                    }
+
                     bool canvasCountChanged = (currentCanvasCount != lastCanvasCount) || (currentActiveCanvasCount != lastActiveCanvasCount);
                     bool shouldCheck = (shouldSuppress != inEngineRenderingSuppressed) || cameraCountChanged || canvasCountChanged || resolutionChanged || (sceneRefreshCounter > 0) || escapePressed || (frameCount % 180 == 0);
 
@@ -219,8 +233,8 @@ namespace UnityRemix
                         uiDetector.SyncDedicatedUICameraTransform(worldCam);
                     }
 
-                    // Sync embedded window bounds
-                    if (windowManager != null)
+                    // Sync embedded window bounds periodically or on resolution change
+                    if (windowManager != null && (resolutionChanged || shouldCheck || (frameCount % 15 == 0)))
                     {
                         RemixWatchdog.BeatMain("Presenter.Update.SyncBounds");
                         windowManager.SyncWindowBounds();
