@@ -31,6 +31,14 @@ namespace UnityRemix
             }
         }
         
+        void Update()
+        {
+            if ((object)plugin != null)
+            {
+                plugin.OnUpdateFromPersistent();
+            }
+        }
+
         void LateUpdate()
         {
             // Cast to object to avoid Unity's lifetime check (overloaded == operator)

@@ -28,6 +28,7 @@ namespace UnityRemix
 
         private const int MaxLabelCount = 80;
         private float _boxMaxDistance = 50f;
+        private bool _show3DBoxes = false;
 
         #region Snapshot structures
 
@@ -175,8 +176,8 @@ namespace UnityRemix
                 snap.SceneName = "unknown";
             }
 
-            // Camera matrices for 3D projection (only when visible)
-            if (_visible && ch != null && ch.CurrentCamera != null)
+            // Camera matrices for 3D projection (only when visible and 3D boxes enabled)
+            if (_visible && _show3DBoxes && ch != null && ch.CurrentCamera != null)
             {
                 var cam = ch.CurrentCamera;
                 snap.ViewMatrix = cam.worldToCameraMatrix;
@@ -185,8 +186,8 @@ namespace UnityRemix
                 snap.HasCameraMatrices = true;
             }
 
-            // Per-mesh debug entries (only when visible + DrawList available)
-            if (_visible && RemixImGui.HasDrawListSupport)
+            // Per-mesh debug entries (only when visible + 3D boxes enabled + DrawList available)
+            if (_visible && _show3DBoxes && RemixImGui.HasDrawListSupport)
             {
                 var allEntries = new List<DebugBoxEntry>();
 
@@ -255,7 +256,7 @@ namespace UnityRemix
             DrawHUDPanel(snap);
 
             // 3D wireframe boxes + labels
-            if (RemixImGui.HasDrawListSupport && snap.HasCameraMatrices && snap.MeshEntries != null)
+            if (_show3DBoxes && RemixImGui.HasDrawListSupport && snap.HasCameraMatrices && snap.MeshEntries != null)
                 Draw3DBoxes(snap);
         }
 
@@ -268,12 +269,14 @@ namespace UnityRemix
                       | RemixImGui.WindowFlags_NoResize;
 
             RemixImGui.SetNextWindowPos(10, 10, RemixImGui.Cond_Always);
-            RemixImGui.SetNextWindowSize(420, 0, RemixImGui.Cond_Always);
+            RemixImGui.SetNextWindowSize(440, 0, RemixImGui.Cond_Always);
             RemixImGui.PushStyleColor(RemixImGui.Col_WindowBg, 0.05f, 0.05f, 0.05f, 0.75f);
 
-            if (RemixImGui.Begin("Debug", flags))
+            if (RemixImGui.Begin("Debug (F3)", flags))
             {
                 DrawSummary(snap);
+                RemixImGui.Separator();
+                DrawPerformanceTelemetry();
                 RemixImGui.Separator();
                 DrawMeshDetails(snap);
                 RemixImGui.Separator();
@@ -295,13 +298,68 @@ namespace UnityRemix
             RemixImGui.Text($"Lights:    {snap.LightCount}");
             RemixImGui.Text($"Unique Static Objects: {snap.StaticGeometryStats.DedupedVisibleStaticTotal}");
 
-            if (snap.MeshEntries != null && snap.MeshEntries.Length > 0)
+            if (RemixImGui.HasDrawListSupport)
             {
                 RemixImGui.Spacing();
-                RemixImGui.SliderFloat("Box Distance", ref _boxMaxDistance, 1f, 500f, "%.0f m");
-                RemixImGui.TextColored(0.5f, 0.8f, 0.5f, 1.0f,
-                    $"3D boxes: {snap.MeshEntries.Length} meshes (max {MaxLabelCount} labels)");
+                RemixImGui.Checkbox("Show 3D Mesh Boxes", ref _show3DBoxes);
+                if (_show3DBoxes && snap.MeshEntries != null && snap.MeshEntries.Length > 0)
+                {
+                    RemixImGui.SliderFloat("Box Distance", ref _boxMaxDistance, 1f, 500f, "%.0f m");
+                    RemixImGui.TextColored(0.5f, 0.8f, 0.5f, 1.0f,
+                        $"3D boxes: {snap.MeshEntries.Length} meshes (max {MaxLabelCount} labels)");
+                }
             }
+        }
+
+        private void DrawPerformanceTelemetry()
+        {
+            var p = RemixProfiler.GetSnapshot();
+            double fullFrameMs = p.MainTotalMs + p.EngineMs;
+            double unityFps = fullFrameMs > 0.001 ? (1000.0 / fullFrameMs) : 0;
+            double renderFps = p.RenderTotalMs > 0.001 ? (1000.0 / p.RenderTotalMs) : 0;
+
+            RemixImGui.TextColored(0.4f, 0.9f, 1.0f, 1.0f,
+                $"Unity: {unityFps:F1} FPS ({fullFrameMs:F1} ms) | RenderThread: {renderFps:F1} FPS ({p.RenderTotalMs:F2} ms)");
+
+            if (!RemixImGui.CollapsingHeader("Performance & Telemetry"))
+                return;
+
+            RemixImGui.Indent();
+
+            RemixImGui.TextColored(0.6f, 1.0f, 0.6f, 1.0f, "Bridge Main Thread (ms)");
+            RemixImGui.Text($"  Bridge Total:   {p.MainTotalMs:F2} ms (Engine rest: {p.EngineMs:F2} ms)");
+            RemixImGui.Text($"  Static Meshes:  {p.StaticMeshesMs:F2} ms | Scanner: {p.ScannerMs:F2} ms");
+            RemixImGui.Text($"  Skinned Meshes: {p.SkinnedMeshesMs:F2} ms | Lights:  {p.LightsMs:F2} ms");
+            RemixImGui.Text($"  Dynamic/FX:     {p.DynamicEffectsMs:F2} ms | HUD:     {p.HudMs:F2} ms");
+            RemixImGui.Text($"  Presenter:      {p.UpdateOverlayMs:F2} ms | EOF UI:  {p.EndOfFrameMs:F2} ms");
+            RemixImGui.Text($"  Async Overlay:  {p.OverlayProcessMs:F2} ms (Upload: {p.DrawScreenOverlayMs:F2} ms)");
+
+            RemixImGui.Spacing();
+            RemixImGui.TextColored(0.6f, 1.0f, 0.6f, 1.0f, "Bridge Render Thread (ms)");
+            RemixImGui.Text($"  Total: {p.RenderTotalMs:F2} ms | MeshBatch: {p.MeshBatchMs:F2} ms");
+            RemixImGui.Text($"  Draw:  {p.RenderGeomMs:F2} ms | Lights:    {p.ProcessLightsMs:F2} ms | Present: {p.PresentMs:F2} ms");
+
+            if (p.HasNativeTelemetry)
+            {
+                var fp = p.FramePerf;
+                var fb = p.FrameBreakdown;
+                var ts = p.TracingStats;
+                var tx = p.TextureStats;
+
+                RemixImGui.Spacing();
+                RemixImGui.TextColored(1.0f, 0.85f, 0.4f, 1.0f, "OpenRemix Native Runtime");
+                RemixImGui.Text($"  Present CPU: {fp.presentMilliseconds:F2} ms (Scene: {fp.sceneMilliseconds:F2} ms, Record: {fp.recordMilliseconds:F2} ms)");
+                RemixImGui.Text($"  Record Sub:  Geom {fp.geometryMilliseconds:F2} | Upload {fp.uploadMilliseconds:F2} ({fp.uploadBytes / 1024} KB) | Accel {fp.accelerationMilliseconds:F2} ms");
+                RemixImGui.Text($"  Sync/Submit: Fence {fp.fenceMilliseconds:F2} | Acquire {fp.acquireMilliseconds:F2} | Submit {fp.submitMilliseconds:F2} ms");
+                RemixImGui.Text($"  UI / Post:   UI {fb.uiMilliseconds:F2} ms | Post {fb.postMilliseconds:F2} ms | Passes {fb.passesMilliseconds:F2} ms");
+                RemixImGui.Text($"  Geom Cache:  {fp.geometryCacheHits} hits / {fp.geometryConversions} conv | Buf: {fp.bufferCacheHits} hits / {fp.bufferAllocations} alloc");
+                RemixImGui.Text($"  Scene Draws: TraceInst {fb.traceInstances} | TraceSurf {fb.traceSurfaces} | Raster {fb.rasterDraws}");
+                RemixImGui.Text($"  GPU Trace:   Build {ts.gpuBuildMilliseconds:F2} ms | Trace {ts.gpuTraceMilliseconds:F2} ms (Accel: {ts.accelerationBytes / (1024 * 1024)} MB)");
+                RemixImGui.Text($"  BVH Counts:  BLAS B:{ts.blasBuilds} R:{ts.blasRefits} | DynTLAS B:{ts.dynamicTlasBuilds} R:{ts.dynamicTlasRefits}");
+                RemixImGui.Text($"  Resources:   Tex +{tx.texturesCreated}/-{tx.texturesDestroyed} | Mat +{tx.materialsCreated}/-{tx.materialsDestroyed} (GPU Create: {tx.gpuCreateMilliseconds:F1} ms)");
+            }
+
+            RemixImGui.Unindent();
         }
 
         private void DrawMeshDetails(HUDSnapshot snap)

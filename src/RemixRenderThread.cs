@@ -230,6 +230,13 @@ namespace UnityRemix
             logger.LogInfo("Render thread loop ended");
         }
         
+        private readonly System.Diagnostics.Stopwatch renderTotalSw = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch renderPhaseSw = new System.Diagnostics.Stopwatch();
+        private static readonly uint FramePerfStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_FramePerformanceEXT>();
+        private static readonly uint FrameBreakdownStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_FrameBreakdownEXT>();
+        private static readonly uint TracingStatsStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_TracingStatisticsEXT>();
+        private static readonly uint TextureStatsStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_TextureStatisticsEXT>();
+
         /// <summary>
         /// Render a single frame
         /// </summary>
@@ -237,24 +244,36 @@ namespace UnityRemix
         {
             try
             {
+                renderTotalSw.Restart();
+                double meshBatchMs = 0;
+                double renderGeomMs = 0;
+                double processLightsMs = 0;
+                double presentMs = 0;
+
                 bool hasGeometry = false;
                 if (configUseGameGeometry.Value)
                 {
                     // Process queued mesh creation on render thread (prevents main thread deadlocks)
                     RemixWatchdog.BeatRender("RenderFrame.ProcessMeshCreationBatch");
+                    renderPhaseSw.Restart();
                     frameCapture?.ProcessMeshCreationBatch();
+                    meshBatchMs = renderPhaseSw.Elapsed.TotalMilliseconds;
                     
                     // Render game geometry
                     RemixWatchdog.BeatRender("RenderFrame.RenderGameGeometry");
+                    renderPhaseSw.Restart();
                     hasGeometry = RenderGameGeometry();
+                    renderGeomMs = renderPhaseSw.Elapsed.TotalMilliseconds;
                     
-                    // Process Unity lights
+                    // Process Unity lights + skybox light
                     RemixWatchdog.BeatRender("RenderFrame.ProcessLights");
+                    renderPhaseSw.Restart();
                     lightConverter.ProcessLights(frameNum);
 
                     // Draw skybox light (DomeLight mode)
                     RemixWatchdog.BeatRender("RenderFrame.DrawSkyLight");
                     skyboxManager?.DrawSkyLight(frameNum);
+                    processLightsMs = renderPhaseSw.Elapsed.TotalMilliseconds;
                     
                     // Draw test light if lights disabled
                     if (!configEnableLights.Value && testLightHandle != IntPtr.Zero)
@@ -294,7 +313,9 @@ namespace UnityRemix
                         hwndOverride = IntPtr.Zero
                     };
                     
+                    renderPhaseSw.Restart();
                     var result = presentFunc(ref presentInfo);
+                    presentMs = renderPhaseSw.Elapsed.TotalMilliseconds;
                     RemixWatchdog.BeatRender("RenderFrame.Present.After");
                     if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                     {
@@ -303,11 +324,52 @@ namespace UnityRemix
                             logger.LogWarning($"Present failed: {result}");
                         }
                     }
+
+                    // Poll OpenRemix native telemetry periodically after Present
+                    if (RemixAPI.IsOpenRemix && (frameNum % 10 == 0))
+                    {
+                        PollNativeTelemetry();
+                    }
                 }
+
+                double totalMs = renderTotalSw.Elapsed.TotalMilliseconds;
+                RemixProfiler.RecordRenderThread(totalMs, meshBatchMs, renderGeomMs, processLightsMs, presentMs);
             }
             catch (Exception ex)
             {
                 logger.LogError($"Error in RenderFrame: {ex}");
+            }
+        }
+
+        private static void PollNativeTelemetry()
+        {
+            bool any = false;
+            var fp = new RemixAPI.remixapi_FramePerformanceEXT { structSize = FramePerfStructSize };
+            var fb = new RemixAPI.remixapi_FrameBreakdownEXT { structSize = FrameBreakdownStructSize };
+            var ts = new RemixAPI.remixapi_TracingStatisticsEXT { structSize = TracingStatsStructSize };
+            var tx = new RemixAPI.remixapi_TextureStatisticsEXT { structSize = TextureStatsStructSize };
+
+            if (RemixAPI.GetFramePerformanceEXTFunc != null)
+            {
+                if (RemixAPI.GetFramePerformanceEXTFunc(ref fp) == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                    any = true;
+            }
+            if (RemixAPI.GetFrameBreakdownEXTFunc != null)
+            {
+                RemixAPI.GetFrameBreakdownEXTFunc(ref fb);
+            }
+            if (RemixAPI.GetTracingStatisticsEXTFunc != null)
+            {
+                RemixAPI.GetTracingStatisticsEXTFunc(ref ts);
+            }
+            if (RemixAPI.GetTextureStatisticsEXTFunc != null)
+            {
+                RemixAPI.GetTextureStatisticsEXTFunc(ref tx);
+            }
+
+            if (any)
+            {
+                RemixProfiler.RecordNativeTelemetry(in fp, in fb, in ts, in tx);
             }
         }
         

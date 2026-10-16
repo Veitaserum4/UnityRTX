@@ -582,6 +582,138 @@ namespace UnityRemix
             [FieldOffset(32)] public float transmittanceMeasurementDistance;
         }
 
+        /// <summary>
+        /// OpenRemix CPU wall times for the last Present attempt (176 bytes on x64).
+        /// Geometry, allocation, upload and acceleration times are nested within recordMilliseconds.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_FramePerformanceEXT
+        {
+            public uint structSize;
+            public uint presented;
+            public ulong attempts;
+            public ulong presentations;
+            public double presentMilliseconds;
+            public double sceneMilliseconds;
+            public double recordMilliseconds;
+            public double geometryMilliseconds;
+            public double allocationMilliseconds;
+            public double uploadMilliseconds;
+            public double accelerationMilliseconds;
+            public double fenceMilliseconds;
+            public double acquireMilliseconds;
+            public double submitMilliseconds;
+            public double queuePresentMilliseconds;
+            public ulong geometryConversions;
+            public ulong geometryCacheHits;
+            public ulong uploadBytes;
+            public ulong bufferAllocations;
+            public ulong allocationBytes;
+            public ulong bufferCacheHits;
+            public ulong memoryAllocations;
+            public ulong memoryAllocationBytes;
+        }
+
+        /// <summary>
+        /// OpenRemix CPU wall-time breakdown of the last Present attempt's command recording (264 bytes on x64).
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_FrameBreakdownEXT
+        {
+            public uint structSize;
+            public uint reserved;
+            public double rasterPrepareMilliseconds;
+            public double rasterSkinningMilliseconds;
+            public double traceBeginMilliseconds;
+            public double traceSetupMilliseconds;
+            public double traceSurfacesMilliseconds;
+            public double materialMilliseconds;
+            public double temporalMilliseconds;
+            public double retireMilliseconds;
+            public double traceAccelerationMilliseconds;
+            public double tableMilliseconds;
+            public double lightingMilliseconds;
+            public double sharcMilliseconds;
+            public double signatureMilliseconds;
+            public double descriptorMilliseconds;
+            public double primaryMilliseconds;
+            public double passesMilliseconds;
+            public double postMilliseconds;
+            public double compositeMilliseconds;
+            public double uiMilliseconds;
+            public double snapshotMilliseconds;
+            public double otherMilliseconds;
+            public double presentSetupMilliseconds;
+            public double presentReleaseMilliseconds;
+            public ulong traceInstances;
+            public ulong traceSurfaces;
+            public ulong primaryDraws;
+            public ulong rasterDraws;
+            public ulong textureDescriptors;
+            public ulong rasterSkinnedVertices;
+            public ulong rasterUploadBytes;
+            public ulong rasterCulledDraws;
+        }
+
+        /// <summary>
+        /// OpenRemix GPU tracing and BVH build statistics (128 bytes on x64).
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_TracingStatisticsEXT
+        {
+            public uint structSize;
+            public uint samplesPerPixel;
+            public uint indirectBounces;
+            public uint accumulationEnabled;
+            public ulong accumulationCount;
+            public ulong sampleSequence;
+            public ulong sceneGeneration;
+            public ulong blasBuilds;
+            public ulong blasRefits;
+            public ulong blasCompactions;
+            public ulong staticTlasBuilds;
+            public ulong dynamicTlasBuilds;
+            public ulong dynamicTlasRefits;
+            public ulong accelerationBytes;
+            public ulong peakAccelerationBytes;
+            public uint dynamicRebuildReason;
+            public uint dynamicRefitCount;
+            public float gpuBuildMilliseconds;
+            public float gpuTraceMilliseconds;
+            public uint gpuTimingsAvailable;
+            public uint redrawRequested;
+        }
+
+        /// <summary>
+        /// OpenRemix cumulative texture and material turnover statistics (168 bytes on x64).
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_TextureStatisticsEXT
+        {
+            public uint structSize;
+            public uint reserved;
+            public ulong texturesCreated;
+            public ulong texturesDestroyed;
+            public ulong materialsCreated;
+            public ulong materialsDestroyed;
+            public ulong updateCalls;
+            public ulong updates;
+            public ulong updateBytes;
+            public double updateMilliseconds;
+            public ulong uploads;
+            public ulong uploadBytes;
+            public double uploadMilliseconds;
+            public ulong gpuTexturesCreated;
+            public ulong gpuTexturesDestroyed;
+            public ulong gpuMaterialsCreated;
+            public ulong gpuMaterialsDestroyed;
+            public ulong gpuCreateBytes;
+            public double gpuCreateMilliseconds;
+            public double gpuDestroyMilliseconds;
+            public ulong emissionRefreshes;
+            public double emissionRefreshMilliseconds;
+        }
+
         #endregion
 
         #region Function Pointer Delegates
@@ -674,6 +806,18 @@ namespace UnityRemix
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate remixapi_ErrorCode PFN_remixapi_SetFogState(ref remixapi_FogInfo info);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetFramePerformanceEXT(ref remixapi_FramePerformanceEXT statistics);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetFrameBreakdownEXT(ref remixapi_FrameBreakdownEXT statistics);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetTracingStatisticsEXT(ref remixapi_TracingStatisticsEXT statistics);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetTextureStatisticsEXT(ref remixapi_TextureStatisticsEXT statistics);
 
         #endregion
 
@@ -791,6 +935,10 @@ namespace UnityRemix
         public static PFN_remixapi_DrawScreenOverlay DrawScreenOverlayFunc;
         public static PFN_remixapi_SetFogState SetFogStateFunc;
         public static PFN_remixapi_PumpEvents NativePumpEvents { get; private set; }
+        public static PFN_remixapi_GetFramePerformanceEXT GetFramePerformanceEXTFunc { get; private set; }
+        public static PFN_remixapi_GetFrameBreakdownEXT GetFrameBreakdownEXTFunc { get; private set; }
+        public static PFN_remixapi_GetTracingStatisticsEXT GetTracingStatisticsEXTFunc { get; private set; }
+        public static PFN_remixapi_GetTextureStatisticsEXT GetTextureStatisticsEXTFunc { get; private set; }
 
         private static IntPtr _remixDll = IntPtr.Zero;
 
@@ -871,8 +1019,27 @@ namespace UnityRemix
 
             LoadedApiVersion = apiVersion;
             if (IsOpenRemix)
-                NativePumpEvents = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_PumpEvents>(
-                    GetProcAddress(hModule, "remixapi_PumpEvents"));
+            {
+                IntPtr pumpPtr = GetProcAddress(hModule, "remixapi_PumpEvents");
+                if (pumpPtr != IntPtr.Zero)
+                    NativePumpEvents = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_PumpEvents>(pumpPtr);
+
+                IntPtr perfPtr = GetProcAddress(hModule, "remixapi_GetFramePerformanceEXT");
+                if (perfPtr != IntPtr.Zero)
+                    GetFramePerformanceEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFramePerformanceEXT>(perfPtr);
+
+                IntPtr breakdownPtr = GetProcAddress(hModule, "remixapi_GetFrameBreakdownEXT");
+                if (breakdownPtr != IntPtr.Zero)
+                    GetFrameBreakdownEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFrameBreakdownEXT>(breakdownPtr);
+
+                IntPtr tracingPtr = GetProcAddress(hModule, "remixapi_GetTracingStatisticsEXT");
+                if (tracingPtr != IntPtr.Zero)
+                    GetTracingStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTracingStatisticsEXT>(tracingPtr);
+
+                IntPtr texStatsPtr = GetProcAddress(hModule, "remixapi_GetTextureStatisticsEXT");
+                if (texStatsPtr != IntPtr.Zero)
+                    GetTextureStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTextureStatisticsEXT>(texStatsPtr);
+            }
             return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS;
         }
 
@@ -994,6 +1161,10 @@ namespace UnityRemix
             _remixDll = IntPtr.Zero;
             LoadedApiVersion = null;
             NativePumpEvents = null;
+            GetFramePerformanceEXTFunc = null;
+            GetFrameBreakdownEXTFunc = null;
+            GetTracingStatisticsEXTFunc = null;
+            GetTextureStatisticsEXTFunc = null;
             SetFogStateFunc = null;
             GetUIStateFunc = null;
             SetUIStateFunc = null;

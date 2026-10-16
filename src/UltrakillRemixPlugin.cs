@@ -115,6 +115,7 @@ namespace UnityRemix
             LogSource = Logger;
             LogSource.LogInfo($"Plugin {PluginName} v{PluginVersion} is loading!");
             RemixWatchdog.Start(LogSource);
+            RemixProfiler.Logger = LogSource;
 
             // Suppress conflicting Vulkan implicit layer (Steam overlay) for DXVK/Remix
             try
@@ -666,8 +667,23 @@ namespace UnityRemix
             renderThread?.Start();
         }
         
+        private readonly System.Diagnostics.Stopwatch mainTotalSw = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch mainPhaseSw = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch engineFrameSw = new System.Diagnostics.Stopwatch();
+        private readonly System.Diagnostics.Stopwatch eofSw = new System.Diagnostics.Stopwatch();
+        private int lastUpdateUnityFrame = -1;
+
         void Update()
         {
+            OnUpdateFromPersistent();
+        }
+
+        public void OnUpdateFromPersistent()
+        {
+            int curUnityFrame = Time.frameCount;
+            if (lastUpdateUnityFrame == curUnityFrame) return;
+            lastUpdateUnityFrame = curUnityFrame;
+
             frameCount++;
 
             // Engine frame throttling and DeltaTime slow-motion prevention
@@ -726,6 +742,17 @@ namespace UnityRemix
             AdvanceDeviceRegistration();
             if (!deviceRegistered)
                 return;
+
+            double engineMs = engineFrameSw.IsRunning ? engineFrameSw.Elapsed.TotalMilliseconds : (Time.unscaledDeltaTime * 1000.0);
+            mainTotalSw.Restart();
+
+            double lightsMs = 0;
+            double staticMs = 0;
+            double skinnedMs = 0;
+            double dynamicMs = 0;
+            double scannerMs = 0;
+            double overlayMs = 0;
+            double hudMs = 0;
             
             frameCount++;
             
@@ -737,7 +764,9 @@ namespace UnityRemix
                 // Refresh light cache every frame to capture transient lights (explosions, muzzle flashes)
                 if (configEnableLights.Value && lightConverter != null)
                 {
+                    mainPhaseSw.Restart();
                     lightConverter.RefreshLightCache();
+                    lightsMs = mainPhaseSw.Elapsed.TotalMilliseconds;
                 }
                 
                 // Refresh camera snapshot for the UI
@@ -747,6 +776,7 @@ namespace UnityRemix
                 }
                 
                 // Capture static meshes and camera
+                mainPhaseSw.Restart();
                 try
                 {
                     frameCapture.CaptureStaticMeshes(nextState, frameCount);
@@ -755,8 +785,10 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureStaticMeshes exception: {ex}");
                 }
+                staticMs = mainPhaseSw.Elapsed.TotalMilliseconds;
                 
                 // Capture skinned meshes
+                mainPhaseSw.Restart();
                 try
                 {
                     frameCapture.CaptureSkinnedMeshes(nextState, frameCount);
@@ -765,8 +797,10 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureSkinnedMeshes exception: {ex}");
                 }
+                skinnedMs = mainPhaseSw.Elapsed.TotalMilliseconds;
 
-                // Capture particle systems
+                // Capture particle systems and trail renderers
+                mainPhaseSw.Restart();
                 try
                 {
                     frameCapture.CaptureParticleSystems(nextState, frameCount);
@@ -776,7 +810,6 @@ namespace UnityRemix
                     LogSource.LogError($"CaptureParticleSystems exception: {ex}");
                 }
 
-                // Capture trail renderers
                 try
                 {
                     frameCapture.CaptureTrailRenderers(nextState, frameCount);
@@ -785,8 +818,10 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureTrailRenderers exception: {ex}");
                 }
+                dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
+                mainPhaseSw.Restart();
                 if (sceneMeshScanner != null)
                 {
                     try
@@ -821,11 +856,13 @@ namespace UnityRemix
                         LogSource.LogError($"terrainManager UpdateVisibility exception: {ex}");
                     }
                 }
+                scannerMs = mainPhaseSw.Elapsed.TotalMilliseconds;
 
                 // Send to render thread (mesh creation moved to render thread to avoid deadlocks)
                 renderThread.UpdateFrameState(nextState);
 
                 // Update water & underwater camera medium detection on the main thread
+                mainPhaseSw.Restart();
                 if (waterManager != null)
                 {
                     try
@@ -839,15 +876,26 @@ namespace UnityRemix
                         LogSource.LogError($"waterManager UpdateMainThread exception: {ex}");
                     }
                 }
+                dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
             }
 
+            mainPhaseSw.Restart();
             fogManager?.Update();
+            dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
 
             // Update SingleWindow framebuffer presenter & UI overlay
+            mainPhaseSw.Restart();
             framebufferPresenter?.Update(frameCount);
+            overlayMs = mainPhaseSw.Elapsed.TotalMilliseconds;
 
             // Update debug HUD snapshot after all frame data is captured
+            mainPhaseSw.Restart();
             debugHUD?.UpdateSnapshot();
+            hudMs = mainPhaseSw.Elapsed.TotalMilliseconds;
+
+            double totalMs = mainTotalSw.Elapsed.TotalMilliseconds;
+            RemixProfiler.RecordMainThread(totalMs, engineMs, lightsMs, staticMs, scannerMs, skinnedMs, dynamicMs, overlayMs, hudMs);
+            engineFrameSw.Restart();
         }
 
         void Start()
@@ -872,7 +920,9 @@ namespace UnityRemix
         {
             if (lastEndOfFrameNumber == frameCount) return;
             lastEndOfFrameNumber = frameCount;
+            eofSw.Restart();
             framebufferPresenter?.OnEndOfFrame();
+            RemixProfiler.RecordEndOfFrame(eofSw.Elapsed.TotalMilliseconds);
         }
         
         void OnDestroy()
