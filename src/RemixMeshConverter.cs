@@ -79,6 +79,7 @@ namespace UnityRemix
         
         // Cache for skinned mesh Remix handles - keyed by Remix mesh hash
         private Dictionary<ulong, IntPtr> skinnedMeshHandles = new Dictionary<ulong, IntPtr>();
+        private Dictionary<ulong, int> skinnedMeshBakeFrames = new Dictionary<ulong, int>();
         
         // Deferred destruction queue with frame tracking to prevent GPU device loss
         private struct DeferredMeshDestruction
@@ -706,6 +707,21 @@ namespace UnityRemix
                         updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
                         pNext = updateHandle.AddrOfPinnedObject();
                     }
+                    else
+                    {
+                        // Particle/trail batches: Attach UpdateEXT (without MotionEXT/DeformEXT) so OpenRemix
+                        // creates an updateStream: bypasses geometryCache hashing/storage, builds BLAS with
+                        // ALLOW_UPDATE_BIT_KHR instead of scheduling 2-frame GPU BLAS compaction every frame,
+                        // and refits the BLAS in place whenever particle count remains constant!
+                        var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
+                        {
+                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
+                            pNext = IntPtr.Zero,
+                            enabled = 1
+                        };
+                        updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
+                        pNext = updateHandle.AddrOfPinnedObject();
+                    }
                 }
                 else
                 {
@@ -1068,16 +1084,36 @@ namespace UnityRemix
                     }
                     if (staleKeys != null)
                     {
-                        foreach (var k in staleKeys) skinnedMeshHandles.Remove(k);
+                        foreach (var k in staleKeys)
+                        {
+                            skinnedMeshHandles.Remove(k);
+                            skinnedMeshBakeFrames.Remove(k);
+                        }
                     }
                 }
             }
         }
         
         /// <summary>
+        /// Returns true if a dynamic/baked mesh already has a valid Remix mesh handle uploaded for the given bakeFrame.
+        /// Prevents redundant CPU vertex packing and GPU BLAS refits on frames where the mesh was not re-baked.
+        /// </summary>
+        public bool TryGetUpToDateSkinnedMesh(ulong meshHash, int bakeFrame, out IntPtr handle)
+        {
+            if (RemixAPI.IsOpenRemix && bakeFrame > 0 &&
+                skinnedMeshHandles.TryGetValue(meshHash, out handle) && handle != IntPtr.Zero &&
+                skinnedMeshBakeFrames.TryGetValue(meshHash, out int lastBakeFrame) && lastBakeFrame == bakeFrame)
+            {
+                return true;
+            }
+            handle = IntPtr.Zero;
+            return false;
+        }
+
+        /// <summary>
         /// Manage skinned mesh handle lifecycle with frame-delayed GPU-safe retirement
         /// </summary>
-        public void UpdateSkinnedMeshHandle(ulong meshHash, IntPtr newHandle, int currentFrame = 0)
+        public void UpdateSkinnedMeshHandle(ulong meshHash, IntPtr newHandle, int currentFrame = 0, int bakeFrame = 0)
         {
             if (skinnedMeshHandles.TryGetValue(meshHash, out IntPtr oldHandle) && oldHandle != IntPtr.Zero)
             {
@@ -1092,6 +1128,10 @@ namespace UnityRemix
             }
             
             skinnedMeshHandles[meshHash] = newHandle;
+            if (bakeFrame > 0)
+            {
+                skinnedMeshBakeFrames[meshHash] = bakeFrame;
+            }
             skinnedRenderCount++;
             
             ProcessDeferredDestruction(currentFrame);
@@ -1149,6 +1189,7 @@ namespace UnityRemix
                 {
                     ulong key = toRemove[i];
                     skinnedMeshHandles.Remove(key);
+                    skinnedMeshBakeFrames.Remove(key);
                     if (pinnedMeshPool.TryGetValue(key, out var poolData))
                     {
                         poolData.Dispose();
@@ -1341,6 +1382,7 @@ namespace UnityRemix
                     deferredDestructionQueue.Enqueue(new DeferredMeshDestruction { handle = handle, frameSubmitted = currentFrame });
             }
             skinnedMeshHandles.Clear();
+            skinnedMeshBakeFrames.Clear();
             meshToMaterialMap.Clear();
 
             logger?.LogInfo("[RemixMeshConverter] Cleared mesh cache and retired handles for material update.");
@@ -1384,6 +1426,7 @@ namespace UnityRemix
             // Note: Mesh cache handles are managed by Remix, don't destroy here
             meshCache.Clear();
             skinnedMeshHandles.Clear();
+            skinnedMeshBakeFrames.Clear();
         }
     }
 }

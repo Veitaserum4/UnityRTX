@@ -82,6 +82,9 @@ namespace UnityRemix
         // Cache for materials - maps Unity material instance ID to Remix material handle
         private Dictionary<int, IntPtr> materialCache = new Dictionary<int, IntPtr>();
 
+        // Cache for created Remix material handles by content hash (prevents duplicate CreateMaterial calls for cloned Unity materials)
+        private readonly Dictionary<ulong, IntPtr> materialHandleByHash = new Dictionary<ulong, IntPtr>();
+
         // Track materials that fell back to the debug placeholder texture (no albedo)
         private readonly HashSet<string> placeholderMaterialNames = new HashSet<string>();
         
@@ -145,6 +148,7 @@ namespace UnityRemix
             public Color emissiveColor;    // HDR emission color (can exceed 1.0)
             public float emissiveIntensity;
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
+            public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
             public TranslucentKind translucentKind;
@@ -579,7 +583,7 @@ namespace UnityRemix
         /// <summary>
         /// Capture textures from a Unity material, with optional per-renderer property overrides
         /// </summary>
-        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null)
+        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false)
         {
             if (material == null)
                 return;
@@ -604,6 +608,13 @@ namespace UnityRemix
                 }
             }
                 
+            string shaderName = material.shader != null ? material.shader.name : "null";
+            bool autoSuppressLight = suppressLightGeneration ||
+                shaderName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                shaderName.IndexOf("TextMeshPro/Distance Field", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                (material.name != null && (material.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                                           material.name.IndexOf("Trail", StringComparison.OrdinalIgnoreCase) >= 0));
+
             var matData = new MaterialTextureData
             {
                 materialName = material.name,
@@ -623,6 +634,7 @@ namespace UnityRemix
                 emissiveTextureHash = 0,
                 emissiveColor = Color.black,
                 emissiveIntensity = 0f,
+                suppressLightGeneration = autoSuppressLight,
                 metallic = 0.0f,
                 roughness = 0.7f,
                 translucentKind = TranslucentKind.None,
@@ -634,7 +646,6 @@ namespace UnityRemix
             // Match albedo texture first so color resolution can be aligned to the matched texture channel
             Texture2D albedoTex = mpbMainTex;
             Texture2D tex = mpbMainTex;
-            string shaderName = material.shader != null ? material.shader.name : "null";
             string matchedTexProp = null;
 
             if (captureTextures.Value)
@@ -859,7 +870,7 @@ namespace UnityRemix
 
                 Color effectiveTint = mpbColor ?? matData.albedoColor;
                 bool isTinted = effectiveTint.r < 0.98f || effectiveTint.g < 0.98f || effectiveTint.b < 0.98f;
-                if (isTinted || remap.HasValue || hsbc.HasValue)
+                if (remap.HasValue || hsbc.HasValue || (!RemixAPI.IsOpenRemix && isTinted))
                 {
                     var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap, hsbc);
                     matData.albedoHandle = tintedHandle;
@@ -875,6 +886,16 @@ namespace UnityRemix
                         {
                             matData.albedoTextureHash = hash;
                         }
+                    }
+                    if (RemixAPI.IsOpenRemix && isTinted)
+                    {
+                        // OpenRemix natively multiplies s.tint (opaqueExt.albedoConstant) in linear space in scene.glsl
+                        Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
+                        matData.albedoColor = new Color(linTint.r, linTint.g, linTint.b, matData.albedoColor.a);
+                    }
+                    else
+                    {
+                        matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
                     }
                 }
                 
@@ -1536,6 +1557,16 @@ namespace UnityRemix
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
             
+            // OpenRemix natively multiplies emissiveTexture by emissiveColorConstant * emissiveIntensity on the GPU (scene.glsl:235).
+            // Pre-tinting on the CPU causes a synchronous GPU readback stall, duplicates textures per tint, and double-tints the emission color.
+            if (RemixAPI.IsOpenRemix)
+            {
+                var handle = UploadUnityTexture(tex);
+                int texId = tex.GetInstanceID();
+                textureHashCache.TryGetValue(texId, out ulong h);
+                return (handle, h);
+            }
+
             // Compute normalized tint direction (all components <= 1.0)
             float maxCh = Mathf.Max(emissiveColor.r, Mathf.Max(emissiveColor.g, emissiveColor.b));
             float tintR = maxCh > 0f ? emissiveColor.r / maxCh : 1f;
@@ -1974,14 +2005,37 @@ namespace UnityRemix
                 hash ^= (ulong)matData.normalHandle.ToInt64();
                 hash *= 1099511628211UL;
             }
+
+            if (matData.emissiveHandle != IntPtr.Zero)
+            {
+                hash ^= (ulong)matData.emissiveHandle.ToInt64();
+                hash *= 1099511628211UL;
+            }
+
+            // Incorporate albedo color / tint (used by OpenRemix GPU s.tint multiplication)
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.albedoColor.r);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.albedoColor.g);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.albedoColor.b);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.albedoColor.a);
+            hash *= 1099511628211UL;
             
-            // Incorporate emissive color directly since it's used for per-instance overrides
+            // Incorporate emissive color and intensity directly since they're used for per-instance overrides
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveColor.r);
             hash *= 1099511628211UL;
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveColor.g);
             hash *= 1099511628211UL;
             hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveColor.b);
             hash *= 1099511628211UL;
+            hash ^= (ulong)BitConverter.DoubleToInt64Bits(matData.emissiveIntensity);
+            hash *= 1099511628211UL;
+            if (matData.suppressLightGeneration)
+            {
+                hash ^= 0x55AA55AAUL;
+                hash *= 1099511628211UL;
+            }
             // Incorporate alpha mode so cutout materials never collide with opaque materials
             hash ^= (ulong)matData.alphaMode;
             hash *= 1099511628211UL;
@@ -2919,6 +2973,14 @@ namespace UnityRemix
                 string albedoPath = GetTexturePathFromHandle(matData.albedoHandle);
                 string normalPath = GetTexturePathFromHandle(matData.normalHandle);
                 ulong matHash = GenerateMaterialHash(matData);
+
+                lock (apiLock)
+                {
+                    if (materialHandleByHash.TryGetValue(matHash, out IntPtr existingHandle) && existingHandle != IntPtr.Zero)
+                    {
+                        return existingHandle;
+                    }
+                }
                 
                 string cleanMatName = matData.materialName;
                 if (!string.IsNullOrEmpty(cleanMatName))
@@ -2984,9 +3046,23 @@ namespace UnityRemix
                     logger.LogInfo($"[MaterialCreate] '{matData.materialName}': albedo={albedoPath ?? "none"}, normal={normalPath ?? "none"}, emissive={emissivePath ?? "none"}, emColor=({matData.emissiveColor.r:F3},{matData.emissiveColor.g:F3},{matData.emissiveColor.b:F3}), emIntensity={matData.emissiveIntensity:F3}, alphaMode={matData.alphaMode}, transKind={matData.translucentKind}");
                 
                 GCHandle extHandle;
+                GCHandle emissionExtHandle = default;
                 IntPtr extPtr;
+                IntPtr emissionExtPtr = IntPtr.Zero;
                 RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw transExt = default;
                 RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw opaqueExt = default;
+
+                if (RemixAPI.IsOpenRemix && matData.suppressLightGeneration)
+                {
+                    var emissionExt = new RemixAPI.remixapi_MaterialInfoEmissionEXT
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_EMISSION_EXT,
+                        pNext = IntPtr.Zero,
+                        suppressLightGeneration = 1
+                    };
+                    emissionExtHandle = GCHandle.Alloc(emissionExt, GCHandleType.Pinned);
+                    emissionExtPtr = emissionExtHandle.AddrOfPinnedObject();
+                }
 
                 if (matData.translucentKind != TranslucentKind.None)
                 {
@@ -2999,7 +3075,7 @@ namespace UnityRemix
                     transExt = new RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw
                     {
                         sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_TRANSLUCENT_EXT,
-                        pNext = IntPtr.Zero,
+                        pNext = emissionExtPtr,
                         transmittanceTexture = IntPtr.Zero,
                         refractiveIndex = ior,
                         transmittanceColor = new RemixAPI.remixapi_Float3D
@@ -3032,7 +3108,7 @@ namespace UnityRemix
                     opaqueExt = new RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw
                     {
                         sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT,
-                        pNext = IntPtr.Zero,
+                        pNext = emissionExtPtr,
                         roughnessTexture = IntPtr.Zero,
                         metallicTexture = IntPtr.Zero,
                         anisotropy = 0.0f,
@@ -3142,6 +3218,10 @@ namespace UnityRemix
                     lock (apiLock)
                     {
                         result = createMaterialFunc(ref materialInfo, out materialHandle);
+                        if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS && materialHandle != IntPtr.Zero)
+                        {
+                            materialHandleByHash[matHash] = materialHandle;
+                        }
                     }
                     
                     if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
@@ -3156,6 +3236,7 @@ namespace UnityRemix
                 }
                 finally
                 {
+                    if (emissionExtHandle.IsAllocated) emissionExtHandle.Free();
                     extHandle.Free();
                 }
             }

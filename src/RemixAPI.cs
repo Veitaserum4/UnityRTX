@@ -103,6 +103,7 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT = 0x7fff1002,
             REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT = 0x7fff1008,
             REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
+            REMIXAPI_STRUCT_TYPE_MATERIAL_EMISSION_EXT = 0x7fff100a,
             REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT = 0x7fff1018,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT = unchecked((int)0x7fff101c),
         }
@@ -355,6 +356,14 @@ namespace UnityRemix
         {
             public remixapi_StructType sType;
             public IntPtr pNext;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialInfoEmissionEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public uint suppressLightGeneration;
         }
 
         public const uint REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT = 0x1u;

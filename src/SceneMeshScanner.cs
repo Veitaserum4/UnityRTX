@@ -36,6 +36,15 @@ namespace UnityRemix
             IsCombinedMesh = 1 << 0,
             IsCheckPoint = 1 << 1,
             IsNoPass = 1 << 2,
+            HasMoved = 1 << 3,
+            IsScaleZero = 1 << 4,
+        }
+
+        private struct ScannedRendererRef
+        {
+            public Renderer Renderer;
+            public GameObject GameObject;
+            public Transform Transform;
         }
 
         private struct ScannedMeshData
@@ -51,6 +60,8 @@ namespace UnityRemix
             public Matrix4x4 LocalToWorld;
             public int Layer;
             public Renderer SourceRenderer;
+            public GameObject SourceGameObject;
+            public Transform SourceTransform;
             public InstanceFlags Flags;
         }
 
@@ -82,7 +93,7 @@ namespace UnityRemix
 
         // Completed instances drawn every frame
         private readonly List<InstanceData> currentInstances = new List<InstanceData>();
-        private readonly List<Renderer> instanceRenderers = new List<Renderer>();
+        private readonly List<ScannedRendererRef> instanceRenderers = new List<ScannedRendererRef>();
         private readonly List<InstanceData> reusableVisibleInstances = new List<InstanceData>();
         private readonly object instanceLock = new object();
 
@@ -240,19 +251,21 @@ namespace UnityRemix
                 for (int i = 0; i < currentInstances.Count; i++)
                 {
                     if (i >= instanceRenderers.Count) break;
-                    var r = instanceRenderers[i];
-                    if (r == null) continue;
-                    if (!r.enabled || !r.gameObject.activeInHierarchy) continue;
+                    var refObj = instanceRenderers[i];
+                    var r = refObj.Renderer;
+                    var go = refObj.GameObject;
+                    if (r == null || go == null) continue;
+                    if (!r.enabled || !go.activeInHierarchy) continue;
 
                     var mf = r.GetComponent<MeshFilter>();
                     entries.Add(new RemixFrameCapture.DebugMeshEntry
                     {
-                        Name = r.gameObject.name,
+                        Name = go.name,
                         MeshName = mf != null && mf.sharedMesh != null ? mf.sharedMesh.name : "",
                         MeshId = mf != null && mf.sharedMesh != null ? mf.sharedMesh.GetInstanceID() : 0,
-                        LayerIndex = r.gameObject.layer,
+                        LayerIndex = go.layer,
                         RendererInstanceId = r.GetInstanceID(),
-                        LayerName = LayerMask.LayerToName(r.gameObject.layer),
+                        LayerName = LayerMask.LayerToName(go.layer),
                         Origin = "Scanner",
                         BoundsCenter = r.bounds.center,
                         BoundsExtents = r.bounds.extents,
@@ -393,6 +406,7 @@ namespace UnityRemix
                     reusableVisibleInstances.Capacity = currentInstances.Count;
 
                 float maxDistSqr = maxRenderDistance * maxRenderDistance;
+                int frameCount = Time.frameCount;
 
                 int culledNull = 0, culledDisabled = 0, culledInactive = 0, culledLayer = 0, culledScale = 0, culledVis = 0, culledDist = 0;
 
@@ -409,7 +423,8 @@ namespace UnityRemix
 
                     if (i < instanceRenderers.Count)
                     {
-                        var renderer = instanceRenderers[i];
+                        var refObj = instanceRenderers[i];
+                        var renderer = refObj.Renderer;
 
                         // 1. Destroyed in Unity (e.g. shattered glass, broken crates/props)
                         if (renderer == null)
@@ -425,7 +440,7 @@ namespace UnityRemix
                             continue;
                         }
 
-                        var go = renderer.gameObject;
+                        var go = refObj.GameObject;
                         bool activeInHierarchy = go.activeInHierarchy;
 
                         // 3. Fast-path active-only check (prevents expensive parent hierarchy walking)
@@ -445,7 +460,7 @@ namespace UnityRemix
                         // 5. Hierarchical active state check (only when scanActiveOnly is false)
                         if (!activeInHierarchy)
                         {
-                            if (!go.activeSelf || IsIntermediateAncestorDisabled(renderer.transform))
+                            if (!go.activeSelf || IsIntermediateAncestorDisabled(refObj.Transform))
                             {
                                 culledInactive++;
                                 continue;
@@ -462,39 +477,73 @@ namespace UnityRemix
                         // 7. Scale-zero check & dynamic transform update
                         if ((instance.Flags & InstanceFlags.IsCombinedMesh) == 0)
                         {
-                            var m = renderer.transform.localToWorldMatrix;
-                            float scaleSqr = (m.m00 * m.m00 + m.m10 * m.m10 + m.m20 * m.m20) +
-                                             (m.m01 * m.m01 + m.m11 * m.m11 + m.m21 * m.m21) +
-                                             (m.m02 * m.m02 + m.m12 * m.m12 + m.m22 * m.m22);
-                            if (scaleSqr < 0.0001f)
+                            // Moving objects check every frame; unmoved static props stagger localToWorldMatrix checks across 4 frames
+                            if ((instance.Flags & InstanceFlags.HasMoved) != 0 || ((i + frameCount) & 3) == 0)
+                            {
+                                var m = refObj.Transform.localToWorldMatrix;
+                                float scaleSqr = (m.m00 * m.m00 + m.m10 * m.m10 + m.m20 * m.m20) +
+                                                 (m.m01 * m.m01 + m.m11 * m.m11 + m.m21 * m.m21) +
+                                                 (m.m02 * m.m02 + m.m12 * m.m12 + m.m22 * m.m22);
+                                if (scaleSqr < 0.0001f)
+                                {
+                                    if ((instance.Flags & InstanceFlags.IsScaleZero) == 0)
+                                    {
+                                        instance.Flags |= InstanceFlags.IsScaleZero;
+                                        currentInstances[i] = instance;
+                                    }
+                                    culledScale++;
+                                    continue;
+                                }
+
+                                bool changed = false;
+                                if ((instance.Flags & InstanceFlags.IsScaleZero) != 0)
+                                {
+                                    instance.Flags &= ~InstanceFlags.IsScaleZero;
+                                    changed = true;
+                                }
+
+                                if (!MatrixEquals(in m, in instance.LastLocalToWorld))
+                                {
+                                    instance.Flags |= InstanceFlags.HasMoved;
+                                    instance.LastLocalToWorld = m;
+                                    instance.Transform = RemixAPI.remixapi_Transform.FromMatrix(
+                                        m.m00, m.m02, m.m01, m.m03,
+                                        m.m20, m.m22, m.m21, m.m23,
+                                        m.m10, m.m12, m.m11, m.m13
+                                    );
+                                    instance.BoundsCenter = m.MultiplyPoint3x4(instance.LocalBoundsCenter);
+                                    changed = true;
+                                }
+
+                                if (changed)
+                                    currentInstances[i] = instance;
+                            }
+                            else if ((instance.Flags & InstanceFlags.IsScaleZero) != 0)
                             {
                                 culledScale++;
                                 continue;
-                            }
-
-                            if (!MatrixEquals(in m, in instance.LastLocalToWorld))
-                            {
-                                instance.LastLocalToWorld = m;
-                                instance.Transform = RemixAPI.remixapi_Transform.FromMatrix(
-                                    m.m00, m.m02, m.m01, m.m03,
-                                    m.m20, m.m22, m.m21, m.m23,
-                                    m.m10, m.m12, m.m11, m.m13
-                                );
-                                instance.BoundsCenter = m.MultiplyPoint3x4(instance.LocalBoundsCenter);
-                                currentInstances[i] = instance;
                             }
                         }
                         else
                         {
                             // Stagger lossyScale check on combined meshes across 4 frames (vertices are static world-space)
-                            if ((i + Time.frameCount) % 4 == 0)
+                            if (((i + frameCount) & 3) == 0)
                             {
-                                var scale = renderer.transform.lossyScale;
-                                if (scale.sqrMagnitude < 0.0001f)
+                                var scale = refObj.Transform.lossyScale;
+                                bool isZero = scale.sqrMagnitude < 0.0001f;
+                                bool wasZero = (instance.Flags & InstanceFlags.IsScaleZero) != 0;
+                                if (isZero != wasZero)
                                 {
-                                    culledScale++;
-                                    continue;
+                                    if (isZero) instance.Flags |= InstanceFlags.IsScaleZero;
+                                    else instance.Flags &= ~InstanceFlags.IsScaleZero;
+                                    currentInstances[i] = instance;
                                 }
+                            }
+
+                            if ((instance.Flags & InstanceFlags.IsScaleZero) != 0)
+                            {
+                                culledScale++;
+                                continue;
                             }
                         }
                     }
@@ -974,7 +1023,7 @@ namespace UnityRemix
                         if (IsMaterialOrShaderInvisible(mat))
                             continue;
 
-                        matId = mat.GetInstanceID();
+                        matId = StaticGeometryDedupe.GetCanonicalMaterialId(mat);
                         materialManager.CaptureMaterialTextures(mat, matId);
                     }
                     surfaces.Add(new SubMeshSurface { Indices = tris, MaterialId = matId });
@@ -1028,6 +1077,8 @@ namespace UnityRemix
                         LocalToWorld = isCombinedMesh ? Matrix4x4.identity : filter.transform.localToWorldMatrix,
                         Layer = filter.gameObject.layer,
                         SourceRenderer = renderer,
+                        SourceGameObject = filter.gameObject,
+                        SourceTransform = filter.transform,
                         Flags = DetermineInstanceFlags(filter, renderer, isCombinedMesh),
                     });
                 }
@@ -1071,7 +1122,7 @@ namespace UnityRemix
             }
 
             var newInstances = new List<InstanceData>(batch.Length);
-            var newRenderers = new List<Renderer>(batch.Length);
+            var newRenderers = new List<ScannedRendererRef>(batch.Length);
 
             foreach (var entry in batch)
             {
@@ -1100,7 +1151,12 @@ namespace UnityRemix
                     BoundsCenter = m.MultiplyPoint3x4(localCenter),
                     Flags = entry.Flags,
                 });
-                newRenderers.Add(entry.SourceRenderer);
+                newRenderers.Add(new ScannedRendererRef
+                {
+                    Renderer = entry.SourceRenderer,
+                    GameObject = entry.SourceGameObject,
+                    Transform = entry.SourceTransform,
+                });
             }
 
             if (newInstances.Count > 0)

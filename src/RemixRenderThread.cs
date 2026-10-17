@@ -1066,23 +1066,26 @@ namespace UnityRemix
                     }
                     else
                     {
-                        // BakeMesh fallback: recreate/update mesh with new vertex data
-                        IntPtr meshHandle = meshConverter.CreateRemixMeshFromData(
-                            skinned.remixMeshHash,
-                            skinned.vertices,
-                            skinned.normals,
-                            skinned.uvs,
-                            skinned.triangles,
-                            state.frameCount,
-                            skinned.materialId,
-                            skinned.colors,
-                            skinned.uvST
-                        );
-                        
-                        if (meshHandle == IntPtr.Zero)
-                            continue;
-                        
-                        meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount);
+                        // BakeMesh / dynamic mesh path: only upload vertex data when bakeFrame has advanced
+                        if (!meshConverter.TryGetUpToDateSkinnedMesh(skinned.remixMeshHash, skinned.bakeFrame, out IntPtr meshHandle))
+                        {
+                            meshHandle = meshConverter.CreateRemixMeshFromData(
+                                skinned.remixMeshHash,
+                                skinned.vertices,
+                                skinned.normals,
+                                skinned.uvs,
+                                skinned.triangles,
+                                state.frameCount,
+                                skinned.materialId,
+                                skinned.colors,
+                                skinned.uvST
+                            );
+                            
+                            if (meshHandle == IntPtr.Zero)
+                                continue;
+                            
+                            meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount, skinned.bakeFrame);
+                        }
                         updatedMeshes.Add(skinned.remixMeshHash);
 
                         ulong persistentId = (ulong)(uint)skinned.meshId;

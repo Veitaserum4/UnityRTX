@@ -142,6 +142,62 @@ namespace UnityRemix
                 Quantize(bounds.extents.z));
         }
 
+        public static int GetCanonicalMaterialId(Material mat)
+        {
+            if (mat == null)
+                return 0;
+
+            string name = mat.name;
+            bool isClone = !string.IsNullOrEmpty(name) &&
+                (name.EndsWith("(Instance)", StringComparison.Ordinal) ||
+                 name.EndsWith("Instance", StringComparison.Ordinal) ||
+                 name.EndsWith("(Clone)", StringComparison.Ordinal));
+
+            if (!isClone)
+                return mat.GetInstanceID();
+
+            unchecked
+            {
+                string cleanName = name.Replace(" (Instance)", "").Replace(" Instance", "").Replace("(Clone)", "").Trim();
+                int hash = (int)HashUtils.HashStringFNV(cleanName);
+                int shaderId = mat.shader != null ? mat.shader.GetInstanceID() : 0;
+                hash = (hash * 397) ^ shaderId;
+
+                try
+                {
+                    if (mat.HasProperty("_MainTex"))
+                    {
+                        var tex = mat.mainTexture;
+                        if (tex != null)
+                            hash = (hash * 397) ^ tex.GetInstanceID();
+                    }
+                    if (mat.HasProperty("_Color"))
+                    {
+                        Color c = mat.GetColor("_Color");
+                        int r4 = Mathf.Clamp((int)(c.r * 15f + 0.5f), 0, 15);
+                        int g4 = Mathf.Clamp((int)(c.g * 15f + 0.5f), 0, 15);
+                        int b4 = Mathf.Clamp((int)(c.b * 15f + 0.5f), 0, 15);
+                        int a4 = Mathf.Clamp((int)(c.a * 15f + 0.5f), 0, 15);
+                        int colKey = (a4 << 12) | (r4 << 8) | (g4 << 4) | b4;
+                        hash = (hash * 397) ^ colKey;
+                    }
+                    if (mat.HasProperty("_EmissiveColor"))
+                    {
+                        Color ec = mat.GetColor("_EmissiveColor");
+                        int r4 = Mathf.Clamp((int)(ec.r * 15f + 0.5f), 0, 63);
+                        int g4 = Mathf.Clamp((int)(ec.g * 15f + 0.5f), 0, 63);
+                        int b4 = Mathf.Clamp((int)(ec.b * 15f + 0.5f), 0, 63);
+                        int emKey = (r4 << 12) | (g4 << 6) | b4;
+                        hash = (hash * 397) ^ emKey;
+                    }
+                }
+                catch { }
+
+                if (hash == 0) hash = 1;
+                return hash;
+            }
+        }
+
         public static int ComputeMaterialSignature(Material[] materials)
         {
             unchecked
@@ -152,7 +208,7 @@ namespace UnityRemix
 
                 for (int i = 0; i < materials.Length; i++)
                 {
-                    int materialId = materials[i] != null ? materials[i].GetInstanceID() : 0;
+                    int materialId = GetCanonicalMaterialId(materials[i]);
                     hash = (hash * 31) ^ materialId;
                 }
                 return hash;

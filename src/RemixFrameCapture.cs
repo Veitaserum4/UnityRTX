@@ -660,6 +660,7 @@ namespace UnityRemix
             public CachedSkinningData skinningData;
             public uint categoryFlags;
             public Vector4 uvST;
+            public int bakeFrame;
         }
 
         /// <summary>
@@ -1472,7 +1473,7 @@ namespace UnityRemix
                         {
                             if (materials[m] != null)
                             {
-                                int matId = materials[m].GetInstanceID();
+                                int matId = StaticGeometryDedupe.GetCanonicalMaterialId(materials[m]);
                                 if (mpbHash != 0)
                                 {
                                     matId = HashCombine(matId, mpbHash);
@@ -1503,7 +1504,7 @@ namespace UnityRemix
                                             int cInt = Mathf.RoundToInt(c * 1000f);
                                             int sInt = Mathf.RoundToInt(s * 1000f);
                                             int hsbcHash = HashCombine(HashCombine(hInt, bInt), HashCombine(cInt, sInt));
-                                            matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(tr), hsbcHash));
+                                            matId = HashCombine(matId, hsbcHash);
                                         }
                                     }
                                 }
@@ -1855,7 +1856,8 @@ namespace UnityRemix
                     boneTransforms = null,
                     skinningData = null,
                     categoryFlags = catFlags,
-                    uvST = uvST
+                    uvST = uvST,
+                    bakeFrame = frameCount
                 });
             }
         }
@@ -2533,7 +2535,8 @@ namespace UnityRemix
                     mpbEmissiveColor: col,
                     mpbEmissiveIntensity: 1.0f,
                     mpbMainTex: mainTex,
-                    mpbColor: col
+                    mpbColor: col,
+                    suppressLightGeneration: true
                 );
 
                 int graphicId = g.GetInstanceID();
@@ -2552,7 +2555,8 @@ namespace UnityRemix
                     localToWorld = g.rectTransform.localToWorldMatrix,
                     boneTransforms = null,
                     skinningData = null,
-                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI
+                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI,
+                    bakeFrame = frameCount
                 });
             }
         }
@@ -2868,7 +2872,8 @@ namespace UnityRemix
                         tintedMatId, 
                         mpbEmissiveColor: quantizedColor, 
                         mpbEmissiveIntensity: emIntensity, 
-                        mpbColor: quantizedColor
+                        mpbColor: quantizedColor,
+                        suppressLightGeneration: true
                     );
                 }
 
@@ -2977,7 +2982,8 @@ namespace UnityRemix
                     localToWorld = Matrix4x4.identity,
                     boneTransforms = null,
                     skinningData = null,
-                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
+                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,
+                    bakeFrame = frameCount
                 });
             }
 
@@ -3316,7 +3322,8 @@ namespace UnityRemix
                         localToWorld = Matrix4x4.identity,
                         boneTransforms = null,
                         skinningData = null,
-                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
+                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,
+                        bakeFrame = state.frameCount
                     });
                     return true;
                 }
@@ -3381,7 +3388,8 @@ namespace UnityRemix
                         trailMatId, 
                         mpbEmissiveColor: trailColor, 
                         mpbEmissiveIntensity: emIntensity, 
-                        mpbColor: trailColor
+                        mpbColor: trailColor,
+                        suppressLightGeneration: true
                     );
 
                     ulong trailHash = (ulong)(uint)pr.GetInstanceID() | 0x4800000000000000UL;
@@ -3405,7 +3413,8 @@ namespace UnityRemix
                         localToWorld = trailLocalToWorld,
                         boneTransforms = null,
                         skinningData = null,
-                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
+                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,
+                        bakeFrame = state.frameCount
                     });
                 }
             }
@@ -3586,7 +3595,8 @@ namespace UnityRemix
                             trailMatId,
                             mpbEmissiveColor: quantizedColor,
                             mpbEmissiveIntensity: emIntensity,
-                            mpbColor: quantizedColor
+                            mpbColor: quantizedColor,
+                            suppressLightGeneration: true
                         );
                     }
 
@@ -3605,7 +3615,8 @@ namespace UnityRemix
                         localToWorld = Matrix4x4.identity,
                         boneTransforms = null,
                         skinningData = null,
-                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE
+                        categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,
+                        bakeFrame = frameCount
                     });
                 }
                 catch (Exception ex)
@@ -4028,7 +4039,8 @@ namespace UnityRemix
                         uvs = uvCoords,
                         colors = colors,
                         triangles = subTris,
-                        localToWorld = localToWorld
+                        localToWorld = localToWorld,
+                        bakeFrame = Time.frameCount
                     };
                 }
 
@@ -4108,7 +4120,7 @@ namespace UnityRemix
             
             if (bestMaterial != null)
             {
-                matId = bestMaterial.GetInstanceID();
+                matId = StaticGeometryDedupe.GetCanonicalMaterialId(bestMaterial);
                 
                 // Check for MaterialPropertyBlock overrides (used by games for dynamic per-renderer colors/emission)
                 Color? mpbColor = null;
@@ -4142,10 +4154,10 @@ namespace UnityRemix
                             if (c.a > 0.0f && (c.r < 0.99f || c.g < 0.99f || c.b < 0.99f || c.a < 0.99f))
                             {
                                 mpbColor = c;
-                                // Generate unique material ID for this renderer's color override
+                                // Generate unique material ID for this color override
                                 Color32 c32 = c;
                                 int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
-                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                matId = HashCombine(matId, colInt);
                                 break;
                             }
                         }
@@ -4154,7 +4166,9 @@ namespace UnityRemix
                         if (emC.a > 0.0f && (emC.r > 0.01f || emC.g > 0.01f || emC.b > 0.01f))
                         {
                             mpbEmissiveColor = emC;
-                            matId = HashCombine(matId, HashUtils.GetHierarchyHashInt(skinned.transform));
+                            Color32 e32 = emC;
+                            int emisInt = (e32.r << 24) | (e32.g << 16) | (e32.b << 8) | e32.a;
+                            matId = HashCombine(matId, emisInt);
                         }
                         if (bestMaterial.HasProperty("_EmissiveIntensity"))
                         {
@@ -4177,7 +4191,7 @@ namespace UnityRemix
                             {
                                 Color32 c32 = ct;
                                 int colInt = (c32.r << 24) | (c32.g << 16) | (c32.b << 8) | c32.a;
-                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), colInt));
+                                matId = HashCombine(matId, colInt);
                             }
                         }
 
@@ -4204,7 +4218,7 @@ namespace UnityRemix
                                 int cInt = Mathf.RoundToInt(c * 1000f);
                                 int sInt = Mathf.RoundToInt(s * 1000f);
                                 int hsbcHash = HashCombine(HashCombine(hInt, bInt), HashCombine(cInt, sInt));
-                                matId = HashCombine(matId, HashCombine(HashUtils.GetHierarchyHashInt(skinned.transform), hsbcHash));
+                                matId = HashCombine(matId, hsbcHash);
                             }
                         }
                     }
