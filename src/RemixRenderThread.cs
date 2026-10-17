@@ -72,14 +72,16 @@ namespace UnityRemix
         private readonly List<ulong> pendingAddKeys = new List<ulong>(512);
         private readonly List<RemixAPI.remixapi_SceneInstanceChangeEXT> pendingChanges = new List<RemixAPI.remixapi_SceneInstanceChangeEXT>(512);
         private readonly List<ulong> reusableHiddenKeys = new List<ulong>(256);
+        private readonly List<ulong> reusableRemoveKeys = new List<ulong>(256);
         private RemixAPI.remixapi_InstanceInfo[] addInfosBuffer = new RemixAPI.remixapi_InstanceInfo[512];
         private ulong[] addHandlesBuffer = new ulong[512];
+        private ulong[] removeHandlesBuffer = new ulong[256];
         private RemixAPI.remixapi_SceneInstanceChangeEXT[] changesBuffer = new RemixAPI.remixapi_SceneInstanceChangeEXT[512];
-        private volatile bool needClearRetained = false;
+        private int needClearRetained = 0;
 
         public void RequestClearRetainedSceneInstances()
         {
-            needClearRetained = true;
+            Interlocked.Exchange(ref needClearRetained, 1);
         }
 
         private static bool TransformEquals(in RemixAPI.remixapi_Transform a, in RemixAPI.remixapi_Transform b)
@@ -507,10 +509,9 @@ namespace UnityRemix
                 );
             }
             
-            if (needClearRetained)
+            if (Interlocked.Exchange(ref needClearRetained, 0) != 0)
             {
                 ClearRetainedSceneInstances();
-                needClearRetained = false;
             }
 
             if (RemixAPI.HasRetainedSceneInstancesEXT)
@@ -526,10 +527,10 @@ namespace UnityRemix
                 // 1. Scanned static scene meshes (level geometry)
                 if (sceneMeshScanner != null && (sceneMeshScanner.HasData || sceneMeshScanner.IsStreaming))
                 {
-                    var scannedInstances = sceneMeshScanner.GetInstances();
-                    if (scannedInstances != null)
+                    var scannedInstances = sceneMeshScanner.GetInstances(out int scannedCount);
+                    if (scannedInstances != null && scannedCount > 0)
                     {
-                        for (int i = 0; i < scannedInstances.Length; i++)
+                        for (int i = 0; i < scannedCount; i++)
                         {
                             var instance = scannedInstances[i];
                             if (instance.MeshHandle == IntPtr.Zero)
@@ -722,15 +723,25 @@ namespace UnityRemix
                     }
                 }
 
-                // 4. Update visibility for retained instances not seen this frame
+                // 4. Update visibility for retained instances not seen this frame, and prune stale unseen instances
                 if (retainedSceneInstances.Count > visibleRetainedKeysThisFrame.Count)
                 {
                     reusableHiddenKeys.Clear();
+                    reusableRemoveKeys.Clear();
+                    uint currentFrame = (uint)state.frameCount;
+
                     foreach (var kvp in retainedSceneInstances)
                     {
-                        if (!visibleRetainedKeysThisFrame.Contains(kvp.Key) && kvp.Value.Visible)
+                        if (!visibleRetainedKeysThisFrame.Contains(kvp.Key))
                         {
-                            reusableHiddenKeys.Add(kvp.Key);
+                            if (kvp.Value.Visible)
+                            {
+                                reusableHiddenKeys.Add(kvp.Key);
+                            }
+                            else if (currentFrame > kvp.Value.LastSeenFrame && (currentFrame - kvp.Value.LastSeenFrame) > 300u)
+                            {
+                                reusableRemoveKeys.Add(kvp.Key);
+                            }
                         }
                     }
 
@@ -747,6 +758,27 @@ namespace UnityRemix
                         });
                         record.Visible = false;
                         retainedSceneInstances[k] = record;
+                    }
+
+                    if (reusableRemoveKeys.Count > 0)
+                    {
+                        if (removeHandlesBuffer.Length < reusableRemoveKeys.Count)
+                        {
+                            removeHandlesBuffer = new ulong[Math.Max(reusableRemoveKeys.Count, removeHandlesBuffer.Length * 2)];
+                        }
+                        for (int i = 0; i < reusableRemoveKeys.Count; i++)
+                        {
+                            ulong k = reusableRemoveKeys[i];
+                            removeHandlesBuffer[i] = retainedSceneInstances[k].NativeHandle;
+                            retainedSceneInstances.Remove(k);
+                        }
+                        unsafe
+                        {
+                            fixed (ulong* pRemove = removeHandlesBuffer)
+                            {
+                                RemixAPI.RemoveSceneInstancesEXTFunc((IntPtr)pRemove, (uint)reusableRemoveKeys.Count);
+                            }
+                        }
                     }
                 }
 
@@ -851,14 +883,15 @@ namespace UnityRemix
             // Always call GetInstances during streaming to drain the queue
             if (sceneMeshScanner != null && (sceneMeshScanner.HasData || sceneMeshScanner.IsStreaming))
             {
-                var scannedInstances = sceneMeshScanner.GetInstances();
-                if (scannedInstances != null)
+                var scannedInstances = sceneMeshScanner.GetInstances(out int scannedCount);
+                if (scannedInstances != null && scannedCount > 0)
                 {
                     var drawFunc = meshConverter.GetDrawInstanceFunc();
                     if (drawFunc != null)
                     {
-                        foreach (var instance in scannedInstances)
+                        for (int i = 0; i < scannedCount; i++)
                         {
+                            var instance = scannedInstances[i];
                             if (instance.MeshHandle == IntPtr.Zero)
                                 continue;
                             

@@ -86,12 +86,18 @@ namespace UnityRemix
         private readonly List<InstanceData> reusableVisibleInstances = new List<InstanceData>();
         private readonly object instanceLock = new object();
 
+        private sealed class InstanceSnapshot
+        {
+            public InstanceData[] Buffer = new InstanceData[256];
+            public int Count;
+        }
+
         // Visibility-filtered snapshot: built on main thread, read on render thread
-        private InstanceData[] visibleInstances;
-        private InstanceData[] snapshotA = new InstanceData[256];
-        private InstanceData[] snapshotB = new InstanceData[256];
+        private InstanceSnapshot visibleSnapshot;
+        private readonly InstanceSnapshot snapshotA = new InstanceSnapshot();
+        private readonly InstanceSnapshot snapshotB = new InstanceSnapshot();
         private bool useSnapshotA = true;
-        private int previousSnapshotCount = 0;
+        private int clearGeneration = 0;
 
         // Mesh handle dedup: same geometry → same Remix handle
         private readonly Dictionary<ulong, IntPtr> meshHandles = new Dictionary<ulong, IntPtr>();
@@ -352,14 +358,18 @@ namespace UnityRemix
         /// Called on the render thread each frame. Drains a batch from the queue
         /// and returns the visibility-filtered snapshot built by UpdateVisibility().
         /// </summary>
-        public InstanceData[] GetInstances()
+        public InstanceData[] GetInstances(out int count)
         {
             DrainStreamingBatch();
 
-            var snapshot = Volatile.Read(ref visibleInstances);
-            if (snapshot != null)
-                return snapshot;
+            var snapshot = Volatile.Read(ref visibleSnapshot);
+            if (snapshot != null && snapshot.Count > 0)
+            {
+                count = snapshot.Count;
+                return snapshot.Buffer;
+            }
 
+            count = 0;
             return Array.Empty<InstanceData>();
         }
 
@@ -374,7 +384,7 @@ namespace UnityRemix
             {
                 if (currentInstances.Count == 0)
                 {
-                    Volatile.Write(ref visibleInstances, Array.Empty<InstanceData>());
+                    Volatile.Write(ref visibleSnapshot, null);
                     return;
                 }
 
@@ -512,29 +522,27 @@ namespace UnityRemix
                 int count = reusableVisibleInstances.Count;
                 if (count == 0)
                 {
-                    Volatile.Write(ref visibleInstances, Array.Empty<InstanceData>());
-                    previousSnapshotCount = 0;
+                    Volatile.Write(ref visibleSnapshot, null);
                 }
                 else
                 {
-                    InstanceData[] backBuffer = useSnapshotA ? snapshotB : snapshotA;
-                    if (backBuffer.Length < count)
+                    InstanceSnapshot backSnapshot = useSnapshotA ? snapshotB : snapshotA;
+                    if (backSnapshot.Buffer.Length < count)
                     {
-                        int newCap = Math.Max(count, backBuffer.Length * 2);
-                        backBuffer = new InstanceData[newCap];
-                        if (useSnapshotA) snapshotB = backBuffer; else snapshotA = backBuffer;
+                        int newCap = Math.Max(count, backSnapshot.Buffer.Length * 2);
+                        backSnapshot.Buffer = new InstanceData[newCap];
                     }
 
-                    reusableVisibleInstances.CopyTo(backBuffer, 0);
+                    reusableVisibleInstances.CopyTo(backSnapshot.Buffer, 0);
 
-                    if (previousSnapshotCount > count && backBuffer.Length >= previousSnapshotCount)
+                    if (backSnapshot.Count > count && backSnapshot.Buffer.Length >= backSnapshot.Count)
                     {
-                        Array.Clear(backBuffer, count, previousSnapshotCount - count);
+                        Array.Clear(backSnapshot.Buffer, count, backSnapshot.Count - count);
                     }
 
-                    previousSnapshotCount = count;
+                    backSnapshot.Count = count;
                     useSnapshotA = !useSnapshotA;
-                    Volatile.Write(ref visibleInstances, backBuffer);
+                    Volatile.Write(ref visibleSnapshot, backSnapshot);
                 }
             }
         }
@@ -562,11 +570,30 @@ namespace UnityRemix
 
         public void ClearData()
         {
-            lock (instanceLock) { currentInstances.Clear(); instanceRenderers.Clear(); reusableVisibleInstances.Clear(); }
-            lock (streamLock) { streamingQueue.Clear(); }
-            meshHandles.Clear();
+            Volatile.Write(ref visibleSnapshot, null);
+            lock (instanceLock)
+            {
+                currentInstances.Clear();
+                instanceRenderers.Clear();
+                reusableVisibleInstances.Clear();
+                if (snapshotA.Count > 0)
+                {
+                    Array.Clear(snapshotA.Buffer, 0, Math.Min(snapshotA.Count, snapshotA.Buffer.Length));
+                    snapshotA.Count = 0;
+                }
+                if (snapshotB.Count > 0)
+                {
+                    Array.Clear(snapshotB.Buffer, 0, Math.Min(snapshotB.Count, snapshotB.Buffer.Length));
+                    snapshotB.Count = 0;
+                }
+            }
+            lock (streamLock)
+            {
+                streamingQueue.Clear();
+                streamingActive = false;
+                clearGeneration++;
+            }
             scannedFilterIds.Clear();
-            Volatile.Write(ref visibleInstances, null);
             activeScene = default;
         }
 
@@ -1024,8 +1051,10 @@ namespace UnityRemix
             materialManager.ProcessPendingTextureUploads();
 
             ScannedMeshData[] batch;
+            int batchGeneration;
             lock (streamLock)
             {
+                batchGeneration = clearGeneration;
                 int count = Math.Min(MeshesPerFrame, streamingQueue.Count);
                 if (count == 0)
                 {
@@ -1076,6 +1105,11 @@ namespace UnityRemix
 
             if (newInstances.Count > 0)
             {
+                lock (streamLock)
+                {
+                    if (batchGeneration != clearGeneration)
+                        return;
+                }
                 lock (instanceLock)
                 {
                     currentInstances.AddRange(newInstances);
