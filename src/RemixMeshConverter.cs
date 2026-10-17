@@ -91,6 +91,7 @@ namespace UnityRemix
         
         // Track which material each mesh uses (composite mesh key -> material ID)
         private Dictionary<ulong, int> meshToMaterialMap = new Dictionary<ulong, int>();
+        private RemixAPI.remixapi_Transform[] reusableBoneTransforms = new RemixAPI.remixapi_Transform[256];
         
         // GCHandle pooling for skinned meshes to reduce allocations
         private class PinnedMeshData
@@ -666,6 +667,7 @@ namespace UnityRemix
             GCHandle surfaceHandle = GCHandle.Alloc(surface, GCHandleType.Pinned);
             GCHandle updateHandle = default;
             GCHandle motionHandle = default;
+            GCHandle deformHandle = default;
             
             try
             {
@@ -674,24 +676,36 @@ namespace UnityRemix
 
                 if (RemixAPI.IsOpenRemix)
                 {
-                    // OpenRemix: Use the same mesh hash across frames to enable Vulkan in-place BLAS refits
-                    // and provide temporal correspondence for motion vectors and Reblur denoiser history.
-                    var motionExt = new RemixAPI.remixapi_MeshInfoMotionEXT
+                    bool isParticleBatch = (meshHash & 0x4000000000000000UL) != 0;
+                    if (!isParticleBatch)
                     {
-                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT,
-                        pNext = IntPtr.Zero,
-                        enabled = 1
-                    };
-                    motionHandle = GCHandle.Alloc(motionExt, GCHandleType.Pinned);
+                        // OpenRemix: Attach DeformEXT, MotionEXT, and UpdateEXT for real geometric meshes
+                        // (BakeMesh character skinning, scrolling UV meshes, deforming meshes).
+                        // Excludes transient particle billboard batches where topology changes every frame.
+                        var deformExt = new RemixAPI.remixapi_MeshInfoDeformEXT
+                        {
+                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT,
+                            pNext = IntPtr.Zero
+                        };
+                        deformHandle = GCHandle.Alloc(deformExt, GCHandleType.Pinned);
 
-                    var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
-                    {
-                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
-                        pNext = motionHandle.AddrOfPinnedObject(),
-                        enabled = 1
-                    };
-                    updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
-                    pNext = updateHandle.AddrOfPinnedObject();
+                        var motionExt = new RemixAPI.remixapi_MeshInfoMotionEXT
+                        {
+                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT,
+                            pNext = deformHandle.AddrOfPinnedObject(),
+                            enabled = 1
+                        };
+                        motionHandle = GCHandle.Alloc(motionExt, GCHandleType.Pinned);
+
+                        var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
+                        {
+                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
+                            pNext = motionHandle.AddrOfPinnedObject(),
+                            enabled = 1
+                        };
+                        updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
+                        pNext = updateHandle.AddrOfPinnedObject();
+                    }
                 }
                 else
                 {
@@ -725,6 +739,7 @@ namespace UnityRemix
             }
             finally
             {
+                if (deformHandle.IsAllocated) deformHandle.Free();
                 if (updateHandle.IsAllocated) updateHandle.Free();
                 if (motionHandle.IsAllocated) motionHandle.Free();
                 surfaceHandle.Free();
@@ -734,7 +749,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -760,12 +775,13 @@ namespace UnityRemix
             ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
             if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
             {
+                uint classification = (isDynamic || (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0) ? 1u : 0u;
                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                     pNext = IntPtr.Zero,
                     instanceId = targetInstanceId,
-                    classification = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0 ? 1u : 0u,
+                    classification = classification,
                     rasterVisible = 1
                 };
                 hasIdentity = true;
@@ -972,22 +988,25 @@ namespace UnityRemix
             
             // Convert bone transforms to Remix format (Y-up to Z-up, 3x4 matrices)
             int boneCount = boneTransforms.Length;
-            var remixBones = new RemixAPI.remixapi_Transform[boneCount];
+            if (reusableBoneTransforms == null || reusableBoneTransforms.Length < boneCount)
+            {
+                int newCap = Math.Max(boneCount, (reusableBoneTransforms?.Length ?? 128) * 2);
+                reusableBoneTransforms = new RemixAPI.remixapi_Transform[newCap];
+            }
+
             for (int i = 0; i < boneCount; i++)
             {
                 var b = boneTransforms[i];
-                remixBones[i] = RemixAPI.remixapi_Transform.FromMatrix(
+                reusableBoneTransforms[i] = RemixAPI.remixapi_Transform.FromMatrix(
                     b.m00, b.m02, b.m01, b.m03,
                     b.m20, b.m22, b.m21, b.m23,
                     b.m10, b.m12, b.m11, b.m13
                 );
             }
-            
-            GCHandle bonesHandle = GCHandle.Alloc(remixBones, GCHandleType.Pinned);
-            
-            try
+
+            fixed (RemixAPI.remixapi_Transform* pBones = reusableBoneTransforms)
             {
-                // Build pNext chain: InstanceInfo -> BoneTransforms -> ObjectPicking
+                // Build pNext chain on stack: InstanceInfo -> BoneTransforms -> ObjectPicking -> Identity
                 var objectPickingExt = new RemixAPI.remixapi_InstanceInfoObjectPickingEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_OBJECT_PICKING_EXT,
@@ -995,12 +1014,11 @@ namespace UnityRemix
                     objectPickingValue = objectPickingValue
                 };
                 
-                GCHandle identityHandle = default;
-                bool hasIdentity = false;
+                RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
                 ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
                 if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
                 {
-                    var identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
+                    identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                     {
                         sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
                         pNext = IntPtr.Zero,
@@ -1008,76 +1026,51 @@ namespace UnityRemix
                         classification = 1u, // Skinned meshes are dynamic
                         rasterVisible = 1
                     };
-                    identityHandle = GCHandle.Alloc(identityExt, GCHandleType.Pinned);
-                    objectPickingExt.pNext = identityHandle.AddrOfPinnedObject();
-                    hasIdentity = true;
+                    objectPickingExt.pNext = (IntPtr)(&identityExt);
                 }
 
-                GCHandle pickingHandle = GCHandle.Alloc(objectPickingExt, GCHandleType.Pinned);
+                var boneExt = new RemixAPI.remixapi_InstanceInfoBoneTransformsEXT
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BONE_TRANSFORMS_EXT,
+                    pNext = (IntPtr)(&objectPickingExt),
+                    boneTransforms_values = (IntPtr)pBones,
+                    boneTransforms_count = (uint)boneCount
+                };
+
+                var instanceInfo = new RemixAPI.remixapi_InstanceInfo
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
+                    pNext = (IntPtr)(&boneExt),
+                    categoryFlags = categoryFlags,
+                    mesh = meshHandle,
+                    transform = transform,
+                    doubleSided = 1
+                };
                 
-                try
+                RemixAPI.remixapi_ErrorCode result;
+                lock (apiLock)
                 {
-                    var boneExt = new RemixAPI.remixapi_InstanceInfoBoneTransformsEXT
-                    {
-                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BONE_TRANSFORMS_EXT,
-                        pNext = pickingHandle.AddrOfPinnedObject(),
-                        boneTransforms_values = bonesHandle.AddrOfPinnedObject(),
-                        boneTransforms_count = (uint)boneCount
-                    };
-                    
-                    GCHandle boneExtHandle = GCHandle.Alloc(boneExt, GCHandleType.Pinned);
-                    
-                    try
-                    {
-                        var instanceInfo = new RemixAPI.remixapi_InstanceInfo
-                        {
-                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                            pNext = boneExtHandle.AddrOfPinnedObject(),
-                            categoryFlags = categoryFlags,
-                            mesh = meshHandle,
-                            transform = transform,
-                            doubleSided = 1
-                        };
+                    result = drawInstanceFunc(ref instanceInfo);
+                }
                         
-                        RemixAPI.remixapi_ErrorCode result;
-                        lock (apiLock)
+                if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                {
+                    logger.LogWarning($"DrawSkinnedInstance failed for mesh 0x{meshHandle.ToInt64():X}: {result}");
+                    // Evict invalid mesh handle from cache so it can be cleanly recreated next frame
+                    List<ulong> staleKeys = null;
+                    foreach (var kvp in skinnedMeshHandles)
+                    {
+                        if (kvp.Value == meshHandle)
                         {
-                            result = drawInstanceFunc(ref instanceInfo);
-                        }
-                        
-                        if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
-                        {
-                            logger.LogWarning($"DrawSkinnedInstance failed for mesh 0x{meshHandle.ToInt64():X}: {result}");
-                            // Evict invalid mesh handle from cache so it can be cleanly recreated next frame
-                            List<ulong> staleKeys = null;
-                            foreach (var kvp in skinnedMeshHandles)
-                            {
-                                if (kvp.Value == meshHandle)
-                                {
-                                    if (staleKeys == null) staleKeys = new List<ulong>();
-                                    staleKeys.Add(kvp.Key);
-                                }
-                            }
-                            if (staleKeys != null)
-                            {
-                                foreach (var k in staleKeys) skinnedMeshHandles.Remove(k);
-                            }
+                            if (staleKeys == null) staleKeys = new List<ulong>();
+                            staleKeys.Add(kvp.Key);
                         }
                     }
-                    finally
+                    if (staleKeys != null)
                     {
-                        boneExtHandle.Free();
+                        foreach (var k in staleKeys) skinnedMeshHandles.Remove(k);
                     }
                 }
-                finally
-                {
-                    pickingHandle.Free();
-                    if (hasIdentity) identityHandle.Free();
-                }
-            }
-            finally
-            {
-                bonesHandle.Free();
             }
         }
         

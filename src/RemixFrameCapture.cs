@@ -736,6 +736,7 @@ namespace UnityRemix
             public Material primarySharedMaterial;
             public Material[] sharedMaterials;
             public int materialSignature;
+            public bool isPartOfStaticBatch;
         }
 
         private class CachedSkinnedRendererInfo
@@ -775,7 +776,8 @@ namespace UnityRemix
                     gameObject = r.gameObject,
                     primarySharedMaterial = (mats != null && mats.Length > 0) ? mats[0] : null,
                     sharedMaterials = mats,
-                    materialSignature = StaticGeometryDedupe.ComputeMaterialSignature(mats)
+                    materialSignature = StaticGeometryDedupe.ComputeMaterialSignature(mats),
+                    isPartOfStaticBatch = r.isPartOfStaticBatch
                 };
                 cachedStaticInfo[id] = info;
                 return info;
@@ -1208,6 +1210,9 @@ namespace UnityRemix
                     continue;
 
                 var info = GetOrCreateStaticInfo(renderer);
+                if (info.isPartOfStaticBatch && !scrollingRendererIds.Contains(info.rendererId))
+                    continue;
+
                 var go = info.gameObject;
                 if (go == null || !go.activeInHierarchy)
                     continue;
@@ -1342,6 +1347,11 @@ namespace UnityRemix
                 }
                 ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
                 bool isViewModel = mainCamTransform != null && tr.IsChildOf(mainCamTransform);
+                uint categoryFlags = 0;
+                if (isViewModel)
+                {
+                    categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
+                }
                 
                 // Queue mesh for creation if not cached, not already queued, and not previously failed
                 bool needsQueue;
@@ -1549,7 +1559,8 @@ namespace UnityRemix
                     meshId = meshId,
                     localToWorld = transform,
                     rendererInstanceId = rendererInstanceId,
-                    dedupeKey = dedupeKey
+                    dedupeKey = dedupeKey,
+                    categoryFlags = categoryFlags
                 };
                 state.instances.Add(instanceData);
                 totalDrawn++;
@@ -1699,7 +1710,8 @@ namespace UnityRemix
                     meshId = meshId,
                     localToWorld = renderer.transform.localToWorldMatrix,
                     rendererInstanceId = rendererInstanceId,
-                    dedupeKey = dedupeKey
+                    dedupeKey = dedupeKey,
+                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL
                 });
             }
         }

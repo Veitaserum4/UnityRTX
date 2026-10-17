@@ -88,6 +88,10 @@ namespace UnityRemix
 
         // Visibility-filtered snapshot: built on main thread, read on render thread
         private InstanceData[] visibleInstances;
+        private InstanceData[] snapshotA = new InstanceData[256];
+        private InstanceData[] snapshotB = new InstanceData[256];
+        private bool useSnapshotA = true;
+        private int previousSnapshotCount = 0;
 
         // Mesh handle dedup: same geometry → same Remix handle
         private readonly Dictionary<ulong, IntPtr> meshHandles = new Dictionary<ulong, IntPtr>();
@@ -414,7 +418,21 @@ namespace UnityRemix
                         var go = renderer.gameObject;
                         bool activeInHierarchy = go.activeInHierarchy;
 
-                        // 3. Hierarchical active state check
+                        // 3. Fast-path active-only check (prevents expensive parent hierarchy walking)
+                        if (scanActiveOnly && !activeInHierarchy)
+                        {
+                            culledInactive++;
+                            continue;
+                        }
+
+                        // 4. Special toggleable objects that must follow activeInHierarchy (CheckPoint graphic, Door noPass skull lock)
+                        if ((instance.Flags & (InstanceFlags.IsCheckPoint | InstanceFlags.IsNoPass)) != 0 && !activeInHierarchy)
+                        {
+                            culledInactive++;
+                            continue;
+                        }
+
+                        // 5. Hierarchical active state check (only when scanActiveOnly is false)
                         if (!activeInHierarchy)
                         {
                             if (!go.activeSelf || IsIntermediateAncestorDisabled(renderer.transform))
@@ -422,23 +440,6 @@ namespace UnityRemix
                                 culledInactive++;
                                 continue;
                             }
-                        }
-
-                        // 4. Special toggleable objects that must follow activeInHierarchy (CheckPoint graphic, Door noPass skull lock)
-                        if ((instance.Flags & (InstanceFlags.IsCheckPoint | InstanceFlags.IsNoPass)) != 0)
-                        {
-                            if (!activeInHierarchy)
-                            {
-                                culledInactive++;
-                                continue;
-                            }
-                        }
-
-                        // 5. Global active-only filtering (only if explicitly enabled by user in config)
-                        if (scanActiveOnly && !activeInHierarchy)
-                        {
-                            culledInactive++;
-                            continue;
                         }
 
                         // 6. Visibility culling (only if enabled in config)
@@ -475,11 +476,15 @@ namespace UnityRemix
                         }
                         else
                         {
-                            var scale = renderer.transform.lossyScale;
-                            if (scale.sqrMagnitude < 0.0001f)
+                            // Stagger lossyScale check on combined meshes across 4 frames (vertices are static world-space)
+                            if ((i + Time.frameCount) % 4 == 0)
                             {
-                                culledScale++;
-                                continue;
+                                var scale = renderer.transform.lossyScale;
+                                if (scale.sqrMagnitude < 0.0001f)
+                                {
+                                    culledScale++;
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -504,7 +509,33 @@ namespace UnityRemix
                     logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={reusableVisibleInstances.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
                 }
 
-                Volatile.Write(ref visibleInstances, reusableVisibleInstances.Count > 0 ? reusableVisibleInstances.ToArray() : Array.Empty<InstanceData>());
+                int count = reusableVisibleInstances.Count;
+                if (count == 0)
+                {
+                    Volatile.Write(ref visibleInstances, Array.Empty<InstanceData>());
+                    previousSnapshotCount = 0;
+                }
+                else
+                {
+                    InstanceData[] backBuffer = useSnapshotA ? snapshotB : snapshotA;
+                    if (backBuffer.Length < count)
+                    {
+                        int newCap = Math.Max(count, backBuffer.Length * 2);
+                        backBuffer = new InstanceData[newCap];
+                        if (useSnapshotA) snapshotB = backBuffer; else snapshotA = backBuffer;
+                    }
+
+                    reusableVisibleInstances.CopyTo(backBuffer, 0);
+
+                    if (previousSnapshotCount > count && backBuffer.Length >= previousSnapshotCount)
+                    {
+                        Array.Clear(backBuffer, count, previousSnapshotCount - count);
+                    }
+
+                    previousSnapshotCount = count;
+                    useSnapshotA = !useSnapshotA;
+                    Volatile.Write(ref visibleInstances, backBuffer);
+                }
             }
         }
 

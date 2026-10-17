@@ -182,30 +182,50 @@ namespace UnityRemix
         public static void ToggleRemixUI() => isRemixUIOpen = !isRemixUIOpen;
 
         private static bool lastSyncedRemixOpen = false;
+        private static volatile int cachedNativeUIState = -1;
 
         /// <summary>
-        /// Continuously queries the ground-truth UI state directly from the Remix runtime (RtxOptions::showUI).
-        /// Prevents state inversion across scene loads, startup modals (e.g. preset selection), or mouse clicks on ImGui windows.
+        /// Polls the native UI state on the render thread where Remix API calls are uncontended.
+        /// Avoids blocking the Unity main thread on OpenRemix's g_apiMutex during Present/DrawInstance.
         /// </summary>
-        public static void SyncUIStateWithRemix(ManualLogSource logger = null)
+        public static void PollNativeUIStateFromRenderThread()
         {
             if (RemixAPI.GetUIStateFunc != null)
             {
                 try
                 {
                     var state = RemixAPI.GetUIStateFunc();
-                    bool remixOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
-                    if (remixOpen != lastSyncedRemixOpen)
-                    {
-                        lastSyncedRemixOpen = remixOpen;
-                        isRemixUIOpen = remixOpen;
-                        logger?.LogInfo($"[RemixWindowManager] Synced isRemixUIOpen with Remix runtime: {isRemixUIOpen} (UIState={state})");
-                        OnRemixUIStateChanged(isRemixUIOpen, logger);
-                    }
+                    cachedNativeUIState = (int)state;
                 }
-                catch (Exception ex)
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// Continuously queries the ground-truth UI state directly from the Remix runtime (RtxOptions::showUI).
+        /// Prevents state inversion across scene loads, startup modals (e.g. preset selection), or mouse clicks on ImGui windows.
+        /// Uses volatile cached state updated by the render thread to ensure 0ms main thread stall.
+        /// </summary>
+        public static void SyncUIStateWithRemix(ManualLogSource logger = null)
+        {
+            int stateInt = cachedNativeUIState;
+            if (stateInt == -1 && RemixAPI.GetUIStateFunc != null)
+            {
+                // Initial fallback before render thread starts
+                PollNativeUIStateFromRenderThread();
+                stateInt = cachedNativeUIState;
+            }
+
+            if (stateInt != -1)
+            {
+                var state = (RemixAPI.remixapi_UIState)stateInt;
+                bool remixOpen = (state != RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE);
+                if (remixOpen != lastSyncedRemixOpen)
                 {
-                    logger?.LogWarning($"[RemixWindowManager] Failed to query GetUIState: {ex.Message}");
+                    lastSyncedRemixOpen = remixOpen;
+                    isRemixUIOpen = remixOpen;
+                    logger?.LogInfo($"[RemixWindowManager] Synced isRemixUIOpen with Remix runtime: {isRemixUIOpen} (UIState={state})");
+                    OnRemixUIStateChanged(isRemixUIOpen, logger);
                 }
             }
         }

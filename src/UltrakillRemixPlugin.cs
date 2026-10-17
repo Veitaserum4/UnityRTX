@@ -377,6 +377,7 @@ namespace UnityRemix
                 frameCapture?.InvalidateCaches();
                 lightConverter?.ClearCache();
                 sceneMeshScanner?.ClearData();
+                renderThread?.RequestClearRetainedSceneInstances();
             }
             
             // Trigger scene scan
@@ -1144,6 +1145,7 @@ namespace UnityRemix
             if (sceneMeshScanner != null)
             {
                 sceneMeshScanner.ClearData();
+                renderThread?.RequestClearRetainedSceneInstances();
                 var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
                 if (activeScene.IsValid())
                 {

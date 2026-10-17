@@ -56,6 +56,105 @@ namespace UnityRemix
         private readonly HashSet<int> claimedRendererIds = new HashSet<int>();
         private readonly HashSet<StaticGeometryKey> claimedStaticKeys = new HashSet<StaticGeometryKey>();
         
+        // Retained Scene Instances (OpenRemix native extension)
+        private struct RetainedInstanceRecord
+        {
+            public ulong NativeHandle;
+            public IntPtr MeshHandle;
+            public RemixAPI.remixapi_Transform Transform;
+            public bool Visible;
+            public uint LastSeenFrame;
+        }
+
+        private readonly Dictionary<ulong, RetainedInstanceRecord> retainedSceneInstances = new Dictionary<ulong, RetainedInstanceRecord>(4096);
+        private readonly HashSet<ulong> visibleRetainedKeysThisFrame = new HashSet<ulong>(4096);
+        private readonly List<RemixAPI.remixapi_InstanceInfo> pendingAddInfos = new List<RemixAPI.remixapi_InstanceInfo>(512);
+        private readonly List<ulong> pendingAddKeys = new List<ulong>(512);
+        private readonly List<RemixAPI.remixapi_SceneInstanceChangeEXT> pendingChanges = new List<RemixAPI.remixapi_SceneInstanceChangeEXT>(512);
+        private readonly List<ulong> reusableHiddenKeys = new List<ulong>(256);
+        private RemixAPI.remixapi_InstanceInfo[] addInfosBuffer = new RemixAPI.remixapi_InstanceInfo[512];
+        private ulong[] addHandlesBuffer = new ulong[512];
+        private RemixAPI.remixapi_SceneInstanceChangeEXT[] changesBuffer = new RemixAPI.remixapi_SceneInstanceChangeEXT[512];
+        private volatile bool needClearRetained = false;
+
+        public void RequestClearRetainedSceneInstances()
+        {
+            needClearRetained = true;
+        }
+
+        private static bool TransformEquals(in RemixAPI.remixapi_Transform a, in RemixAPI.remixapi_Transform b)
+        {
+            unsafe
+            {
+                fixed (RemixAPI.remixapi_Transform* pa = &a)
+                fixed (RemixAPI.remixapi_Transform* pb = &b)
+                {
+                    float* fa = (float*)pa;
+                    float* fb = (float*)pb;
+                    for (int i = 0; i < 12; i++)
+                    {
+                        if (fa[i] != fb[i]) return false;
+                    }
+                    return true;
+                }
+            }
+        }
+
+        private void EnsureAddBuffersCapacity(int count)
+        {
+            if (addInfosBuffer.Length < count)
+            {
+                int newCap = Math.Max(count, addInfosBuffer.Length * 2);
+                addInfosBuffer = new RemixAPI.remixapi_InstanceInfo[newCap];
+                addHandlesBuffer = new ulong[newCap];
+            }
+        }
+
+        private void EnsureChangesBufferCapacity(int count)
+        {
+            if (changesBuffer.Length < count)
+            {
+                int newCap = Math.Max(count, changesBuffer.Length * 2);
+                changesBuffer = new RemixAPI.remixapi_SceneInstanceChangeEXT[newCap];
+            }
+        }
+
+        public void ClearRetainedSceneInstances()
+        {
+            if (!RemixAPI.HasRetainedSceneInstancesEXT || retainedSceneInstances.Count == 0)
+            {
+                retainedSceneInstances.Clear();
+                return;
+            }
+
+            try
+            {
+                ulong[] handles = new ulong[retainedSceneInstances.Count];
+                int idx = 0;
+                foreach (var kvp in retainedSceneInstances)
+                {
+                    handles[idx++] = kvp.Value.NativeHandle;
+                }
+
+                unsafe
+                {
+                    fixed (ulong* pHandles = handles)
+                    {
+                        RemixAPI.RemoveSceneInstancesEXTFunc((IntPtr)pHandles, (uint)handles.Length);
+                    }
+                }
+                logger.LogInfo($"[RenderThread] Cleared {handles.Length} retained scene instances.");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Failed to clear retained scene instances: {ex.Message}");
+            }
+            finally
+            {
+                retainedSceneInstances.Clear();
+            }
+        }
+
         public void SetSkyboxManager(RemixSkyboxManager manager)
         {
             skyboxManager = manager;
@@ -161,6 +260,7 @@ namespace UnityRemix
             finally
             {
                 deviceReady = false;
+                ClearRetainedSceneInstances();
                 if (RemixAPI.IsOpenRemix)
                 {
                     // SDL/Vulkan shutdown must run on the Startup thread, before
@@ -343,6 +443,8 @@ namespace UnityRemix
 
         private static void PollNativeTelemetry()
         {
+            RemixWindowManager.PollNativeUIStateFromRenderThread();
+
             bool any = false;
             var fp = new RemixAPI.remixapi_FramePerformanceEXT { structSize = FramePerfStructSize };
             var fb = new RemixAPI.remixapi_FrameBreakdownEXT { structSize = FrameBreakdownStructSize };
@@ -405,8 +507,323 @@ namespace UnityRemix
                 );
             }
             
+            if (needClearRetained)
+            {
+                ClearRetainedSceneInstances();
+                needClearRetained = false;
+            }
+
+            if (RemixAPI.HasRetainedSceneInstancesEXT)
+            {
+                uint objectPickingValue = 1;
+                claimedRendererIds.Clear();
+                claimedStaticKeys.Clear();
+                visibleRetainedKeysThisFrame.Clear();
+                pendingAddInfos.Clear();
+                pendingAddKeys.Clear();
+                pendingChanges.Clear();
+
+                // 1. Scanned static scene meshes (level geometry)
+                if (sceneMeshScanner != null && (sceneMeshScanner.HasData || sceneMeshScanner.IsStreaming))
+                {
+                    var scannedInstances = sceneMeshScanner.GetInstances();
+                    if (scannedInstances != null)
+                    {
+                        for (int i = 0; i < scannedInstances.Length; i++)
+                        {
+                            var instance = scannedInstances[i];
+                            if (instance.MeshHandle == IntPtr.Zero)
+                                continue;
+
+                            if (frameCapture != null && frameCapture.IsLayerDisabled(instance.Layer))
+                                continue;
+
+                            if (!StaticGeometryDedupe.TryClaimVisibleInstance(instance.RendererInstanceId, instance.DedupeKey, claimedRendererIds, claimedStaticKeys))
+                                continue;
+
+                            ulong instanceKey = ((ulong)(uint)instance.RendererInstanceId << 32) | (ulong)(uint)(instance.MeshHandle.ToInt64() & 0xFFFFFFFF);
+                            visibleRetainedKeysThisFrame.Add(instanceKey);
+
+                            if (retainedSceneInstances.TryGetValue(instanceKey, out var record))
+                            {
+                                uint fields = 0;
+                                if (!TransformEquals(in record.Transform, in instance.Transform))
+                                {
+                                    fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT;
+                                    record.Transform = instance.Transform;
+                                }
+                                if (!record.Visible)
+                                {
+                                    fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_VISIBLE_EXT;
+                                    record.Visible = true;
+                                }
+                                if (fields != 0)
+                                {
+                                    pendingChanges.Add(new RemixAPI.remixapi_SceneInstanceChangeEXT
+                                    {
+                                        instance = record.NativeHandle,
+                                        fields = fields,
+                                        visible = 1u,
+                                        transform = instance.Transform
+                                    });
+                                }
+                                record.LastSeenFrame = (uint)state.frameCount;
+                                retainedSceneInstances[instanceKey] = record;
+                            }
+                            else
+                            {
+                                pendingAddInfos.Add(new RemixAPI.remixapi_InstanceInfo
+                                {
+                                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
+                                    pNext = IntPtr.Zero,
+                                    categoryFlags = 0,
+                                    mesh = instance.MeshHandle,
+                                    transform = instance.Transform,
+                                    doubleSided = 1
+                                });
+                                pendingAddKeys.Add(instanceKey);
+                            }
+                        }
+                    }
+                }
+
+                // 2. Terrain chunks
+                if (terrainManager != null && (terrainManager.HasData || terrainManager.IsStreaming))
+                {
+                    var terrainInstances = terrainManager.GetInstances();
+                    if (terrainInstances != null && terrainInstances.Length > 0)
+                    {
+                        for (int i = 0; i < terrainInstances.Length; i++)
+                        {
+                            var instance = terrainInstances[i];
+                            if (instance.MeshHandle == IntPtr.Zero)
+                                continue;
+
+                            if (frameCapture != null && frameCapture.IsLayerDisabled(instance.Layer))
+                                continue;
+
+                            ulong instanceKey = ((ulong)(uint)instance.RendererInstanceId << 32) | (ulong)(uint)(instance.MeshHandle.ToInt64() & 0xFFFFFFFF);
+                            visibleRetainedKeysThisFrame.Add(instanceKey);
+
+                            if (retainedSceneInstances.TryGetValue(instanceKey, out var record))
+                            {
+                                uint fields = 0;
+                                if (!TransformEquals(in record.Transform, in instance.Transform))
+                                {
+                                    fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT;
+                                    record.Transform = instance.Transform;
+                                }
+                                if (!record.Visible)
+                                {
+                                    fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_VISIBLE_EXT;
+                                    record.Visible = true;
+                                }
+                                if (fields != 0)
+                                {
+                                    pendingChanges.Add(new RemixAPI.remixapi_SceneInstanceChangeEXT
+                                    {
+                                        instance = record.NativeHandle,
+                                        fields = fields,
+                                        visible = 1u,
+                                        transform = instance.Transform
+                                    });
+                                }
+                                record.LastSeenFrame = (uint)state.frameCount;
+                                retainedSceneInstances[instanceKey] = record;
+                            }
+                            else
+                            {
+                                pendingAddInfos.Add(new RemixAPI.remixapi_InstanceInfo
+                                {
+                                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
+                                    pNext = IntPtr.Zero,
+                                    categoryFlags = 0,
+                                    mesh = instance.MeshHandle,
+                                    transform = instance.Transform,
+                                    doubleSided = 1
+                                });
+                                pendingAddKeys.Add(instanceKey);
+                            }
+                        }
+                    }
+                }
+
+                // 3. Static and dynamic instances from state.instances
+                foreach (var instance in state.instances)
+                {
+                    ulong meshKey = instance.meshKey != 0 ? instance.meshKey : (ulong)(uint)instance.meshId;
+                    if (meshConverter.TryGetMeshHandle(meshKey, out IntPtr meshHandle))
+                    {
+                        if (instance.categoryFlags != 0)
+                        {
+                            // Dynamic / categorized instance (view models, particles, UI, decals)
+                            ulong persistentId = (ulong)(uint)instance.rendererInstanceId;
+                            if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+
+                            meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags, persistentId, isDynamic: true);
+                            objectPickingValue++;
+                        }
+                        else
+                        {
+                            // Static instance from runtime capture (if not already claimed by scanner)
+                            if (!StaticGeometryDedupe.TryClaimVisibleInstance(instance.rendererInstanceId, instance.dedupeKey, claimedRendererIds, claimedStaticKeys))
+                                continue;
+
+                            var m = instance.localToWorld;
+                            var transform = RemixAPI.remixapi_Transform.FromMatrix(
+                                m.m00, m.m02, m.m01, m.m03,
+                                m.m20, m.m22, m.m21, m.m23,
+                                m.m10, m.m12, m.m11, m.m13
+                            );
+
+                            ulong instanceKey = ((ulong)(uint)instance.rendererInstanceId << 32) | (ulong)(uint)(meshHandle.ToInt64() & 0xFFFFFFFF);
+                            visibleRetainedKeysThisFrame.Add(instanceKey);
+
+                            if (retainedSceneInstances.TryGetValue(instanceKey, out var record))
+                            {
+                                uint fields = 0;
+                                if (!TransformEquals(in record.Transform, in transform))
+                                {
+                                    fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT;
+                                    record.Transform = transform;
+                                }
+                                if (!record.Visible)
+                                {
+                                    fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_VISIBLE_EXT;
+                                    record.Visible = true;
+                                }
+                                if (fields != 0)
+                                {
+                                    pendingChanges.Add(new RemixAPI.remixapi_SceneInstanceChangeEXT
+                                    {
+                                        instance = record.NativeHandle,
+                                        fields = fields,
+                                        visible = 1u,
+                                        transform = transform
+                                    });
+                                }
+                                record.LastSeenFrame = (uint)state.frameCount;
+                                retainedSceneInstances[instanceKey] = record;
+                            }
+                            else
+                            {
+                                pendingAddInfos.Add(new RemixAPI.remixapi_InstanceInfo
+                                {
+                                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
+                                    pNext = IntPtr.Zero,
+                                    categoryFlags = 0,
+                                    mesh = meshHandle,
+                                    transform = transform,
+                                    doubleSided = 1
+                                });
+                                pendingAddKeys.Add(instanceKey);
+                            }
+                        }
+                    }
+                }
+
+                // 4. Update visibility for retained instances not seen this frame
+                if (retainedSceneInstances.Count > visibleRetainedKeysThisFrame.Count)
+                {
+                    reusableHiddenKeys.Clear();
+                    foreach (var kvp in retainedSceneInstances)
+                    {
+                        if (!visibleRetainedKeysThisFrame.Contains(kvp.Key) && kvp.Value.Visible)
+                        {
+                            reusableHiddenKeys.Add(kvp.Key);
+                        }
+                    }
+
+                    for (int i = 0; i < reusableHiddenKeys.Count; i++)
+                    {
+                        ulong k = reusableHiddenKeys[i];
+                        var record = retainedSceneInstances[k];
+                        pendingChanges.Add(new RemixAPI.remixapi_SceneInstanceChangeEXT
+                        {
+                            instance = record.NativeHandle,
+                            fields = RemixAPI.REMIXAPI_SCENE_INSTANCE_VISIBLE_EXT,
+                            visible = 0u,
+                            transform = record.Transform
+                        });
+                        record.Visible = false;
+                        retainedSceneInstances[k] = record;
+                    }
+                }
+
+                // 5. Submit pending additions
+                if (pendingAddInfos.Count > 0)
+                {
+                    EnsureAddBuffersCapacity(pendingAddInfos.Count);
+                    for (int i = 0; i < pendingAddInfos.Count; i++)
+                        addInfosBuffer[i] = pendingAddInfos[i];
+
+                    unsafe
+                    {
+                        fixed (RemixAPI.remixapi_InstanceInfo* pInfos = addInfosBuffer)
+                        fixed (ulong* pHandles = addHandlesBuffer)
+                        {
+                            var res = RemixAPI.AddSceneInstancesEXTFunc((IntPtr)pInfos, (uint)pendingAddInfos.Count, (IntPtr)pHandles);
+                            if (res == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                            {
+                                for (int i = 0; i < pendingAddInfos.Count; i++)
+                                {
+                                    retainedSceneInstances[pendingAddKeys[i]] = new RetainedInstanceRecord
+                                    {
+                                        NativeHandle = addHandlesBuffer[i],
+                                        MeshHandle = addInfosBuffer[i].mesh,
+                                        Transform = addInfosBuffer[i].transform,
+                                        Visible = true,
+                                        LastSeenFrame = (uint)state.frameCount
+                                    };
+                                }
+                            }
+                            else
+                            {
+                                logger.LogWarning($"[RenderThread] AddSceneInstancesEXT failed: {res}");
+                            }
+                        }
+                    }
+                }
+
+                // 6. Submit pending changes
+                if (pendingChanges.Count > 0)
+                {
+                    EnsureChangesBufferCapacity(pendingChanges.Count);
+                    for (int i = 0; i < pendingChanges.Count; i++)
+                        changesBuffer[i] = pendingChanges[i];
+
+                    unsafe
+                    {
+                        fixed (RemixAPI.remixapi_SceneInstanceChangeEXT* pChanges = changesBuffer)
+                        {
+                            RemixAPI.ChangeSceneInstancesEXTFunc((IntPtr)pChanges, (uint)pendingChanges.Count);
+                        }
+                    }
+                }
+
+                // 7. Draw all retained scene instances in ONE call
+                RemixAPI.DrawSceneInstancesEXTFunc(IntPtr.Zero);
+
+                // 8. Draw dynamic / skinned meshes
+                objectPickingValue = RenderSkinnedMeshes(state, objectPickingValue);
+
+                if (retainedSceneInstances.Count == 0 && objectPickingValue == 1 && testMeshHandle != IntPtr.Zero)
+                {
+                    var dummyMatrix = UnityEngine.Matrix4x4.TRS(
+                        new UnityEngine.Vector3(0, -999999f, 0),
+                        UnityEngine.Quaternion.identity,
+                        UnityEngine.Vector3.one * 0.0001f
+                    );
+                    meshConverter.DrawMeshInstance(testMeshHandle, dummyMatrix, objectPickingValue, isDynamic: true);
+                    objectPickingValue++;
+                }
+
+                return retainedSceneInstances.Count > 0 || objectPickingValue > 1;
+            }
+
+            // Fallback immediate mode for DXVK-Remix / standard Bridge
             // Draw static mesh instances
-            uint objectPickingValue = 1;
+            uint legacyObjectPickingValue = 1;
             claimedRendererIds.Clear();
             claimedStaticKeys.Clear();
             
@@ -419,14 +836,14 @@ namespace UnityRemix
                         continue;
 
                     ulong persistentId = (ulong)(uint)instance.rendererInstanceId;
-                    if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+                    if (persistentId == 0) persistentId = (ulong)legacyObjectPickingValue;
 
-                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, objectPickingValue, instance.categoryFlags, persistentId);
+                    meshConverter.DrawMeshInstance(meshHandle, instance.localToWorld, legacyObjectPickingValue, instance.categoryFlags, persistentId);
                     if (instance.categoryFlags != 0 && (state.frameCount % 300 == 1 || state.frameCount < 5))
                     {
                         logger.LogInfo($"[RenderThread] Drawn categorized instance meshKey=0x{meshKey:X16} (category=0x{instance.categoryFlags:X})");
                     }
-                    objectPickingValue++;
+                    legacyObjectPickingValue++;
                 }
             }
             
@@ -454,7 +871,7 @@ namespace UnityRemix
                             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
                             bool hasIdentity = false;
                             ulong persistentId = (ulong)(uint)instance.RendererInstanceId;
-                            if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+                            if (persistentId == 0) persistentId = (ulong)legacyObjectPickingValue;
 
                             if (RemixAPI.IsOpenRemix && persistentId != 0)
                             {
@@ -482,7 +899,7 @@ namespace UnityRemix
                                 };
                                 
                                 drawFunc(ref instanceInfo);
-                                objectPickingValue++;
+                                legacyObjectPickingValue++;
                             }
                         }
                     }
@@ -509,7 +926,7 @@ namespace UnityRemix
                             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
                             bool hasIdentity = false;
                             ulong persistentId = (ulong)(uint)instance.RendererInstanceId;
-                            if (persistentId == 0) persistentId = (ulong)objectPickingValue;
+                            if (persistentId == 0) persistentId = (ulong)legacyObjectPickingValue;
 
                             if (RemixAPI.IsOpenRemix && persistentId != 0)
                             {
@@ -537,7 +954,7 @@ namespace UnityRemix
                                 };
 
                                 drawFunc(ref instanceInfo);
-                                objectPickingValue++;
+                                legacyObjectPickingValue++;
                             }
                         }
                     }
@@ -545,23 +962,23 @@ namespace UnityRemix
             }
             
             // Draw skinned meshes
-            objectPickingValue = RenderSkinnedMeshes(state, objectPickingValue);
+            legacyObjectPickingValue = RenderSkinnedMeshes(state, legacyObjectPickingValue);
 
             // If no geometry was drawn this frame, submit a tiny dummy triangle far below the world.
             // DXVK-Remix has a divide-by-zero crash in DxvkBuffer::DxvkBuffer (256 / (surfaceCount * 128))
             // if materials exist in the material cache but 0 mesh surfaces/instances are submitted during present.
-            if (objectPickingValue == 1 && testMeshHandle != IntPtr.Zero)
+            if (legacyObjectPickingValue == 1 && testMeshHandle != IntPtr.Zero)
             {
                 var dummyMatrix = UnityEngine.Matrix4x4.TRS(
                     new UnityEngine.Vector3(0, -999999f, 0),
                     UnityEngine.Quaternion.identity,
                     UnityEngine.Vector3.one * 0.0001f
                 );
-                meshConverter.DrawMeshInstance(testMeshHandle, dummyMatrix, objectPickingValue);
-                objectPickingValue++;
+                meshConverter.DrawMeshInstance(testMeshHandle, dummyMatrix, legacyObjectPickingValue);
+                legacyObjectPickingValue++;
             }
 
-            return objectPickingValue > 1;
+            return legacyObjectPickingValue > 1;
         }
         
         /// <summary>
@@ -638,7 +1055,7 @@ namespace UnityRemix
                         ulong persistentId = (ulong)(uint)skinned.meshId;
                         if (persistentId == 0) persistentId = (ulong)objectPickingValue;
 
-                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId);
+                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId, isDynamic: true);
                         objectPickingValue++;
                     }
                 }

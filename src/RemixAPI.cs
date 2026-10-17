@@ -103,6 +103,7 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT = 0x7fff1002,
             REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT = 0x7fff1008,
             REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
+            REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT = 0x7fff1018,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT = unchecked((int)0x7fff101c),
         }
 
@@ -347,6 +348,25 @@ namespace UnityRemix
             public remixapi_StructType sType;
             public IntPtr pNext;
             public uint enabled;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MeshInfoDeformEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+        }
+
+        public const uint REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT = 0x1u;
+        public const uint REMIXAPI_SCENE_INSTANCE_VISIBLE_EXT = 0x2u;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_SceneInstanceChangeEXT
+        {
+            public ulong instance;
+            public uint fields;
+            public uint visible;
+            public remixapi_Transform transform;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -819,6 +839,18 @@ namespace UnityRemix
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate remixapi_ErrorCode PFN_remixapi_GetTextureStatisticsEXT(ref remixapi_TextureStatisticsEXT statistics);
 
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_AddSceneInstancesEXT(IntPtr infos, uint count, IntPtr outInstances);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_ChangeSceneInstancesEXT(IntPtr changes, uint count);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_RemoveSceneInstancesEXT(IntPtr instances, uint count);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_DrawSceneInstancesEXT(IntPtr origin);
+
         #endregion
 
         #region Interface Struct
@@ -939,6 +971,16 @@ namespace UnityRemix
         public static PFN_remixapi_GetFrameBreakdownEXT GetFrameBreakdownEXTFunc { get; private set; }
         public static PFN_remixapi_GetTracingStatisticsEXT GetTracingStatisticsEXTFunc { get; private set; }
         public static PFN_remixapi_GetTextureStatisticsEXT GetTextureStatisticsEXTFunc { get; private set; }
+        public static PFN_remixapi_AddSceneInstancesEXT AddSceneInstancesEXTFunc { get; private set; }
+        public static PFN_remixapi_ChangeSceneInstancesEXT ChangeSceneInstancesEXTFunc { get; private set; }
+        public static PFN_remixapi_RemoveSceneInstancesEXT RemoveSceneInstancesEXTFunc { get; private set; }
+        public static PFN_remixapi_DrawSceneInstancesEXT DrawSceneInstancesEXTFunc { get; private set; }
+
+        public static bool HasRetainedSceneInstancesEXT => 
+            AddSceneInstancesEXTFunc != null && 
+            ChangeSceneInstancesEXTFunc != null && 
+            RemoveSceneInstancesEXTFunc != null && 
+            DrawSceneInstancesEXTFunc != null;
 
         private static IntPtr _remixDll = IntPtr.Zero;
 
@@ -1039,6 +1081,22 @@ namespace UnityRemix
                 IntPtr texStatsPtr = GetProcAddress(hModule, "remixapi_GetTextureStatisticsEXT");
                 if (texStatsPtr != IntPtr.Zero)
                     GetTextureStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTextureStatisticsEXT>(texStatsPtr);
+
+                IntPtr addSceneInstPtr = GetProcAddress(hModule, "remixapi_AddSceneInstancesEXT");
+                if (addSceneInstPtr != IntPtr.Zero)
+                    AddSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_AddSceneInstancesEXT>(addSceneInstPtr);
+
+                IntPtr changeSceneInstPtr = GetProcAddress(hModule, "remixapi_ChangeSceneInstancesEXT");
+                if (changeSceneInstPtr != IntPtr.Zero)
+                    ChangeSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_ChangeSceneInstancesEXT>(changeSceneInstPtr);
+
+                IntPtr removeSceneInstPtr = GetProcAddress(hModule, "remixapi_RemoveSceneInstancesEXT");
+                if (removeSceneInstPtr != IntPtr.Zero)
+                    RemoveSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_RemoveSceneInstancesEXT>(removeSceneInstPtr);
+
+                IntPtr drawSceneInstPtr = GetProcAddress(hModule, "remixapi_DrawSceneInstancesEXT");
+                if (drawSceneInstPtr != IntPtr.Zero)
+                    DrawSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_DrawSceneInstancesEXT>(drawSceneInstPtr);
             }
             return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS;
         }
@@ -1165,6 +1223,10 @@ namespace UnityRemix
             GetFrameBreakdownEXTFunc = null;
             GetTracingStatisticsEXTFunc = null;
             GetTextureStatisticsEXTFunc = null;
+            AddSceneInstancesEXTFunc = null;
+            ChangeSceneInstancesEXTFunc = null;
+            RemoveSceneInstancesEXTFunc = null;
+            DrawSceneInstancesEXTFunc = null;
             SetFogStateFunc = null;
             GetUIStateFunc = null;
             SetUIStateFunc = null;
