@@ -945,7 +945,7 @@ namespace UnityRemix
                 }
             }
 
-            var allParticles = UnityCompat.FindActiveSceneComponents<ParticleSystemRenderer>();
+            var allParticles = UnityCompat.FindSceneComponentsIncludingInactive<ParticleSystemRenderer>();
             for (int i = 0; i < allParticles.Length; i++)
             {
                 var pr = allParticles[i];
@@ -968,7 +968,7 @@ namespace UnityRemix
                 }
             }
 
-            var allTrails = UnityCompat.FindActiveSceneComponents<TrailRenderer>();
+            var allTrails = UnityCompat.FindSceneComponentsIncludingInactive<TrailRenderer>();
             for (int i = 0; i < allTrails.Length; i++)
             {
                 var tr = allTrails[i];
@@ -2611,7 +2611,7 @@ namespace UnityRemix
             _particleBatchesByMat.Clear();
 
             // Check active particle renderers periodically to capture newly spawned systems without sweeping full scene every frame
-            if (frameCount % 30 == 0)
+            if (frameCount % 4 == 0)
             {
                 var activeRenderers = UnityCompat.FindActiveSceneComponents<ParticleSystemRenderer>();
                 for (int a = 0; a < activeRenderers.Length; a++)
@@ -2716,7 +2716,10 @@ namespace UnityRemix
                 }
 
                 activeCount++;
-                float distSqr = (pr.transform.position - camPos).sqrMagnitude;
+                Bounds prBounds = pr.bounds;
+                float distSqr = prBounds.extents.sqrMagnitude > 0.01f
+                    ? prBounds.SqrDistance(camPos)
+                    : (pr.transform.position - camPos).sqrMagnitude;
                 float dist = Mathf.Sqrt(distSqr);
                 if (dist > furthestDist)
                 {
@@ -2726,7 +2729,7 @@ namespace UnityRemix
 
                 int numAlive = ps.particleCount;
 
-                // Distance culling: skip particle systems whose emitter transform is beyond max render distance
+                // Distance culling: skip particle systems whose bounds/transform are beyond max render distance
                 if (configEnableParticleDistanceCulling != null && configEnableParticleDistanceCulling.Value && distSqr > maxParticleDistSqr)
                 {
                     distanceCulled++;
@@ -2873,7 +2876,8 @@ namespace UnityRemix
                         mpbEmissiveColor: quantizedColor, 
                         mpbEmissiveIntensity: emIntensity, 
                         mpbColor: quantizedColor,
-                        suppressLightGeneration: true
+                        suppressLightGeneration: true,
+                        renderer: pr
                     );
                 }
 
@@ -2900,9 +2904,9 @@ namespace UnityRemix
 
                 bool isSurfaceAligned = isShapeAligned || isJumpPadRing;
 
-                if (!isSurfaceAligned && (pr.renderMode != ParticleSystemRenderMode.Billboard || pr.alignment != ParticleSystemRenderSpace.View))
+                if (!isSurfaceAligned && pr.renderMode == ParticleSystemRenderMode.Mesh)
                 {
-                    if (!BakeMeshParticleSystem(pr, mainCam, tintedMatId, state))
+                    if (!BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
                         renderedParticles += particlesToDraw;
@@ -3158,7 +3162,8 @@ namespace UnityRemix
                 }
                 else if (isStretch)
                 {
-                    Vector3 worldVel = isWorldSpace ? p.velocity : sysTransform.MultiplyVector(p.velocity);
+                    Vector3 rawVel = p.totalVelocity.sqrMagnitude > 0.0001f ? p.totalVelocity : p.velocity;
+                    Vector3 worldVel = isWorldSpace ? rawVel : sysTransform.MultiplyVector(rawVel);
                     float speed = worldVel.magnitude;
                     if (speed > 0.001f)
                     {
@@ -3210,7 +3215,8 @@ namespace UnityRemix
                 }
                 else if (alignment == ParticleSystemRenderSpace.Velocity)
                 {
-                    Vector3 worldVel = isWorldSpace ? p.velocity : sysTransform.MultiplyVector(p.velocity);
+                    Vector3 rawVel = p.totalVelocity.sqrMagnitude > 0.0001f ? p.totalVelocity : p.velocity;
+                    Vector3 worldVel = isWorldSpace ? rawVel : sysTransform.MultiplyVector(rawVel);
                     Vector3 velDir = worldVel.normalized;
                     if (velDir.sqrMagnitude < 0.001f) velDir = pr.transform.forward;
                     Vector3 side = Vector3.Cross(velDir, camForward).normalized;
@@ -3282,7 +3288,7 @@ namespace UnityRemix
             bucket.ParticleCount += numParticlesAlive;
         }
 
-        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, Camera cam, int matId, FrameState state)
+        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, ParticleSystem ps, Camera cam, int matId, FrameState state)
         {
             if (_reusableParticleMesh == null)
             {
@@ -3293,14 +3299,16 @@ namespace UnityRemix
             try
             {
                 _reusableParticleMesh.Clear();
+                // Pass useTransform=false so local-space particles stay in the emitter's local space
+                // and receive the full TRS via localToWorld (useTransform=true only applies R+S without translation).
 #pragma warning disable CS0618
                 if (cam != null)
                 {
-                    pr.BakeMesh(_reusableParticleMesh, cam, true);
+                    pr.BakeMesh(_reusableParticleMesh, cam, false);
                 }
                 else
                 {
-                    pr.BakeMesh(_reusableParticleMesh, true);
+                    pr.BakeMesh(_reusableParticleMesh, false);
                 }
 #pragma warning restore CS0618
 
@@ -3308,6 +3316,8 @@ namespace UnityRemix
                 if (verts != null && verts.Length > 0 && _reusableParticleMesh.triangles.Length > 0)
                 {
                     ulong remixMeshHash = (ulong)(uint)pr.GetInstanceID() | 0x4000000000000000UL;
+                    bool isWorldSpace = ps != null && ps.main.simulationSpace == ParticleSystemSimulationSpace.World;
+                    Matrix4x4 particleLocalToWorld = isWorldSpace ? Matrix4x4.identity : pr.transform.localToWorldMatrix;
 
                     state.skinned.Add(new SkinnedMeshData
                     {
@@ -3319,7 +3329,7 @@ namespace UnityRemix
                         uvs = _reusableParticleMesh.uv,
                         colors = _reusableParticleMesh.colors32,
                         triangles = _reusableParticleMesh.triangles,
-                        localToWorld = Matrix4x4.identity,
+                        localToWorld = particleLocalToWorld,
                         boneTransforms = null,
                         skinningData = null,
                         categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,
@@ -3389,7 +3399,8 @@ namespace UnityRemix
                         mpbEmissiveColor: trailColor, 
                         mpbEmissiveIntensity: emIntensity, 
                         mpbColor: trailColor,
-                        suppressLightGeneration: true
+                        suppressLightGeneration: true,
+                        renderer: pr
                     );
 
                     ulong trailHash = (ulong)(uint)pr.GetInstanceID() | 0x4800000000000000UL;
@@ -3438,7 +3449,7 @@ namespace UnityRemix
                 return;
 
             // Throttle discovery of newly spawned TrailRenderers to avoid full-scene sweeps every frame
-            if (frameCount % 30 == 0)
+            if (frameCount % 4 == 0)
             {
                 var activeTrails = UnityCompat.FindActiveSceneComponents<TrailRenderer>();
                 for (int a = 0; a < activeTrails.Length; a++)
@@ -3596,7 +3607,8 @@ namespace UnityRemix
                             mpbEmissiveColor: quantizedColor,
                             mpbEmissiveIntensity: emIntensity,
                             mpbColor: quantizedColor,
-                            suppressLightGeneration: true
+                            suppressLightGeneration: true,
+                            renderer: tr
                         );
                     }
 

@@ -707,21 +707,6 @@ namespace UnityRemix
                         updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
                         pNext = updateHandle.AddrOfPinnedObject();
                     }
-                    else
-                    {
-                        // Particle/trail batches: Attach UpdateEXT (without MotionEXT/DeformEXT) so OpenRemix
-                        // creates an updateStream: bypasses geometryCache hashing/storage, builds BLAS with
-                        // ALLOW_UPDATE_BIT_KHR instead of scheduling 2-frame GPU BLAS compaction every frame,
-                        // and refits the BLAS in place whenever particle count remains constant!
-                        var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
-                        {
-                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
-                            pNext = IntPtr.Zero,
-                            enabled = 1
-                        };
-                        updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
-                        pNext = updateHandle.AddrOfPinnedObject();
-                    }
                 }
                 else
                 {
@@ -786,12 +771,13 @@ namespace UnityRemix
                 objectPickingValue = objectPickingValue
             };
             
+            bool isParticleInstance = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0;
             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
             bool hasIdentity = false;
             ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
             if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
             {
-                uint classification = (isDynamic || (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0) ? 1u : 0u;
+                uint classification = (isDynamic || isParticleInstance) ? 1u : 0u;
                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,
@@ -803,11 +789,50 @@ namespace UnityRemix
                 hasIdentity = true;
             }
 
+            RemixAPI.remixapi_InstanceInfoBlendEXT blendExt = default;
+            bool hasBlend = RemixAPI.IsOpenRemix && isParticleInstance;
+            if (hasBlend)
+            {
+                // Enable coverageBlended layer traversal in OpenRemix without setting hit.tinted (which causes
+                // stained-glass dark transmission borders), and modulate texture alpha by vertex alpha (Diffuse)
+                // so ColorOverLifetime fade-outs fade alpha rather than turning into black silhouettes.
+                blendExt = new RemixAPI.remixapi_InstanceInfoBlendEXT
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT,
+                    pNext = IntPtr.Zero,
+                    alphaBlendEnabled = 1,
+                    srcColorBlendFactor = 6,   // VkBlendFactor::eSrcAlpha
+                    dstColorBlendFactor = 7,   // VkBlendFactor::eOneMinusSrcAlpha
+                    colorBlendOp = 0,          // VkBlendOp::eAdd
+                    textureColorArg1Source = 1, // Texture (texel.rgb)
+                    textureColorArg2Source = 2, // Diffuse (vertex.rgb)
+                    textureColorOperation = 3,  // Modulate (texel.rgb * vertex.rgb)
+                    textureAlphaArg1Source = 1, // Texture (texel.a)
+                    textureAlphaArg2Source = 2, // Diffuse (vertex.a)
+                    textureAlphaOperation = 3,  // Modulate (texel.a * vertex.a)
+                    tFactor = 0xFFFFFFFFu,
+                    isTextureFactorBlend = 0,
+                    isVertexColorBakedLighting = 0,
+                    srcAlphaBlendFactor = 1,   // VkBlendFactor::eOne
+                    dstAlphaBlendFactor = 7,   // VkBlendFactor::eOneMinusSrcAlpha
+                    alphaBlendOp = 0,          // VkBlendOp::eAdd
+                    writeMask = 15
+                };
+            }
+
             unsafe
             {
                 if (hasIdentity)
                 {
                     objectPickingExt.pNext = (IntPtr)(&identityExt);
+                    if (hasBlend)
+                    {
+                        identityExt.pNext = (IntPtr)(&blendExt);
+                    }
+                }
+                else if (hasBlend)
+                {
+                    objectPickingExt.pNext = (IntPtr)(&blendExt);
                 }
 
                 var instanceInfo = new RemixAPI.remixapi_InstanceInfo

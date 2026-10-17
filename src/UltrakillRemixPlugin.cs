@@ -685,8 +685,6 @@ namespace UnityRemix
             if (lastUpdateUnityFrame == curUnityFrame) return;
             lastUpdateUnityFrame = curUnityFrame;
 
-            frameCount++;
-
             // Engine frame throttling and DeltaTime slow-motion prevention
             if (initialSingleWindowEnabled)
             {

@@ -609,7 +609,8 @@ namespace UnityRemix
             }
                 
             string shaderName = material.shader != null ? material.shader.name : "null";
-            bool autoSuppressLight = suppressLightGeneration ||
+            bool isParticleOrTrailRenderer = renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer;
+            bool autoSuppressLight = suppressLightGeneration || isParticleOrTrailRenderer ||
                 shaderName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 shaderName.IndexOf("TextMeshPro/Distance Field", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 (material.name != null && (material.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -813,10 +814,14 @@ namespace UnityRemix
             {
                 matData.alphaCutoff = material.GetFloat("_Cutoff");
             }
+            if (matData.suppressLightGeneration && !shaderName.Contains("TextMeshPro"))
+            {
+                matData.alphaMode = AlphaMode.Blend;
+            }
 
             // Detect translucent kind (Water vs Glass vs None) for OpenRemix
             var (transKind, ior, dist, transColor, transReason) = DetectTranslucentKind(
-                material, material.name, shaderName, renderer, matData.alphaMode, matData.albedoColor, matData.roughness);
+                material, material.name, shaderName, renderer, matData.alphaMode, matData.albedoColor, matData.roughness, matData.suppressLightGeneration);
             matData.translucentKind = transKind;
             matData.refractiveIndex = ior;
             matData.transmittanceDistance = dist;
@@ -870,7 +875,22 @@ namespace UnityRemix
 
                 Color effectiveTint = mpbColor ?? matData.albedoColor;
                 bool isTinted = effectiveTint.r < 0.98f || effectiveTint.g < 0.98f || effectiveTint.b < 0.98f;
-                if (remap.HasValue || hsbc.HasValue || (!RemixAPI.IsOpenRemix && isTinted))
+                if (matData.suppressLightGeneration && !shaderName.Contains("TextMeshPro"))
+                {
+                    var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint);
+                    matData.albedoHandle = partHandle;
+                    matData.albedoTextureHash = partHash;
+                    if (RemixAPI.IsOpenRemix && isTinted)
+                    {
+                        Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
+                        matData.albedoColor = new Color(linTint.r, linTint.g, linTint.b, matData.albedoColor.a);
+                    }
+                    else
+                    {
+                        matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
+                    }
+                }
+                else if (remap.HasValue || hsbc.HasValue || (!RemixAPI.IsOpenRemix && isTinted))
                 {
                     var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap, hsbc);
                     matData.albedoHandle = tintedHandle;
@@ -1060,7 +1080,13 @@ namespace UnityRemix
                             && ((material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") > 0.5f) || hasMpbOverride)
                             && matData.albedoHandle != IntPtr.Zero)
                         {
-                            if (albedoTex != null)
+                            if (matData.suppressLightGeneration && RemixAPI.IsOpenRemix)
+                            {
+                                // Reuse the de-fringed particle albedo texture directly; OpenRemix multiplies emissiveColorConstant in the shader
+                                matData.emissiveHandle = matData.albedoHandle;
+                                matData.emissiveTextureHash = matData.albedoTextureHash;
+                            }
+                            else if (albedoTex != null)
                             {
                                 var (emHandle, emHash) = UploadTintedEmissiveTexture(albedoTex, matData.emissiveColor);
                                 matData.emissiveHandle = emHandle;
@@ -1373,13 +1399,13 @@ namespace UnityRemix
                     
                     RenderTexture tmp = RenderTexture.GetTemporary(
                         unityTexture.width, unityTexture.height, 0,
-                        RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+                        RenderTextureFormat.ARGB32, isNormalMap ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
                     
                     RenderTexture previous = RenderTexture.active;
                     Graphics.Blit(unityTexture, tmp);
                     RenderTexture.active = tmp;
                     
-                    Texture2D readableTexture = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, true);
+                    Texture2D readableTexture = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, isNormalMap);
                     readableTexture.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
                     readableTexture.Apply();
                     
@@ -1459,11 +1485,11 @@ namespace UnityRemix
                             
                             RenderTexture tmpGpu = RenderTexture.GetTemporary(
                                 unityTexture.width, unityTexture.height, 0,
-                                RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+                                RenderTextureFormat.ARGB32, isNormalMap ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
                             RenderTexture prevActive = RenderTexture.active;
                             Graphics.Blit(unityTexture, tmpGpu);
                             RenderTexture.active = tmpGpu;
-                            Texture2D convTex = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, true);
+                            Texture2D convTex = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, isNormalMap);
                             convTex.ReadPixels(new Rect(0, 0, tmpGpu.width, tmpGpu.height), 0, 0);
                             convTex.Apply();
                             RenderTexture.active = prevActive;
@@ -1604,11 +1630,11 @@ namespace UnityRemix
                 else
                 {
                     RenderTexture tmp = RenderTexture.GetTemporary(
-                        tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+                        tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
                     RenderTexture prev = RenderTexture.active;
                     Graphics.Blit(tex, tmp);
                     RenderTexture.active = tmp;
-                    Texture2D readable = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, true);
+                    Texture2D readable = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, false);
                     readable.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
                     readable.Apply();
                     RenderTexture.active = prev;
@@ -1660,6 +1686,235 @@ namespace UnityRemix
             catch (Exception ex)
             {
                 logger.LogError($"Exception uploading tinted emissive '{tex.name}': {ex.Message}");
+                return (IntPtr.Zero, 0);
+            }
+        }
+
+        /// <summary>
+        /// Upload a particle/trail sprite texture with automatic black-background alpha extraction
+        /// and premultiplied/dark-matte edge de-fringing so transparent particles never render with black outlines.
+        /// Cached per Texture2D in OpenRemix (where tint is applied in scene.glsl).
+        /// </summary>
+        private (IntPtr handle, ulong hash) UploadParticleTexture(Texture2D tex, Material mat, Color albedoColor)
+        {
+            if (tex == null || createTextureFunc == null)
+                return (IntPtr.Zero, 0);
+
+            bool applyCpuTint = !RemixAPI.IsOpenRemix && (albedoColor.r < 0.98f || albedoColor.g < 0.98f || albedoColor.b < 0.98f);
+            Color gammaColor = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? albedoColor.gamma : albedoColor;
+            float tintR = applyCpuTint ? Mathf.Clamp01(gammaColor.r) : 1f;
+            float tintG = applyCpuTint ? Mathf.Clamp01(gammaColor.g) : 1f;
+            float tintB = applyCpuTint ? Mathf.Clamp01(gammaColor.b) : 1f;
+            int tintKey = applyCpuTint ? (((int)(tintR * 255f) << 16) | ((int)(tintG * 255f) << 8) | (int)(tintB * 255f)) : 0;
+
+            bool isAdditiveShader = false;
+            if (mat != null)
+            {
+                string sName = mat.shader != null ? mat.shader.name : "";
+                string mName = mat.name ?? "";
+                if (sName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    mName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    (mat.HasProperty("_DstBlend") && Mathf.RoundToInt(mat.GetFloat("_DstBlend")) == 1))
+                {
+                    isAdditiveShader = true;
+                }
+            }
+
+            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((isAdditiveShader ? 1L : 0L) << 24) ^ (uint)tintKey);
+
+            lock (pendingTextureLock)
+            {
+                if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
+                    return cached;
+                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
+                    return (new IntPtr((long)pHash), pHash);
+            }
+
+            try
+            {
+                Color32[] pixels;
+                if (tex.isReadable)
+                {
+                    pixels = tex.GetPixels32();
+                }
+                else
+                {
+                    RenderTexture tmp = RenderTexture.GetTemporary(
+                        tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                    RenderTexture prev = RenderTexture.active;
+                    Graphics.Blit(tex, tmp);
+                    RenderTexture.active = tmp;
+                    Texture2D readable = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, false);
+                    readable.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
+                    readable.Apply();
+                    RenderTexture.active = prev;
+                    RenderTexture.ReleaseTemporary(tmp);
+                    pixels = readable.GetPixels32();
+                    UnityEngine.Object.Destroy(readable);
+                }
+
+                int totalPixels = pixels.Length;
+                int opaqueAlphaCount = 0;
+                long sumR = 0, sumG = 0, sumB = 0;
+                int interiorCount = 0;
+
+                for (int i = 0; i < totalPixels; i++)
+                {
+                    Color32 c = pixels[i];
+                    if (c.a >= 250) opaqueAlphaCount++;
+                    int maxCh = Math.Max(c.r, Math.Max(c.g, c.b));
+                    if (c.a >= 180 && maxCh > 24)
+                    {
+                        sumR += c.r;
+                        sumG += c.g;
+                        sumB += c.b;
+                        interiorCount++;
+                    }
+                }
+
+                // Check border pixels to see if an alpha-less texture has a black background (additive sprite)
+                int w = tex.width;
+                int h = tex.height;
+                int darkBorderCount = 0;
+                int borderSamples = 0;
+                if (w > 2 && h > 2)
+                {
+                    int stepX = Math.Max(1, w / 16);
+                    int stepY = Math.Max(1, h / 16);
+                    for (int x = 0; x < w; x += stepX)
+                    {
+                        Color32 cTop = pixels[x];
+                        Color32 cBot = pixels[(h - 1) * w + x];
+                        if (Math.Max(cTop.r, Math.Max(cTop.g, cTop.b)) <= 20) darkBorderCount++;
+                        if (Math.Max(cBot.r, Math.Max(cBot.g, cBot.b)) <= 20) darkBorderCount++;
+                        borderSamples += 2;
+                    }
+                    for (int y = 0; y < h; y += stepY)
+                    {
+                        Color32 cLeft = pixels[y * w];
+                        Color32 cRight = pixels[y * w + (w - 1)];
+                        if (Math.Max(cLeft.r, Math.Max(cLeft.g, cLeft.b)) <= 20) darkBorderCount++;
+                        if (Math.Max(cRight.r, Math.Max(cRight.g, cRight.b)) <= 20) darkBorderCount++;
+                        borderSamples += 2;
+                    }
+                }
+
+                bool hasNoAlphaChannel = opaqueAlphaCount >= (int)(totalPixels * 0.92f);
+                bool hasDarkBorder = borderSamples > 0 && darkBorderCount >= (int)(borderSamples * 0.65f);
+                bool treatAsBlackBgAdditive = isAdditiveShader || (hasNoAlphaChannel && hasDarkBorder);
+
+                byte avgR = interiorCount > 0 ? (byte)Mathf.Clamp((int)(sumR / interiorCount), 32, 255) : (byte)255;
+                byte avgG = interiorCount > 0 ? (byte)Mathf.Clamp((int)(sumG / interiorCount), 32, 255) : (byte)255;
+                byte avgB = interiorCount > 0 ? (byte)Mathf.Clamp((int)(sumB / interiorCount), 32, 255) : (byte)255;
+                int avgMax = Math.Max((int)avgR, Math.Max((int)avgG, (int)avgB));
+
+                byte[] pixelData = new byte[totalPixels * 4];
+                for (int i = 0; i < totalPixels; i++)
+                {
+                    Color32 c = pixels[i];
+                    byte r = c.r;
+                    byte g = c.g;
+                    byte b = c.b;
+                    byte a = c.a;
+                    int maxCh = Math.Max(r, Math.Max(g, b));
+
+                    if (treatAsBlackBgAdditive)
+                    {
+                        // Convert black-background luminance into alpha and un-premultiply RGB so soft edges
+                        // are bright and translucent rather than dark black outlines
+                        int effAlpha = (maxCh * a) / 255;
+                        if (effAlpha <= 12)
+                        {
+                            r = 0; g = 0; b = 0; a = 0;
+                        }
+                        else
+                        {
+                            a = (byte)Math.Min(255, effAlpha);
+                            if (maxCh > 0 && maxCh < 255)
+                            {
+                                float scale = 255f / maxCh;
+                                r = (byte)Mathf.Clamp(Mathf.RoundToInt(r * scale), 0, 255);
+                                g = (byte)Mathf.Clamp(Mathf.RoundToInt(g * scale), 0, 255);
+                                b = (byte)Mathf.Clamp(Mathf.RoundToInt(b * scale), 0, 255);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Standard alpha-channel particle sprite: de-fringe dark/black border pixels
+                        // where RGB was premultiplied or matted against black
+                        if (a <= 12 || (a < 192 && maxCh <= 10))
+                        {
+                            r = avgR;
+                            g = avgG;
+                            b = avgB;
+                            a = 0;
+                        }
+                        else if (a < 245)
+                        {
+                            if (maxCh == 0)
+                            {
+                                r = avgR;
+                                g = avgG;
+                                b = avgB;
+                            }
+                            else if (maxCh < avgMax && maxCh <= a + 24)
+                            {
+                                // Un-premultiply RGB that was darkened proportional to alpha at the sprite edge
+                                float unpremult = 255f / Math.Max((int)a, 24);
+                                float maxAllowedScale = (float)avgMax / maxCh;
+                                float scale = Math.Min(unpremult, maxAllowedScale);
+                                if (scale > 1.0f)
+                                {
+                                    r = (byte)Mathf.Clamp(Mathf.RoundToInt(r * scale), 0, 255);
+                                    g = (byte)Mathf.Clamp(Mathf.RoundToInt(g * scale), 0, 255);
+                                    b = (byte)Mathf.Clamp(Mathf.RoundToInt(b * scale), 0, 255);
+                                }
+                            }
+                        }
+                    }
+
+                    if (applyCpuTint)
+                    {
+                        r = (byte)Mathf.Clamp(Mathf.RoundToInt(r * tintR), 0, 255);
+                        g = (byte)Mathf.Clamp(Mathf.RoundToInt(g * tintG), 0, 255);
+                        b = (byte)Mathf.Clamp(Mathf.RoundToInt(b * tintB), 0, 255);
+                    }
+
+                    pixelData[i * 4 + 0] = r;
+                    pixelData[i * 4 + 1] = g;
+                    pixelData[i * 4 + 2] = b;
+                    pixelData[i * 4 + 3] = a;
+                }
+
+                texturesWithAlpha.Add(tex.GetInstanceID());
+                texturesWithCutoutAlpha.Add(tex.GetInstanceID());
+
+                ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);
+                if (hash == 0) hash = 1;
+
+                lock (pendingTextureLock)
+                {
+                    pendingTextureUploads.Enqueue(new PendingTextureUpload
+                    {
+                        texId = -1,
+                        tintedCacheKey = cacheKey,
+                        pixelData = pixelData,
+                        hash = hash,
+                        width = (uint)tex.width,
+                        height = (uint)tex.height,
+                        mipLevels = 1,
+                        format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                    });
+                    pendingTintedKeys.Add(cacheKey);
+                    pendingTintedHashes[cacheKey] = hash;
+                }
+
+                return (new IntPtr((long)hash), hash);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Exception uploading particle texture '{tex.name}': {ex.Message}");
                 return (IntPtr.Zero, 0);
             }
         }
@@ -2320,10 +2575,13 @@ namespace UnityRemix
         /// Detect if a material represents a physical translucent material (Water body or Glass thin wall) for OpenRemix.
         /// </summary>
         private (TranslucentKind kind, float ior, float distance, Color color, string reason) DetectTranslucentKind(
-            Material material, string matName, string shaderName, Renderer renderer, AlphaMode alphaMode, Color albedoColor, float roughness)
+            Material material, string matName, string shaderName, Renderer renderer, AlphaMode alphaMode, Color albedoColor, float roughness, bool isParticleOrTrail = false)
         {
             if (waterManager != null && !waterManager.ConfigEnableTranslucents.Value)
                 return (TranslucentKind.None, 1.0f, 0f, Color.white, "disabled");
+
+            if (isParticleOrTrail || renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer)
+                return (TranslucentKind.None, 1.0f, 0f, Color.white, "particle");
 
             int layer = renderer != null ? renderer.gameObject.layer : -1;
             string layerName = layer >= 0 ? LayerMask.LayerToName(layer) : null;
@@ -2331,12 +2589,14 @@ namespace UnityRemix
             string mName = matName ?? "";
             string sName = shaderName ?? "";
 
-            // Non-rendered or invisible materials (e.g. InvisibleFace triggers, blockers) must never be converted to translucent water or glass
+            // Non-rendered or invisible materials (e.g. InvisibleFace triggers, blockers) and particle/decal/splash effects must never be converted to translucent water or glass
             if (SceneMeshScanner.IsMaterialOrShaderInvisible(material) ||
-                MatchesAnyKeyword(mName, "invisible", "nodraw", "trigger", "collisiononly", "zerostencilbuffer", "portalocclusion") ||
-                MatchesAnyKeyword(sName, "invisible", "nodraw", "clear"))
+                MatchesAnyKeyword(mName, "invisible", "nodraw", "trigger", "collisiononly", "zerostencilbuffer", "portalocclusion",
+                    "particle", "trail", "drop", "drip", "splash", "spurt", "stain", "splat", "spark", "mist", "bubble", "pool", "fallback", "giblet", "chunk", "warning", "shockwave", "flash", "beam") ||
+                MatchesAnyKeyword(sName, "invisible", "nodraw", "clear", "particle") ||
+                (goName != null && MatchesAnyKeyword(goName, "particle", "trail", "drop", "drip", "splash", "spurt", "stain", "splat", "spark", "giblet", "chunk", "warning")))
             {
-                return (TranslucentKind.None, 1.0f, 0f, Color.white, "invisible");
+                return (TranslucentKind.None, 1.0f, 0f, Color.white, "excluded");
             }
 
             bool enableWater = waterManager == null || waterManager.ConfigEnableWater.Value;
@@ -2364,7 +2624,7 @@ namespace UnityRemix
                 // Material name heuristics
                 else if (MatchesAnyKeyword(mName, "water", "ocean", "river", "lake", "pond", "waterfall", "liquid", "aquatic", "puddle", "stream",
                          "blood", "mulch", "gore", "flesh", "slime", "toxic", "acid", "sewer", "poison") &&
-                         !MatchesAnyKeyword(mName, "watermark", "resistwater", "resistWater", "waterproof", "decal", "splatter", "spray", "particle"))
+                         !MatchesAnyKeyword(mName, "watermark", "resistwater", "resistWater", "waterproof", "decal", "splatter", "spray", "particle", "drop", "splash", "stain", "pool", "fallback", "trail"))
                 {
                     isLiquid = true;
                     reason = $"matName:{mName}";
@@ -2372,7 +2632,7 @@ namespace UnityRemix
                 // GameObject name heuristics
                 else if (goName != null && MatchesAnyKeyword(goName, "waterfall", "water_plane", "waterplane", "ocean", "river", "pond", "lake",
                          "blood", "mulch", "gore", "slime", "toxic", "acid") &&
-                         !MatchesAnyKeyword(goName, "watermark", "resistwater", "resistWater", "underwateroverlay", "decal", "splatter", "spray", "particle"))
+                         !MatchesAnyKeyword(goName, "watermark", "resistwater", "resistWater", "underwateroverlay", "decal", "splatter", "spray", "particle", "drop", "splash", "stain", "pool", "fallback", "trail"))
                 {
                     isLiquid = true;
                     reason = $"goName:{goName}";
@@ -3141,22 +3401,31 @@ namespace UnityRemix
                             opaqueExt.alphaTestType = 6;
                             opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
                                 ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
-                                : (byte)1;
+                                : (byte)127;
                             break;
                         case AlphaMode.Blend:
                             // DXVK-Remix compatibility
                             opaqueExt.blendType_hasvalue = 1; // remixapi_Bool.True
                             opaqueExt.blendType_value = 1;
-                            // OpenRemix: enable alpha testing (GREATER_OR_EQUAL) so alpha==0 texels are discarded in acceptCandidate
+                            // OpenRemix: enable alpha testing (GREATER_OR_EQUAL) so near-zero alpha texels are discarded in acceptCandidate
                             opaqueExt.alphaTestType = 6;
-                            opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
-                                ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
-                                : (byte)1;
-                            // Ensure opacityConstant < 1.0f so OpenRemix sets material->translucent = true
-                            // and enables coverageBlended layer traversal for semi-transparent particles and sheets.
-                            if (opaqueExt.opacityConstant >= 1.0f)
+                            if (matData.suppressLightGeneration && RemixAPI.IsOpenRemix)
                             {
-                                opaqueExt.opacityConstant = 0.999f;
+                                // Particle/trail instances carry remixapi_InstanceInfoBlendEXT (alphaBlendEnabled = 1 -> hit.blended = true).
+                                // Keep opacityConstant = 1.0f so OpenRemix does NOT set material->translucent = true (hit.tinted = true),
+                                // which would disable coverageBlended and multiply background rays by dark edge RGB (black outlines).
+                                opaqueExt.alphaReferenceValue = 16;
+                                opaqueExt.opacityConstant = 1.0f;
+                            }
+                            else
+                            {
+                                opaqueExt.alphaReferenceValue = matData.alphaCutoff > 0
+                                    ? (byte)Mathf.Clamp((int)(matData.alphaCutoff * 255f), 1, 255)
+                                    : (byte)16;
+                                if (opaqueExt.opacityConstant >= 1.0f)
+                                {
+                                    opaqueExt.opacityConstant = 0.999f;
+                                }
                             }
                             break;
                     }

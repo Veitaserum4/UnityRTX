@@ -326,6 +326,30 @@ namespace UnityRemix
         }
 
         [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_InstanceInfoBlendEXT
+        {
+            public remixapi_StructType sType;
+            public IntPtr pNext;
+            public uint alphaBlendEnabled;
+            public uint srcColorBlendFactor;
+            public uint dstColorBlendFactor;
+            public uint colorBlendOp;
+            public uint textureColorArg1Source;
+            public uint textureColorArg2Source;
+            public uint textureColorOperation;
+            public uint textureAlphaArg1Source;
+            public uint textureAlphaArg2Source;
+            public uint textureAlphaOperation;
+            public uint tFactor;
+            public uint isTextureFactorBlend;
+            public uint isVertexColorBakedLighting;
+            public uint srcAlphaBlendFactor;
+            public uint dstAlphaBlendFactor;
+            public uint alphaBlendOp;
+            public uint writeMask;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_InstanceIdentityEXT
         {
             public remixapi_StructType sType;
