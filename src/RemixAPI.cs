@@ -330,6 +330,10 @@ namespace UnityRemix
         {
             public remixapi_StructType sType;
             public IntPtr pNext;
+            public uint alphaTestEnabled;
+            public byte alphaTestReferenceValue;
+            // 3 bytes implicit padding before uint32 alphaTestCompareOp
+            public uint alphaTestCompareOp;
             public uint alphaBlendEnabled;
             public uint srcColorBlendFactor;
             public uint dstColorBlendFactor;
@@ -342,11 +346,11 @@ namespace UnityRemix
             public uint textureAlphaOperation;
             public uint tFactor;
             public uint isTextureFactorBlend;
-            public uint isVertexColorBakedLighting;
             public uint srcAlphaBlendFactor;
             public uint dstAlphaBlendFactor;
             public uint alphaBlendOp;
             public uint writeMask;
+            public uint isVertexColorBakedLighting;
         }
 
         [StructLayout(LayoutKind.Sequential)]

@@ -2801,7 +2801,7 @@ namespace UnityRemix
                 for (int pIdx = 0; pIdx < Math.Min(actualAlive, 8); pIdx++)
                 {
                     Color32 c = _particleBuffer[pIdx].startColor;
-                    if (c.a > 10 && (c.r > 10 || c.g > 10 || c.b > 10))
+                    if (c.a > 0 && (c.r > 2 || c.g > 2 || c.b > 2))
                     {
                         pCol = (Color)c;
                         foundAliveColor = true;
@@ -2811,7 +2811,7 @@ namespace UnityRemix
                 if (!foundAliveColor && actualAlive > 0)
                 {
                     Color32 c = _particleBuffer[0].GetCurrentColor(ps);
-                    if (c.a > 10 && (c.r > 10 || c.g > 10 || c.b > 10))
+                    if (c.a > 0 && (c.r > 2 || c.g > 2 || c.b > 2))
                     {
                         pCol = (Color)c;
                         foundAliveColor = true;
@@ -2843,37 +2843,41 @@ namespace UnityRemix
                     _materialTintCache[matInstId] = matTint;
                 }
 
+                float matAlpha = Mathf.Clamp01(matTint.a);
+
                 Color finalParticleColor = new Color(
                     pCol.r * matTint.r,
                     pCol.g * matTint.g,
                     pCol.b * matTint.b,
-                    Mathf.Clamp01(Math.Max(pCol.a, matTint.a))
+                    Mathf.Clamp01(pCol.a * matAlpha)
                 );
 
                 if (finalParticleColor.r < 0.01f && finalParticleColor.g < 0.01f && finalParticleColor.b < 0.01f)
                 {
                     if (pCol.r > 0.05f || pCol.g > 0.05f || pCol.b > 0.05f)
-                        finalParticleColor = pCol;
+                        finalParticleColor = new Color(pCol.r, pCol.g, pCol.b, finalParticleColor.a);
                     else if (matTint.r > 0.05f || matTint.g > 0.05f || matTint.b > 0.05f)
-                        finalParticleColor = matTint;
+                        finalParticleColor = new Color(matTint.r, matTint.g, matTint.b, finalParticleColor.a);
                 }
+
+                bool isEmissiveParticle = IsEmissiveParticleSystem(pr, mat);
+                float emIntensity = isEmissiveParticle ? 0.8f : 0f;
 
                 // Quantize color (0..15 per channel) to group similar tints and prevent material explosion
                 int r4 = Mathf.Clamp((int)(finalParticleColor.r * 15f + 0.5f), 0, 15);
                 int g4 = Mathf.Clamp((int)(finalParticleColor.g * 15f + 0.5f), 0, 15);
                 int b4 = Mathf.Clamp((int)(finalParticleColor.b * 15f + 0.5f), 0, 15);
-                int colorKey = (r4 << 8) | (g4 << 4) | b4;
+                int colorKey = (isEmissiveParticle ? (1 << 12) : 0) | (r4 << 8) | (g4 << 4) | b4;
                 Color quantizedColor = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
 
                 int tintedMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
-                float emIntensity = (r4 != g4 || g4 != b4) ? 0.8f : 0.2f;
 
                 if (_capturedParticleMatIds.Add(tintedMatId))
                 {
                     materialManager.CaptureMaterialTextures(
                         mat, 
                         tintedMatId, 
-                        mpbEmissiveColor: quantizedColor, 
+                        mpbEmissiveColor: isEmissiveParticle ? (Color?)quantizedColor : null, 
                         mpbEmissiveIntensity: emIntensity, 
                         mpbColor: quantizedColor,
                         suppressLightGeneration: true,
@@ -2885,7 +2889,7 @@ namespace UnityRemix
                 {
                     if (loggedParticleSystems.Add(pr.name))
                     {
-                        logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', color=({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}))");
+                        logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', color=({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}), matAlpha={matAlpha:F2}, em={emIntensity:F1})");
                     }
                 }
 
@@ -2906,12 +2910,12 @@ namespace UnityRemix
 
                 if (!isSurfaceAligned && pr.renderMode == ParticleSystemRenderMode.Mesh)
                 {
-                    if (!BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, state))
+                    if (!BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, matAlpha, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
                         renderedParticles += particlesToDraw;
                         var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
-                        AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, isSurfaceAligned);
+                        AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, matAlpha, isSurfaceAligned);
                         if (collectEmitters && emitterDetails.Count < 200)
                         {
                             emitterDetails.Add(new ParticleEmitterInfo
@@ -2944,7 +2948,7 @@ namespace UnityRemix
                     int particlesToDraw = Math.Min(actualAlive, 4096);
                     renderedParticles += particlesToDraw;
                     var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
-                    AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, isSurfaceAligned);
+                    AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, matAlpha, isSurfaceAligned);
                     if (collectEmitters && emitterDetails.Count < 200)
                     {
                         emitterDetails.Add(new ParticleEmitterInfo
@@ -3045,6 +3049,77 @@ namespace UnityRemix
             return bucket;
         }
 
+        private static bool IsEmissiveParticleSystem(ParticleSystemRenderer pr, Material mat)
+        {
+            if (mat != null)
+            {
+                if (mat.HasProperty("EMISSIVE") && mat.GetFloat("EMISSIVE") > 0.5f)
+                    return true;
+                if (mat.IsKeywordEnabled("_EMISSION") && mat.HasProperty("_EmissionColor"))
+                {
+                    Color ec = mat.GetColor("_EmissionColor");
+                    if (ec.r > 0.05f || ec.g > 0.05f || ec.b > 0.05f)
+                        return true;
+                }
+                if (mat.HasProperty("_SrcBlend") && mat.HasProperty("_DstBlend"))
+                {
+                    int dst = mat.GetInt("_DstBlend");
+                    if (dst == (int)UnityEngine.Rendering.BlendMode.One)
+                        return true;
+                }
+                string shName = mat.shader != null ? mat.shader.name : "";
+                if (shName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+
+            string name = (pr != null ? pr.name : "") + " " + (mat != null ? mat.name : "");
+            if (name.IndexOf("smoke", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("steam", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("fog", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("mist", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("dust", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("cloud", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("blood", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("gore", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("gib", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("water", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("splash", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("drip", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("rubble", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("debris", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("dirt", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return false;
+            }
+
+            if (name.IndexOf("spark", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("fire", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("flame", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("glow", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("laser", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("beam", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("charge", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("flash", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("explo", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("electr", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("lightn", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("plasma", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("orb", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("energy", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("ember", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("muzzle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("portal", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("holy", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("hell", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("radian", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                name.IndexOf("additive", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            return false;
+        }
+
         private void AppendBillboardParticles(
             ParticleBatchBucket bucket,
             ParticleSystemRenderer pr,
@@ -3054,6 +3129,7 @@ namespace UnityRemix
             Vector3 camRight,
             Vector3 camUp,
             Vector3 camForward,
+            float matAlpha = 1f,
             bool isSurfaceAligned = false)
         {
             var mainModule = ps.main;
@@ -3102,6 +3178,10 @@ namespace UnityRemix
                     size = isStartSize3D ? p.startSize3D : (Vector3.one * p.startSize);
 
                 Color32 col = hasColorOverLifetime ? p.GetCurrentColor(ps) : p.startColor;
+                if (matAlpha < 0.999f)
+                {
+                    col.a = (byte)Mathf.Clamp(Mathf.RoundToInt(col.a * matAlpha), 0, 255);
+                }
 
                 float rot = p.rotation;
                 float cosR = 1f;
@@ -3288,7 +3368,7 @@ namespace UnityRemix
             bucket.ParticleCount += numParticlesAlive;
         }
 
-        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, ParticleSystem ps, Camera cam, int matId, FrameState state)
+        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, ParticleSystem ps, Camera cam, int matId, float matAlpha, FrameState state)
         {
             if (_reusableParticleMesh == null)
             {
@@ -3319,6 +3399,15 @@ namespace UnityRemix
                     bool isWorldSpace = ps != null && ps.main.simulationSpace == ParticleSystemSimulationSpace.World;
                     Matrix4x4 particleLocalToWorld = isWorldSpace ? Matrix4x4.identity : pr.transform.localToWorldMatrix;
 
+                    var colors = _reusableParticleMesh.colors32;
+                    if (matAlpha < 0.999f && colors != null && colors.Length > 0)
+                    {
+                        for (int ci = 0; ci < colors.Length; ci++)
+                        {
+                            colors[ci].a = (byte)Mathf.Clamp(Mathf.RoundToInt(colors[ci].a * matAlpha), 0, 255);
+                        }
+                    }
+
                     state.skinned.Add(new SkinnedMeshData
                     {
                         meshId = pr.GetInstanceID(),
@@ -3327,7 +3416,7 @@ namespace UnityRemix
                         vertices = verts,
                         normals = _reusableParticleMesh.normals,
                         uvs = _reusableParticleMesh.uv,
-                        colors = _reusableParticleMesh.colors32,
+                        colors = colors,
                         triangles = _reusableParticleMesh.triangles,
                         localToWorld = particleLocalToWorld,
                         boneTransforms = null,

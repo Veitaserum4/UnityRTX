@@ -1756,19 +1756,20 @@ namespace UnityRemix
                 int totalPixels = pixels.Length;
                 int opaqueAlphaCount = 0;
                 long sumR = 0, sumG = 0, sumB = 0;
-                int interiorCount = 0;
+                long weightSum = 0;
 
                 for (int i = 0; i < totalPixels; i++)
                 {
                     Color32 c = pixels[i];
                     if (c.a >= 250) opaqueAlphaCount++;
                     int maxCh = Math.Max(c.r, Math.Max(c.g, c.b));
-                    if (c.a >= 180 && maxCh > 24)
+                    if (c.a > 16 && maxCh > 16)
                     {
-                        sumR += c.r;
-                        sumG += c.g;
-                        sumB += c.b;
-                        interiorCount++;
+                        long wA = c.a;
+                        sumR += c.r * wA;
+                        sumG += c.g * wA;
+                        sumB += c.b * wA;
+                        weightSum += wA;
                     }
                 }
 
@@ -1803,10 +1804,9 @@ namespace UnityRemix
                 bool hasDarkBorder = borderSamples > 0 && darkBorderCount >= (int)(borderSamples * 0.65f);
                 bool treatAsBlackBgAdditive = isAdditiveShader || (hasNoAlphaChannel && hasDarkBorder);
 
-                byte avgR = interiorCount > 0 ? (byte)Mathf.Clamp((int)(sumR / interiorCount), 32, 255) : (byte)255;
-                byte avgG = interiorCount > 0 ? (byte)Mathf.Clamp((int)(sumG / interiorCount), 32, 255) : (byte)255;
-                byte avgB = interiorCount > 0 ? (byte)Mathf.Clamp((int)(sumB / interiorCount), 32, 255) : (byte)255;
-                int avgMax = Math.Max((int)avgR, Math.Max((int)avgG, (int)avgB));
+                byte avgR = weightSum > 0 ? (byte)Mathf.Clamp((int)(sumR / weightSum), 16, 255) : (byte)180;
+                byte avgG = weightSum > 0 ? (byte)Mathf.Clamp((int)(sumG / weightSum), 16, 255) : (byte)180;
+                byte avgB = weightSum > 0 ? (byte)Mathf.Clamp((int)(sumB / weightSum), 16, 255) : (byte)180;
 
                 byte[] pixelData = new byte[totalPixels * 4];
                 for (int i = 0; i < totalPixels; i++)
@@ -1820,19 +1820,19 @@ namespace UnityRemix
 
                     if (treatAsBlackBgAdditive)
                     {
-                        // Convert black-background luminance into alpha and un-premultiply RGB so soft edges
-                        // are bright and translucent rather than dark black outlines
+                        // Convert black-background luminance into alpha and moderately un-premultiply RGB
+                        // so soft edges are translucent rather than dark black outlines
                         int effAlpha = (maxCh * a) / 255;
-                        if (effAlpha <= 12)
+                        if (effAlpha <= 6)
                         {
-                            r = 0; g = 0; b = 0; a = 0;
+                            r = avgR; g = avgG; b = avgB; a = 0;
                         }
                         else
                         {
                             a = (byte)Math.Min(255, effAlpha);
                             if (maxCh > 0 && maxCh < 255)
                             {
-                                float scale = 255f / maxCh;
+                                float scale = Math.Min(255f / maxCh, 2.5f);
                                 r = (byte)Mathf.Clamp(Mathf.RoundToInt(r * scale), 0, 255);
                                 g = (byte)Mathf.Clamp(Mathf.RoundToInt(g * scale), 0, 255);
                                 b = (byte)Mathf.Clamp(Mathf.RoundToInt(b * scale), 0, 255);
@@ -1841,36 +1841,21 @@ namespace UnityRemix
                     }
                     else
                     {
-                        // Standard alpha-channel particle sprite: de-fringe dark/black border pixels
-                        // where RGB was premultiplied or matted against black
-                        if (a <= 12 || (a < 192 && maxCh <= 10))
+                        // Standard alpha-channel particle sprite: bleed average sprite RGB into near-zero-alpha
+                        // or pitch-black border pixels so bilinear filtering doesn't produce black outlines,
+                        // while preserving the exact authored RGB and alpha of subtle smoke/steam/dust textures.
+                        if (a <= 4 || (a < 64 && maxCh <= 6))
                         {
                             r = avgR;
                             g = avgG;
                             b = avgB;
                             a = 0;
                         }
-                        else if (a < 245)
+                        else if (maxCh <= 6)
                         {
-                            if (maxCh == 0)
-                            {
-                                r = avgR;
-                                g = avgG;
-                                b = avgB;
-                            }
-                            else if (maxCh < avgMax && maxCh <= a + 24)
-                            {
-                                // Un-premultiply RGB that was darkened proportional to alpha at the sprite edge
-                                float unpremult = 255f / Math.Max((int)a, 24);
-                                float maxAllowedScale = (float)avgMax / maxCh;
-                                float scale = Math.Min(unpremult, maxAllowedScale);
-                                if (scale > 1.0f)
-                                {
-                                    r = (byte)Mathf.Clamp(Mathf.RoundToInt(r * scale), 0, 255);
-                                    g = (byte)Mathf.Clamp(Mathf.RoundToInt(g * scale), 0, 255);
-                                    b = (byte)Mathf.Clamp(Mathf.RoundToInt(b * scale), 0, 255);
-                                }
-                            }
+                            r = avgR;
+                            g = avgG;
+                            b = avgB;
                         }
                     }
 
@@ -3414,7 +3399,8 @@ namespace UnityRemix
                                 // Particle/trail instances carry remixapi_InstanceInfoBlendEXT (alphaBlendEnabled = 1 -> hit.blended = true).
                                 // Keep opacityConstant = 1.0f so OpenRemix does NOT set material->translucent = true (hit.tinted = true),
                                 // which would disable coverageBlended and multiply background rays by dark edge RGB (black outlines).
-                                opaqueExt.alphaReferenceValue = 16;
+                                // Use alphaReferenceValue = 2 (~0.008 alpha) so very subtle smoke/steam particles are not hard-clipped while 0-alpha corners are discarded.
+                                opaqueExt.alphaReferenceValue = 2;
                                 opaqueExt.opacityConstant = 1.0f;
                             }
                             else
