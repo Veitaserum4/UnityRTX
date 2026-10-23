@@ -713,6 +713,35 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// OpenRemix CPU breakdown of the last traced frame's scene preparation (160 bytes on x64).
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_ScenePreparationEXT
+        {
+            public uint structSize;
+            public uint staticActive;
+            public double staticSyncMilliseconds;
+            public double viewModelMilliseconds;
+            public double frameMilliseconds;
+            public double opacityMilliseconds;
+            public double pruneMilliseconds;
+            public double lightingMilliseconds;
+            public double staticTableMilliseconds;
+            public ulong staticUnits;
+            public ulong staticChanges;
+            public ulong staticRebuiltUnits;
+            public ulong staticRemovedUnits;
+            public ulong staticResyncs;
+            public ulong staticReusedSurfaces;
+            public ulong staticRebuiltSurfaces;
+            public ulong frameInstances;
+            public ulong frameSurfaces;
+            public ulong opacityProofs;
+            public ulong emitters;
+            public ulong lights;
+        }
+
+        /// <summary>
         /// OpenRemix GPU tracing and BVH build statistics (128 bytes on x64).
         /// </summary>
         [StructLayout(LayoutKind.Sequential)]
@@ -871,6 +900,9 @@ namespace UnityRemix
         public delegate remixapi_ErrorCode PFN_remixapi_GetFrameBreakdownEXT(ref remixapi_FrameBreakdownEXT statistics);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetScenePreparationEXT(ref remixapi_ScenePreparationEXT statistics);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate remixapi_ErrorCode PFN_remixapi_GetTracingStatisticsEXT(ref remixapi_TracingStatisticsEXT statistics);
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -1006,6 +1038,7 @@ namespace UnityRemix
         public static PFN_remixapi_PumpEvents NativePumpEvents { get; private set; }
         public static PFN_remixapi_GetFramePerformanceEXT GetFramePerformanceEXTFunc { get; private set; }
         public static PFN_remixapi_GetFrameBreakdownEXT GetFrameBreakdownEXTFunc { get; private set; }
+        public static PFN_remixapi_GetScenePreparationEXT GetScenePreparationEXTFunc { get; private set; }
         public static PFN_remixapi_GetTracingStatisticsEXT GetTracingStatisticsEXTFunc { get; private set; }
         public static PFN_remixapi_GetTextureStatisticsEXT GetTextureStatisticsEXTFunc { get; private set; }
         public static PFN_remixapi_AddSceneInstancesEXT AddSceneInstancesEXTFunc { get; private set; }
@@ -1110,6 +1143,10 @@ namespace UnityRemix
                 IntPtr breakdownPtr = GetProcAddress(hModule, "remixapi_GetFrameBreakdownEXT");
                 if (breakdownPtr != IntPtr.Zero)
                     GetFrameBreakdownEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFrameBreakdownEXT>(breakdownPtr);
+
+                IntPtr scenePrepPtr = GetProcAddress(hModule, "remixapi_GetScenePreparationEXT");
+                if (scenePrepPtr != IntPtr.Zero)
+                    GetScenePreparationEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetScenePreparationEXT>(scenePrepPtr);
 
                 IntPtr tracingPtr = GetProcAddress(hModule, "remixapi_GetTracingStatisticsEXT");
                 if (tracingPtr != IntPtr.Zero)
@@ -1258,6 +1295,7 @@ namespace UnityRemix
             NativePumpEvents = null;
             GetFramePerformanceEXTFunc = null;
             GetFrameBreakdownEXTFunc = null;
+            GetScenePreparationEXTFunc = null;
             GetTracingStatisticsEXTFunc = null;
             GetTextureStatisticsEXTFunc = null;
             AddSceneInstancesEXTFunc = null;

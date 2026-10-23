@@ -79,6 +79,8 @@ namespace UnityRemix
         private static RemixAPI.remixapi_FrameBreakdownEXT _curFrameBreakdown;
         private static RemixAPI.remixapi_TracingStatisticsEXT _curTracingStats;
         private static RemixAPI.remixapi_TextureStatisticsEXT _curTextureStats;
+        private static volatile bool _hasScenePreparation;
+        private static RemixAPI.remixapi_ScenePreparationEXT _curScenePreparation;
         private static ulong _prevLogTexturesCreated;
         private static ulong _prevLogMaterialsCreated;
         private static ulong _prevLogGpuTexturesCreated;
@@ -243,6 +245,12 @@ namespace UnityRemix
             _hasNativeTelemetry = true;
         }
 
+        public static void RecordScenePreparation(in RemixAPI.remixapi_ScenePreparationEXT scenePreparation)
+        {
+            _curScenePreparation = scenePreparation;
+            _hasScenePreparation = true;
+        }
+
         private static void FlushLog()
         {
             if (_statSampleCount == 0 || Logger == null || !Enabled) return;
@@ -276,6 +284,14 @@ namespace UnityRemix
                 nativeMsg =
                     $"\n  OpenRemix CPU: Present={fp.presentMilliseconds:F2}ms (Scene={fp.sceneMilliseconds:F2}ms, Record={fp.recordMilliseconds:F2}ms [Geom={fp.geometryMilliseconds:F2}ms, Upload={fp.uploadMilliseconds:F2}ms ({fp.uploadBytes / 1024}KB), Accel={fp.accelerationMilliseconds:F2}ms, UI={fb.uiMilliseconds:F2}ms], Fence={fp.fenceMilliseconds:F2}ms, Submit={fp.submitMilliseconds:F2}ms)" +
                     $"\n  OpenRemix Cache & GPU: GeomHits={fp.geometryCacheHits}/{fp.geometryCacheHits + fp.geometryConversions}, BufHits={fp.bufferCacheHits}/{fp.bufferCacheHits + fp.bufferAllocations}, TraceInst={fb.traceInstances}, TraceSurf={fb.traceSurfaces}, GPU(Build={ts.gpuBuildMilliseconds:F2}ms, Trace={ts.gpuTraceMilliseconds:F2}ms), BLAS(B={ts.blasBuilds}/R={ts.blasRefits}), DynTLAS(B={ts.dynamicTlasBuilds}/R={ts.dynamicTlasRefits}), Turnover(+{deltaTex} tex, +{deltaMat} mat, GPU +{deltaGpuTex} tex/+{deltaGpuMat} mat, Create={tx.gpuCreateMilliseconds:F1}ms)";
+
+                if (_hasScenePreparation)
+                {
+                    var sp = _curScenePreparation;
+                    nativeMsg +=
+                        $"\n  OpenRemix Scene: Sync={sp.staticSyncMilliseconds:F2}ms, Frame={sp.frameMilliseconds:F2}ms, Opacity={sp.opacityMilliseconds:F2}ms ({sp.opacityProofs} proofs), Prune={sp.pruneMilliseconds:F2}ms, Lighting={sp.lightingMilliseconds:F2}ms ({sp.lights} lights, {sp.emitters} emitters), ViewModel={sp.viewModelMilliseconds:F2}ms | " +
+                        $"Static(active={sp.staticActive}, units={sp.staticUnits}, changes={sp.staticChanges}, rebuilt={sp.staticRebuiltUnits}, removed={sp.staticRemovedUnits}, resyncs={sp.staticResyncs}, tables={sp.staticTableMilliseconds:F2}ms, surf reused/rebuilt={sp.staticReusedSurfaces}/{sp.staticRebuiltSurfaces}) | FrameInst={sp.frameInstances}, FrameSurf={sp.frameSurfaces}";
+                }
             }
 
             Logger.LogInfo(
