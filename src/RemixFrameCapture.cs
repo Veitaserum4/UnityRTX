@@ -661,8 +661,12 @@ namespace UnityRemix
             public uint categoryFlags;
         }
         
+        // What produced a per-frame mesh, for the render thread's upload statistics.
+        public enum DynamicSource : byte { Skinned, Scrolling, WorldUI, Billboard, MeshInstanced, MeshBaked, ParticleTrail, Trail, Count }
+
         public struct SkinnedMeshData
         {
+            public DynamicSource source;
             public int meshId;
             public ulong remixMeshHash;
             public int materialId;  // Unity material instance ID
@@ -1979,6 +1983,7 @@ namespace UnityRemix
 
                 state.skinned.Add(new SkinnedMeshData
                 {
+                    source = DynamicSource.Scrolling,
                     meshId = rendererId ^ (s * 10007),
                     remixMeshHash = remixMeshHash,
                     materialId = matId,
@@ -2712,6 +2717,7 @@ namespace UnityRemix
 
                 state.skinned.Add(new SkinnedMeshData
                 {
+                    source = DynamicSource.WorldUI,
                     meshId = graphicId,
                     remixMeshHash = remixMeshHash,
                     materialId = uiMatId,
@@ -3184,6 +3190,7 @@ namespace UnityRemix
 
                 state.skinned.Add(new SkinnedMeshData
                 {
+                    source = DynamicSource.Billboard,
                     meshId = bucket.MaterialId,
                     remixMeshHash = remixMeshHash,
                     materialId = bucket.MaterialId,
@@ -3932,6 +3939,7 @@ namespace UnityRemix
                 ulong hash = inst.variantHashes[meshParticleVariantKeys[i]];
                 state.skinned.Add(new SkinnedMeshData
                 {
+                    source = DynamicSource.MeshInstanced,
                     meshId = HashCombine(systemId, (int)particle.randomSeed),
                     remixMeshHash = hash,
                     materialId = matId,
@@ -4034,6 +4042,7 @@ namespace UnityRemix
 
                     state.skinned.Add(new SkinnedMeshData
                     {
+                        source = DynamicSource.MeshBaked,
                         meshId = pr.GetInstanceID(),
                         remixMeshHash = remixMeshHash,
                         materialId = matId,
@@ -4128,6 +4137,7 @@ namespace UnityRemix
 
                     state.skinned.Add(new SkinnedMeshData
                     {
+                        source = DynamicSource.ParticleTrail,
                         meshId = pr.GetInstanceID() ^ 0x0F0F0F,
                         remixMeshHash = trailHash,
                         materialId = trailMatId,
@@ -4331,6 +4341,7 @@ namespace UnityRemix
 
                     state.skinned.Add(new SkinnedMeshData
                     {
+                        source = DynamicSource.Trail,
                         meshId = tr.GetInstanceID(),
                         remixMeshHash = remixMeshHash,
                         materialId = trailMatId,

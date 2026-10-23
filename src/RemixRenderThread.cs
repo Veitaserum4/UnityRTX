@@ -55,9 +55,13 @@ namespace UnityRemix
         private readonly HashSet<ulong> updatedMeshes = new HashSet<ulong>();
         // Dynamic mesh uploads (RenderSkinnedMeshes), summed between periodic log lines.
         private int uploadLogFrames;
-        private long uploadedParticleMeshes, uploadedParticleVerts, uploadedMeshes, uploadedVerts;
+        // Per RemixFrameCapture.DynamicSource: uploads, vertices and milliseconds since the last log.
+        private readonly long[] uploadsBySource = new long[(int)RemixFrameCapture.DynamicSource.Count];
+        private readonly long[] uploadVertsBySource = new long[(int)RemixFrameCapture.DynamicSource.Count];
+        private readonly double[] uploadMsBySource = new double[(int)RemixFrameCapture.DynamicSource.Count];
         private int largestUploadVerts;
         private ulong largestUploadHash;
+        private RemixFrameCapture.DynamicSource largestUploadSource;
         private readonly HashSet<int> claimedRendererIds = new HashSet<int>();
         private readonly HashSet<StaticGeometryKey> claimedStaticKeys = new HashSet<StaticGeometryKey>();
         
@@ -1122,20 +1126,15 @@ namespace UnityRemix
 
                             int uploaded = skinned.vertexMap != null ? skinned.vertexMap.Length
                                 : skinned.usedVertexCount > 0 ? skinned.usedVertexCount : skinned.vertices.Length;
-                            if ((skinned.remixMeshHash & 0x4000000000000000UL) != 0)
+                            int source = (int)skinned.source;
+                            uploadsBySource[source]++;
+                            uploadVertsBySource[source] += uploaded;
+                            uploadMsBySource[source] += RemixProfiler.ElapsedMs(phaseStart);
+                            if (uploaded > largestUploadVerts)
                             {
-                                uploadedParticleMeshes++;
-                                uploadedParticleVerts += uploaded;
-                            }
-                            else
-                            {
-                                uploadedMeshes++;
-                                uploadedVerts += uploaded;
-                                if (uploaded > largestUploadVerts)
-                                {
-                                    largestUploadVerts = uploaded;
-                                    largestUploadHash = skinned.remixMeshHash;
-                                }
+                                largestUploadVerts = uploaded;
+                                largestUploadHash = skinned.remixMeshHash;
+                                largestUploadSource = skinned.source;
                             }
 
                             meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount, skinned.bakeFrame);
@@ -1163,10 +1162,18 @@ namespace UnityRemix
 
             if (++uploadLogFrames >= 300)
             {
-                logger.LogInfo($"[DynamicUploads] per frame over {uploadLogFrames}: meshes {uploadedMeshes / (double)uploadLogFrames:F1} ({uploadedVerts / uploadLogFrames} verts), " +
-                    $"particle batches {uploadedParticleMeshes / (double)uploadLogFrames:F1} ({uploadedParticleVerts / uploadLogFrames} verts); largest mesh 0x{largestUploadHash:X16} {largestUploadVerts} verts");
+                var line = new System.Text.StringBuilder($"[DynamicUploads] per frame over {uploadLogFrames}:");
+                for (int src = 0; src < uploadsBySource.Length; src++)
+                {
+                    if (uploadsBySource[src] == 0) continue;
+                    line.Append($" {(RemixFrameCapture.DynamicSource)src} {uploadsBySource[src] / (double)uploadLogFrames:F1} meshes, {uploadVertsBySource[src] / uploadLogFrames} verts, {uploadMsBySource[src] / uploadLogFrames:F2}ms;");
+                }
+                line.Append($" largest {largestUploadSource} 0x{largestUploadHash:X16} {largestUploadVerts} verts");
+                logger.LogInfo(line.ToString());
                 uploadLogFrames = 0;
-                uploadedParticleMeshes = uploadedParticleVerts = uploadedMeshes = uploadedVerts = 0;
+                Array.Clear(uploadsBySource, 0, uploadsBySource.Length);
+                Array.Clear(uploadVertsBySource, 0, uploadVertsBySource.Length);
+                Array.Clear(uploadMsBySource, 0, uploadMsBySource.Length);
                 largestUploadVerts = 0;
                 largestUploadHash = 0;
             }
