@@ -36,6 +36,12 @@ namespace UnityRemix
         /// <summary>
         /// Pack a Unity Color32 (RGBA) into D3DCOLOR/BGRA uint32 for Remix's B8G8R8A8_UNORM vertex color.
         /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private static unsafe bool Finite(float x)
+        {
+            return (*(uint*)&x & 0x7F800000u) != 0x7F800000u;
+        }
+
         public static uint Color32ToBGRA(Color32 c)
         {
             return (uint)(c.b | (c.g << 8) | (c.r << 16) | (c.a << 24));
@@ -651,33 +657,74 @@ namespace UnityRemix
             if (st.x == 0f) st.x = 1f;
             if (st.y == 0f) st.y = 1f;
             bool hasColors = colors != null && colors.Length >= sourceVertexCount;
-            for (int i = 0; i < vertexCount; i++)
+            if (vertexMap != null)
             {
-                int src = vertexMap != null ? vertexMap[i] : i;
-                float u = uvs[src].x * st.x + st.z;
-                float v = uvs[src].y * st.y + st.w;
-                uint col = hasColors ? Color32ToBGRA(colors[src]) : 0xFFFFFFFF;
-                poolData.vertices[i] = RemixAPI.MakeVertex(
-                    vertices[src].x, vertices[src].z, vertices[src].y,
-                    normals[src].x, normals[src].z, normals[src].y,
-                    u, v,
-                    col
-                );
-            }
-
-            int validIdxCount = 0;
-            for (int i = 0; i + 2 < indexCount; i += 3)
-            {
-                int i0 = triangles[i];
-                int i1 = triangles[i + 1];
-                int i2 = triangles[i + 2];
-                if (i0 >= 0 && i0 < vertexCount &&
-                    i1 >= 0 && i1 < vertexCount &&
-                    i2 >= 0 && i2 < vertexCount)
+                for (int i = 0; i < vertexMap.Length; i++)
                 {
-                    poolData.indices[validIdxCount++] = (uint)i0;
-                    poolData.indices[validIdxCount++] = (uint)i1;
-                    poolData.indices[validIdxCount++] = (uint)i2;
+                    if ((uint)vertexMap[i] >= (uint)sourceVertexCount)
+                        return IntPtr.Zero;
+                }
+            }
+            int validIdxCount = 0;
+            unsafe
+            {
+                // Same values as RemixAPI.MakeVertex (Y-up to Z-up, non-finite components
+                // replaced), written in place: these meshes are re-sent every frame, tens of
+                // thousands of vertices for particle trails. The padding stays zero.
+                fixed (RemixAPI.remixapi_HardcodedVertex* dst = poolData.vertices)
+                fixed (Vector3* pPos = vertices)
+                fixed (Vector3* pNrm = normals)
+                fixed (Vector2* pUv = uvs)
+                fixed (Color32* pCol = colors)
+                fixed (int* pMap = vertexMap)
+                {
+                    for (int i = 0; i < vertexCount; i++)
+                    {
+                        int src = pMap != null ? pMap[i] : i;
+                        Vector3 p = pPos[src];
+                        Vector3 n = pNrm[src];
+                        Vector2 t = pUv[src];
+                        float u = t.x * st.x + st.z;
+                        float v = t.y * st.y + st.w;
+                        var d = dst + i;
+                        d->position_x = Finite(p.x) ? p.x : 0f;
+                        d->position_y = Finite(p.z) ? p.z : 0f;
+                        d->position_z = Finite(p.y) ? p.y : 0f;
+                        d->normal_x = Finite(n.x) ? n.x : 0f;
+                        d->normal_y = Finite(n.z) ? n.z : 0f;
+                        d->normal_z = Finite(n.y) ? n.y : -1f;
+                        d->texcoord_x = Finite(u) ? u : 0f;
+                        d->texcoord_y = Finite(v) ? v : 0f;
+                        if (hasColors)
+                        {
+                            Color32 c = pCol[src];
+                            d->color = (uint)(c.b | (c.g << 8) | (c.r << 16) | (c.a << 24));
+                        }
+                        else
+                        {
+                            d->color = 0xFFFFFFFF;
+                        }
+                    }
+                }
+
+                fixed (int* pTri = triangles)
+                fixed (uint* pIdx = poolData.indices)
+                {
+                    uint limit = (uint)vertexCount;
+                    for (int i = 0; i + 2 < indexCount; i += 3)
+                    {
+                        uint i0 = (uint)pTri[i];
+                        uint i1 = (uint)pTri[i + 1];
+                        uint i2 = (uint)pTri[i + 2];
+                        // negative indices wrap to large values and fail the bound too
+                        if (i0 < limit && i1 < limit && i2 < limit)
+                        {
+                            pIdx[validIdxCount] = i0;
+                            pIdx[validIdxCount + 1] = i1;
+                            pIdx[validIdxCount + 2] = i2;
+                            validIdxCount += 3;
+                        }
+                    }
                 }
             }
             if (validIdxCount < 3)
