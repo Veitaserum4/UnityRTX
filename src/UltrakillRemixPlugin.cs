@@ -830,6 +830,7 @@ namespace UnityRemix
                     LogSource.LogError($"CaptureParticleSystems exception: {ex}");
                 }
 
+                long trailsStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
                     frameCapture.CaptureTrailRenderers(nextState, frameCount);
@@ -838,6 +839,7 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureTrailRenderers exception: {ex}");
                 }
+                RemixProfiler.AddDetail(RemixProfiler.Detail.Trails, RemixProfiler.ElapsedMs(trailsStart));
                 dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
@@ -897,11 +899,13 @@ namespace UnityRemix
                     }
                 }
                 dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
+                RemixProfiler.AddDetail(RemixProfiler.Detail.DynamicOther, mainPhaseSw.Elapsed.TotalMilliseconds);
             }
 
             mainPhaseSw.Restart();
             fogManager?.Update();
             dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
+            RemixProfiler.AddDetail(RemixProfiler.Detail.DynamicOther, mainPhaseSw.Elapsed.TotalMilliseconds);
 
             // Update SingleWindow framebuffer presenter & UI overlay
             mainPhaseSw.Restart();

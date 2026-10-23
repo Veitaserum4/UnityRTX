@@ -776,6 +776,7 @@ namespace UnityRemix
             public ulong[] boneNameHashes;
             public Matrix4x4[] boneMatricesA;
             public Matrix4x4[] boneMatricesB;
+            public SkeletonPose skeleton;
         }
 
         private readonly Dictionary<int, CachedStaticRendererInfo> cachedStaticInfo = new Dictionary<int, CachedStaticRendererInfo>(1024);
@@ -820,6 +821,99 @@ namespace UnityRemix
             }
 
             return info;
+        }
+
+        // The bones' world matrices for one frame, shared by every renderer of the same
+        // skeleton (a character's body, arms, face, clothes...).
+        private sealed class SkeletonPose
+        {
+            public Transform[] bones;
+            public Matrix4x4[] world;
+            public bool[] present;
+            public int frame = -1;
+        }
+        private readonly Dictionary<ulong, List<SkeletonPose>> skeletonPoses = new Dictionary<ulong, List<SkeletonPose>>();
+        private readonly Dictionary<int, ulong> skinnedMeshHashes = new Dictionary<int, ulong>();
+
+        private SkeletonPose GetSkeletonPose(CachedSkinnedRendererInfo info, int frameCount)
+        {
+            var pose = info.skeleton;
+            if (pose == null)
+            {
+                var bones = info.bones;
+                ulong key = 14695981039346656037UL;
+                for (int b = 0; b < bones.Length; b++)
+                {
+                    key ^= (ulong)(uint)(bones[b] != null ? bones[b].GetInstanceID() : 0);
+                    key *= 1099511628211UL;
+                }
+                if (!skeletonPoses.TryGetValue(key, out var candidates))
+                {
+                    candidates = new List<SkeletonPose>(1);
+                    skeletonPoses[key] = candidates;
+                }
+                foreach (var candidate in candidates)
+                {
+                    if (SameBones(candidate.bones, bones)) { pose = candidate; break; }
+                }
+                if (pose == null)
+                {
+                    pose = new SkeletonPose
+                    {
+                        bones = bones,
+                        world = new Matrix4x4[bones.Length],
+                        present = new bool[bones.Length]
+                    };
+                    candidates.Add(pose);
+                }
+                info.skeleton = pose;
+            }
+            if (pose.frame != frameCount)
+            {
+                pose.frame = frameCount;
+                var bones = pose.bones;
+                for (int b = 0; b < bones.Length; b++)
+                {
+                    var bone = bones[b];
+                    bool present = bone != null;
+                    pose.present[b] = present;
+                    if (present)
+                        pose.world[b] = bone.localToWorldMatrix;
+                }
+            }
+            return pose;
+        }
+
+        private static bool SameBones(Transform[] a, Transform[] b)
+        {
+            if (a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++)
+            {
+                if (!ReferenceEquals(a[i], b[i])) return false;
+            }
+            return true;
+        }
+
+        // r = a * b where a's bottom row is (0, 0, 0, 1), as for transforms and their inverses;
+        // the same sums as Matrix4x4's operator*, without copying the operands.
+        private static void MulAffine(ref Matrix4x4 a, ref Matrix4x4 b, out Matrix4x4 r)
+        {
+            r.m00 = a.m00 * b.m00 + a.m01 * b.m10 + a.m02 * b.m20 + a.m03 * b.m30;
+            r.m01 = a.m00 * b.m01 + a.m01 * b.m11 + a.m02 * b.m21 + a.m03 * b.m31;
+            r.m02 = a.m00 * b.m02 + a.m01 * b.m12 + a.m02 * b.m22 + a.m03 * b.m32;
+            r.m03 = a.m00 * b.m03 + a.m01 * b.m13 + a.m02 * b.m23 + a.m03 * b.m33;
+            r.m10 = a.m10 * b.m00 + a.m11 * b.m10 + a.m12 * b.m20 + a.m13 * b.m30;
+            r.m11 = a.m10 * b.m01 + a.m11 * b.m11 + a.m12 * b.m21 + a.m13 * b.m31;
+            r.m12 = a.m10 * b.m02 + a.m11 * b.m12 + a.m12 * b.m22 + a.m13 * b.m32;
+            r.m13 = a.m10 * b.m03 + a.m11 * b.m13 + a.m12 * b.m23 + a.m13 * b.m33;
+            r.m20 = a.m20 * b.m00 + a.m21 * b.m10 + a.m22 * b.m20 + a.m23 * b.m30;
+            r.m21 = a.m20 * b.m01 + a.m21 * b.m11 + a.m22 * b.m21 + a.m23 * b.m31;
+            r.m22 = a.m20 * b.m02 + a.m21 * b.m12 + a.m22 * b.m22 + a.m23 * b.m32;
+            r.m23 = a.m20 * b.m03 + a.m21 * b.m13 + a.m22 * b.m23 + a.m23 * b.m33;
+            r.m30 = b.m30;
+            r.m31 = b.m31;
+            r.m32 = b.m32;
+            r.m33 = b.m33;
         }
 
         private CachedSkinnedRendererInfo GetOrCreateSkinnedInfo(SkinnedMeshRenderer sr)
@@ -881,6 +975,7 @@ namespace UnityRemix
             cachedSkinnedRendererIds.Clear();
             cachedStaticInfo.Clear();
             cachedSkinnedInfo.Clear();
+            skeletonPoses.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
             lastSkinnedTransforms.Clear();
@@ -927,6 +1022,7 @@ namespace UnityRemix
             cachedSkinnedRendererIds.Clear();
             cachedStaticInfo.Clear();
             cachedSkinnedInfo.Clear();
+            skeletonPoses.Clear();
             lastCameraTrackFrame = -100;
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
@@ -2198,14 +2294,28 @@ namespace UnityRemix
                     }
                     
                     Matrix4x4 invInstance = unscaledMatrix.inverse;
+                    var skeleton = GetSkeletonPose(info, frameCount);
+                    var world = skeleton.world;
+                    var present = skeleton.present;
+                    var bindPoses = skinData.bindPoses;
                     for (int b = 0; b < boneCount; b++)
                     {
-                        boneMatrices[b] = (b < bones.Length && bones[b] != null)
-                            ? invInstance * bones[b].localToWorldMatrix * skinData.bindPoses[b]
-                            : Matrix4x4.identity;
+                        if (b < present.Length && present[b])
+                        {
+                            MulAffine(ref invInstance, ref world[b], out Matrix4x4 boneToInstance);
+                            MulAffine(ref boneToInstance, ref bindPoses[b], out boneMatrices[b]);
+                        }
+                        else
+                        {
+                            boneMatrices[b] = Matrix4x4.identity;
+                        }
                     }
                     
-                    ulong combinedMeshHash = RemixMeshConverter.GenerateMeshHash(sharedMesh);
+                    if (!skinnedMeshHashes.TryGetValue(sharedMeshId, out ulong combinedMeshHash))
+                    {
+                        combinedMeshHash = RemixMeshConverter.GenerateMeshHash(sharedMesh);
+                        skinnedMeshHashes[sharedMeshId] = combinedMeshHash;
+                    }
                     var boneHashes = info.boneNameHashes;
                     if (boneHashes != null)
                     {
@@ -2652,6 +2762,7 @@ namespace UnityRemix
                 ? configParticleMaxDistance.Value
                 : 60f;
             float maxParticleDistSqr = maxParticleDist * maxParticleDist;
+            long discoverStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
             // Recycle batch buckets from previous frame
             for (int b = 0; b < _activeParticleBatches.Count; b++)
@@ -2741,6 +2852,9 @@ namespace UnityRemix
             string furthestName = null;
 
             bool collectEmitters = (frameCount % 30 == 0);
+            RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleDiscover, RemixProfiler.ElapsedMs(discoverStart));
+            long loopStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            double readMs = 0;
             List<ParticleEmitterInfo> emitterDetails = collectEmitters ? new List<ParticleEmitterInfo>(Math.Min(totalTracked, 256)) : null;
 
             for (int i = 0; i < trackedParticleSystems.Count; i++)
@@ -2819,7 +2933,9 @@ namespace UnityRemix
                     _particleBuffer = new ParticleSystem.Particle[Mathf.NextPowerOfTwo(numAlive)];
                 }
 
+                long readStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 int actualAlive = ps.GetParticles(_particleBuffer);
+                readMs += RemixProfiler.ElapsedMs(readStart);
                 if (actualAlive <= 0)
                 {
                     if (collectEmitters && emitterDetails.Count < 200)
@@ -3027,6 +3143,11 @@ namespace UnityRemix
                 }
             }
 
+            RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleRead, readMs);
+            RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleBuild, RemixProfiler.ElapsedMs(loopStart) - readMs);
+            RemixProfiler.AddParticles(renderedParticles);
+            long emitStart = System.Diagnostics.Stopwatch.GetTimestamp();
+
             // Emit batched billboard meshes to state.skinned
             for (int b = 0; b < _activeParticleBatches.Count; b++)
             {
@@ -3052,6 +3173,8 @@ namespace UnityRemix
                     bakeFrame = frameCount
                 });
             }
+
+            RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleEmit, RemixProfiler.ElapsedMs(emitStart));
 
             if (emitterDetails != null)
             {
@@ -4676,6 +4799,57 @@ namespace UnityRemix
         /// <summary>
         /// Resolve the best material for a skinned mesh renderer. Returns material instance ID.
         /// </summary>
+        // ResolveMaterial runs per skinned renderer per frame: property IDs, one reused property
+        // block, and each material's property set (fixed by its shader) looked up once.
+        private static readonly int[] SkinnedMpbColorProps =
+        {
+            PropColor, PropBaseColor, Shader.PropertyToID("_TintColor"), Shader.PropertyToID("_Tint"),
+            Shader.PropertyToID("_Color1"), Shader.PropertyToID("_Color2"), Shader.PropertyToID("_ColorTint"),
+            Shader.PropertyToID("_BodyColor"), Shader.PropertyToID("_SkinColor"), Shader.PropertyToID("_FurColor"),
+            Shader.PropertyToID("_HairColor"), Shader.PropertyToID("_ClothColor"), Shader.PropertyToID("_ClothingColor"),
+            Shader.PropertyToID("_EyeColor")
+        };
+        private static readonly int PropEmissiveIntensity = Shader.PropertyToID("_EmissiveIntensity");
+        private static readonly int PropColorTint = Shader.PropertyToID("_ColorTint");
+        private static readonly int PropHue = Shader.PropertyToID("_Hue");
+        private static readonly int PropHueShift = Shader.PropertyToID("_HueShift");
+        private static readonly int PropHueAdjust = Shader.PropertyToID("_HueAdjust");
+        private static readonly int PropBrightness = Shader.PropertyToID("_Brightness");
+        private static readonly int PropContrast = Shader.PropertyToID("_Contrast");
+        private static readonly int PropSaturation = Shader.PropertyToID("_Saturation");
+        private static readonly int PropHSBC = Shader.PropertyToID("_HSBC");
+        private MaterialPropertyBlock skinnedMpb;
+
+        private struct SkinnedMaterialFacts
+        {
+            public Shader shader;
+            public bool emissiveIntensity, colorTint, hue, hueShift, hueAdjust, brightness, contrast, saturation, hsbc;
+        }
+        private readonly Dictionary<int, SkinnedMaterialFacts> skinnedMaterialFacts = new Dictionary<int, SkinnedMaterialFacts>();
+
+        private SkinnedMaterialFacts GetSkinnedMaterialFacts(Material mat)
+        {
+            int id = mat.GetInstanceID();
+            var shader = mat.shader;
+            if (skinnedMaterialFacts.TryGetValue(id, out var facts) && ReferenceEquals(facts.shader, shader))
+                return facts;
+            facts = new SkinnedMaterialFacts
+            {
+                shader = shader,
+                emissiveIntensity = mat.HasProperty(PropEmissiveIntensity),
+                colorTint = mat.HasProperty(PropColorTint),
+                hue = mat.HasProperty(PropHue),
+                hueShift = mat.HasProperty(PropHueShift),
+                hueAdjust = mat.HasProperty(PropHueAdjust),
+                brightness = mat.HasProperty(PropBrightness),
+                contrast = mat.HasProperty(PropContrast),
+                saturation = mat.HasProperty(PropSaturation),
+                hsbc = mat.HasProperty(PropHSBC)
+            };
+            skinnedMaterialFacts[id] = facts;
+            return facts;
+        }
+
         private int ResolveMaterial(SkinnedMeshRenderer skinned, Material targetMat = null, bool doLog = false)
         {
             int matId = 0;
@@ -4728,17 +4902,23 @@ namespace UnityRemix
                 Color? mpbEmissiveColor = null;
                 float? mpbEmissiveIntensity = null;
                 Texture2D mpbMainTex = null;
+                var facts = GetSkinnedMaterialFacts(bestMaterial);
                 try
                 {
-                    var mpb = new MaterialPropertyBlock();
-                    skinned.GetPropertyBlock(mpb);
+                    if (skinnedMpb == null)
+                        skinnedMpb = new MaterialPropertyBlock();
+                    var mpb = skinnedMpb;
+                    if (skinned.HasPropertyBlock())
+                        skinned.GetPropertyBlock(mpb);
+                    else
+                        mpb.Clear();
                     if (!mpb.isEmpty)
                     {
                         // Check for main texture override
-                        Texture tex = mpb.GetTexture("_MainTex");
-                        if (tex == null) tex = mpb.GetTexture("_BaseMap");
-                        if (tex == null) tex = mpb.GetTexture("_Diffuse");
-                        if (tex == null) tex = mpb.GetTexture("_Texture");
+                        Texture tex = mpb.GetTexture(PropMainTex);
+                        if (tex == null) tex = mpb.GetTexture(PropBaseMap);
+                        if (tex == null) tex = mpb.GetTexture(PropDiffuse);
+                        if (tex == null) tex = mpb.GetTexture(PropTexture);
                         if (tex != null && tex is Texture2D t2d)
                         {
                             mpbMainTex = t2d;
@@ -4746,8 +4926,7 @@ namespace UnityRemix
                         }
 
                         // Capture albedo/diffuse color overrides (ATLYSS character skin/hair/eye colors)
-                        string[] colorProps = { "_Color", "_BaseColor", "_TintColor", "_Tint", "_Color1", "_Color2", "_ColorTint", "_BodyColor", "_SkinColor", "_FurColor", "_HairColor", "_ClothColor", "_ClothingColor", "_EyeColor" };
-                        foreach (var cp in colorProps)
+                        foreach (var cp in SkinnedMpbColorProps)
                         {
                             var c = mpb.GetColor(cp);
                             // GetColor returns Color.clear (0,0,0,0) if the property is missing from the MPB.
@@ -4763,7 +4942,7 @@ namespace UnityRemix
                             }
                         }
 
-                        var emC = mpb.GetColor("_EmissiveColor");
+                        var emC = mpb.GetColor(PropEmissiveColor);
                         if (emC.a > 0.0f && (emC.r > 0.01f || emC.g > 0.01f || emC.b > 0.01f))
                         {
                             mpbEmissiveColor = emC;
@@ -4771,9 +4950,9 @@ namespace UnityRemix
                             int emisInt = (e32.r << 24) | (e32.g << 16) | (e32.b << 8) | e32.a;
                             matId = HashCombine(matId, emisInt);
                         }
-                        if (bestMaterial.HasProperty("_EmissiveIntensity"))
+                        if (facts.emissiveIntensity)
                         {
-                            float v = mpb.GetFloat("_EmissiveIntensity");
+                            float v = mpb.GetFloat(PropEmissiveIntensity);
                             if (v > 0) mpbEmissiveIntensity = v;
                         }
                     }
@@ -4785,9 +4964,9 @@ namespace UnityRemix
                 {
                     try
                     {
-                        if (bestMaterial.HasProperty("_ColorTint"))
+                        if (facts.colorTint)
                         {
-                            Color ct = bestMaterial.GetColor("_ColorTint");
+                            Color ct = bestMaterial.GetColor(PropColorTint);
                             if (ct.a > 0f && (ct.r < 0.98f || ct.g < 0.98f || ct.b < 0.98f))
                             {
                                 Color32 c32 = ct;
@@ -4796,19 +4975,19 @@ namespace UnityRemix
                             }
                         }
 
-                        if (bestMaterial.HasProperty("_Hue") || bestMaterial.HasProperty("_HueShift") || bestMaterial.HasProperty("_HueAdjust") ||
-                            bestMaterial.HasProperty("_Brightness") || bestMaterial.HasProperty("_Contrast") || bestMaterial.HasProperty("_Saturation") ||
-                            bestMaterial.HasProperty("_HSBC"))
+                        if (facts.hue || facts.hueShift || facts.hueAdjust ||
+                            facts.brightness || facts.contrast || facts.saturation ||
+                            facts.hsbc)
                         {
-                            float h = bestMaterial.HasProperty("_Hue") ? bestMaterial.GetFloat("_Hue") :
-                                      (bestMaterial.HasProperty("_HueShift") ? bestMaterial.GetFloat("_HueShift") :
-                                      (bestMaterial.HasProperty("_HueAdjust") ? bestMaterial.GetFloat("_HueAdjust") : 0f));
-                            float b = bestMaterial.HasProperty("_Brightness") ? bestMaterial.GetFloat("_Brightness") : 0f;
-                            float c = bestMaterial.HasProperty("_Contrast") ? bestMaterial.GetFloat("_Contrast") : 1f;
-                            float s = bestMaterial.HasProperty("_Saturation") ? bestMaterial.GetFloat("_Saturation") : 1f;
-                            if (bestMaterial.HasProperty("_HSBC"))
+                            float h = facts.hue ? bestMaterial.GetFloat(PropHue) :
+                                      (facts.hueShift ? bestMaterial.GetFloat(PropHueShift) :
+                                      (facts.hueAdjust ? bestMaterial.GetFloat(PropHueAdjust) : 0f));
+                            float b = facts.brightness ? bestMaterial.GetFloat(PropBrightness) : 0f;
+                            float c = facts.contrast ? bestMaterial.GetFloat(PropContrast) : 1f;
+                            float s = facts.saturation ? bestMaterial.GetFloat(PropSaturation) : 1f;
+                            if (facts.hsbc)
                             {
-                                Vector4 v = bestMaterial.GetVector("_HSBC");
+                                Vector4 v = bestMaterial.GetVector(PropHSBC);
                                 h = v.x; s = v.y; b = v.z; c = v.w;
                             }
 

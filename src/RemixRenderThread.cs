@@ -529,6 +529,8 @@ namespace UnityRemix
 
             if (RemixAPI.HasRetainedSceneInstancesEXT)
             {
+                long retainedStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                double sceneApiMs = 0;
                 uint objectPickingValue = 1;
                 claimedRendererIds.Clear();
                 claimedStaticKeys.Clear();
@@ -785,6 +787,7 @@ namespace UnityRemix
                             removeHandlesBuffer[i] = retainedSceneInstances[k].NativeHandle;
                             retainedSceneInstances.Remove(k);
                         }
+                        long apiStart = System.Diagnostics.Stopwatch.GetTimestamp();
                         unsafe
                         {
                             fixed (ulong* pRemove = removeHandlesBuffer)
@@ -792,6 +795,7 @@ namespace UnityRemix
                                 RemixAPI.RemoveSceneInstancesEXTFunc((IntPtr)pRemove, (uint)reusableRemoveKeys.Count);
                             }
                         }
+                        sceneApiMs += RemixProfiler.ElapsedMs(apiStart);
                     }
                 }
 
@@ -802,6 +806,7 @@ namespace UnityRemix
                     for (int i = 0; i < pendingAddInfos.Count; i++)
                         addInfosBuffer[i] = pendingAddInfos[i];
 
+                    long apiStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     unsafe
                     {
                         fixed (RemixAPI.remixapi_InstanceInfo* pInfos = addInfosBuffer)
@@ -828,6 +833,7 @@ namespace UnityRemix
                             }
                         }
                     }
+                    sceneApiMs += RemixProfiler.ElapsedMs(apiStart);
                 }
 
                 // 6. Submit pending changes
@@ -837,6 +843,7 @@ namespace UnityRemix
                     for (int i = 0; i < pendingChanges.Count; i++)
                         changesBuffer[i] = pendingChanges[i];
 
+                    long apiStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     unsafe
                     {
                         fixed (RemixAPI.remixapi_SceneInstanceChangeEXT* pChanges = changesBuffer)
@@ -844,10 +851,15 @@ namespace UnityRemix
                             RemixAPI.ChangeSceneInstancesEXTFunc((IntPtr)pChanges, (uint)pendingChanges.Count);
                         }
                     }
+                    sceneApiMs += RemixProfiler.ElapsedMs(apiStart);
                 }
+                RemixProfiler.AddDetail(RemixProfiler.Detail.DrawRetained, RemixProfiler.ElapsedMs(retainedStart));
+                RemixProfiler.AddDetail(RemixProfiler.Detail.DrawSceneApi, sceneApiMs);
 
                 // 7. Draw all retained scene instances in ONE call
+                long sceneStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 RemixAPI.DrawSceneInstancesEXTFunc(IntPtr.Zero);
+                RemixProfiler.AddDetail(RemixProfiler.Detail.DrawScene, RemixProfiler.ElapsedMs(sceneStart));
 
                 // 8. Draw dynamic / skinned meshes
                 objectPickingValue = RenderSkinnedMeshes(state, objectPickingValue);
@@ -1037,9 +1049,12 @@ namespace UnityRemix
             
             updatedMeshes.Clear();
             uint objectPickingValue = startObjectPickingValue;
-            
+            double gpuSkinnedMs = 0, dynUploadMs = 0, dynDrawMs = 0;
+            int gpuSkinnedDraws = 0, dynUploads = 0, dynDraws = 0;
+
             foreach (var skinned in state.skinned)
             {
+                long phaseStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
                     if (skinned.skinningData != null && skinned.boneTransforms != null)
@@ -1076,6 +1091,8 @@ namespace UnityRemix
 
                         meshConverter.DrawSkinnedInstance(meshHandle, skinned.localToWorld, skinned.boneTransforms, objectPickingValue, persistentId, skinned.categoryFlags);
                         objectPickingValue++;
+                        gpuSkinnedMs += RemixProfiler.ElapsedMs(phaseStart);
+                        gpuSkinnedDraws++;
                     }
                     else
                     {
@@ -1116,19 +1133,28 @@ namespace UnityRemix
                             }
 
                             meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount, skinned.bakeFrame);
+                            dynUploads++;
                         }
                         updatedMeshes.Add(skinned.remixMeshHash);
 
                         ulong persistentId = (ulong)(uint)skinned.meshId;
                         if (persistentId == 0) persistentId = (ulong)objectPickingValue;
 
+                        dynUploadMs += RemixProfiler.ElapsedMs(phaseStart);
+                        long drawStart = System.Diagnostics.Stopwatch.GetTimestamp();
                         meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId, isDynamic: true);
                         objectPickingValue++;
+                        dynDrawMs += RemixProfiler.ElapsedMs(drawStart);
+                        dynDraws++;
                     }
                 }
                 catch { }
             }
-            
+            RemixProfiler.AddDetail(RemixProfiler.Detail.DrawGpuSkinned, gpuSkinnedMs);
+            RemixProfiler.AddDetail(RemixProfiler.Detail.DrawDynUpload, dynUploadMs);
+            RemixProfiler.AddDetail(RemixProfiler.Detail.DrawDynDraw, dynDrawMs);
+            RemixProfiler.AddDrawCounts(gpuSkinnedDraws, dynUploads, dynDraws);
+
             if (++uploadLogFrames >= 300)
             {
                 logger.LogInfo($"[DynamicUploads] per frame over {uploadLogFrames}: meshes {uploadedMeshes / (double)uploadLogFrames:F1} ({uploadedVerts / uploadLogFrames} verts), " +
