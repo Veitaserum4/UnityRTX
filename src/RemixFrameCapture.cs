@@ -3016,7 +3016,11 @@ namespace UnityRemix
                 if (!_materialTintCache.TryGetValue(matInstId, out Color matTint))
                 {
                     matTint = Color.white;
-                    if (mat.HasProperty("_TintColor"))
+                    if (materialManager.UsesParticleSnapshot(mat))
+                    {
+                        // the snapshot already shows the material's colors
+                    }
+                    else if (mat.HasProperty("_TintColor"))
                         matTint = mat.GetColor("_TintColor");
                     else if (mat.HasProperty("_Color"))
                         matTint = mat.GetColor("_Color");

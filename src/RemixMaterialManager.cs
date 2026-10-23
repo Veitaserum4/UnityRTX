@@ -669,68 +669,9 @@ namespace UnityRemix
             if (captureTextures.Value)
             {
                 if (tex != null)
-                {
                     matchedTexProp = "_MainTex";
-                }
                 else
-                {
-                    for (int p = 0; p < AlbedoTextureProps.Length; p++)
-                    {
-                        string pName = AlbedoTextureProps[p];
-                        if (material.HasProperty(pName))
-                        {
-                            var t = material.GetTexture(pName) as Texture2D;
-                            if (t != null)
-                            {
-                                tex = t;
-                                matchedTexProp = pName;
-                                break;
-                            }
-                        }
-                    }
-
-                    // Only query material.mainTexture if _MainTex exists (prevents Unity engine warning spam)
-                    if (tex == null && material.HasProperty("_MainTex") && material.mainTexture is Texture2D mainT)
-                    {
-                        tex = mainT;
-                        matchedTexProp = "_MainTex";
-                    }
-
-                    // Dynamic fallback: inspect all texture property names on the material
-                    if (tex == null)
-                    {
-                        try
-                        {
-                            string[] propNames = material.GetTexturePropertyNames();
-                            if (propNames != null)
-                            {
-                                for (int i = 0; i < propNames.Length; i++)
-                                {
-                                    string p = propNames[i];
-                                    if (string.IsNullOrEmpty(p)) continue;
-                                    string lower = p.ToLowerInvariant();
-                                    if (lower.Contains("bump") || lower.Contains("normal") ||
-                                        lower.Contains("lightmap") || lower.Contains("shadow") ||
-                                        lower.Contains("mask") || lower.Contains("noise") ||
-                                        lower.Contains("emission") || lower.Contains("emissive") ||
-                                        lower.Contains("sparkle") || lower.Contains("wind") ||
-                                        lower.Contains("distortion") || lower.Contains("dissolve"))
-                                    {
-                                        continue;
-                                    }
-                                    var t = material.GetTexture(p) as Texture2D;
-                                    if (t != null)
-                                    {
-                                        tex = t;
-                                        matchedTexProp = p;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        catch { }
-                    }
-                }
+                    tex = FindAlbedoTexture(material, out matchedTexProp);
             }
 
             // Check for HSV / Brightness / Contrast adjustments (e.g. Unlit/ColorAdjust, stylized character customization)
@@ -894,6 +835,15 @@ namespace UnityRemix
                 bool isTinted = effectiveTint.r < 0.98f || effectiveTint.g < 0.98f || effectiveTint.b < 0.98f;
                 if (matData.suppressLightGeneration && !shaderName.Contains("TextMeshPro"))
                 {
+                    // Procedural particle shaders: the material drawn by Unity, not its noise texture.
+                    var snapshot = renderer is ParticleSystemRenderer ? GetParticleSnapshot(material) : null;
+                    if (snapshot != null)
+                    {
+                        tex = snapshot;
+                        albedoTex = snapshot;
+                        matData.wrapModeU = matData.wrapModeV = 0; // MDL Clamp
+                        matData.mainTexST = new Vector4(1f, 1f, 0f, 0f);
+                    }
                     var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint);
                     matData.albedoHandle = partHandle;
                     matData.albedoTextureHash = partHash;
@@ -956,7 +906,11 @@ namespace UnityRemix
             }
             
             // Capture texture tiling/offset safely without throwing on missing _MainTex
-            if (matchedTexProp != null)
+            if (albedoTex != null && particleSnapshots.ContainsValue(albedoTex))
+            {
+                // a particle snapshot covers the quad exactly
+            }
+            else if (matchedTexProp != null)
             {
                 try
                 {
@@ -3773,6 +3727,112 @@ namespace UnityRemix
 
         private readonly Dictionary<string, int> describedShaderMaterials = new Dictionary<string, int>();
 
+        // Particle materials whose look is computed by the shader rather than read from a texture,
+        // drawn once by Unity (ParticleMaterialSnapshot). Null: the material's own texture serves.
+        private readonly Dictionary<int, Texture2D> particleSnapshots = new Dictionary<int, Texture2D>();
+
+        /// <summary>
+        /// True when the particle material is replaced by its snapshot, whose colors already
+        /// include the material's tint (main thread).
+        /// </summary>
+        public bool UsesParticleSnapshot(Material material)
+        {
+            return material != null && GetParticleSnapshot(material) != null;
+        }
+
+        private Texture2D GetParticleSnapshot(Material material)
+        {
+            int id = material.GetInstanceID();
+            if (particleSnapshots.TryGetValue(id, out var cached))
+                return cached;
+            Texture2D snapshot = null;
+            try
+            {
+                var source = FindAlbedoTexture(material, out string sourceProp);
+                if (ParticleMaterialSnapshot.ShouldSnapshot(source, out string why))
+                {
+                    snapshot = ParticleMaterialSnapshot.Render(material, 256, out string result);
+                    logger.LogInfo($"[ParticleSnapshot] '{material.name}' shader '{(material.shader != null ? material.shader.name : "-")}': {why}; " +
+                                   (snapshot != null ? $"drawn by Unity ({result})" : $"kept its texture ({result})"));
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"[ParticleSnapshot] '{material.name}': {ex.Message}");
+                snapshot = null;
+            }
+            particleSnapshots[id] = snapshot;
+            return snapshot;
+        }
+
+        /// <summary>
+        /// The texture a material's albedo comes from: the known albedo property names first, then
+        /// _MainTex, then any texture property that is not a normal/mask/noise/emission map.
+        /// </summary>
+        private Texture2D FindAlbedoTexture(Material material, out string matchedTexProp)
+        {
+            Texture2D tex = null;
+            matchedTexProp = null;
+            for (int p = 0; p < AlbedoTextureProps.Length; p++)
+            {
+                string pName = AlbedoTextureProps[p];
+                if (material.HasProperty(pName))
+                {
+                    var t = material.GetTexture(pName) as Texture2D;
+                    if (t != null)
+                    {
+                        tex = t;
+                        matchedTexProp = pName;
+                        break;
+                    }
+                }
+            }
+
+            // Only query material.mainTexture if _MainTex exists (prevents Unity engine warning spam)
+            if (tex == null && material.HasProperty("_MainTex") && material.mainTexture is Texture2D mainT)
+            {
+                tex = mainT;
+                matchedTexProp = "_MainTex";
+            }
+
+            // Dynamic fallback: inspect all texture property names on the material
+            if (tex == null)
+            {
+                try
+                {
+                    string[] propNames = material.GetTexturePropertyNames();
+                    if (propNames != null)
+                    {
+                        for (int i = 0; i < propNames.Length; i++)
+                        {
+                            string p = propNames[i];
+                            if (string.IsNullOrEmpty(p)) continue;
+                            string lower = p.ToLowerInvariant();
+                            if (lower.Contains("bump") || lower.Contains("normal") ||
+                                lower.Contains("lightmap") || lower.Contains("shadow") ||
+                                lower.Contains("mask") || lower.Contains("noise") ||
+                                lower.Contains("emission") || lower.Contains("emissive") ||
+                                lower.Contains("sparkle") || lower.Contains("wind") ||
+                                lower.Contains("distortion") || lower.Contains("dissolve"))
+                            {
+                                continue;
+                            }
+                            var t = material.GetTexture(p) as Texture2D;
+                            if (t != null)
+                            {
+                                tex = t;
+                                matchedTexProp = p;
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+            return tex;
+        }
+
+
         // Every property of the material's shader with its value on this material, and its keywords.
         private string DescribeMaterialProperties(Material material)
         {
@@ -3805,7 +3865,11 @@ namespace UnityRemix
                 }
                 var keywords = material.shaderKeywords;
                 if (keywords != null && keywords.Length > 0)
-                    sb.Append($"keywords [{string.Join(" ", keywords)}]");
+                    sb.Append($"keywords [{string.Join(" ", keywords)}] ");
+                sb.Append("passes [");
+                for (int p = 0; p < material.passCount; p++)
+                    sb.Append(p == 0 ? "" : ", ").Append(material.GetPassName(p));
+                sb.Append("]");
             }
             catch (Exception ex)
             {
