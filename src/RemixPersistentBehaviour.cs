@@ -41,17 +41,11 @@ namespace UnityRemix
 
         void LateUpdate()
         {
+            // Frame capture runs in Application.onBeforeRender (registered by the plugin, whose
+            // C# object outlives its GameObject), with an end-of-frame fallback (OnEndOfFrame).
             // Cast to object to avoid Unity's lifetime check (overloaded == operator)
-            // We know the C# object exists and we want to keep using it
-            if ((object)plugin != null)
-            {
-                plugin.UpdateFromPersistent();
-            }
-            else
-            {
-                if (Time.frameCount % 300 == 0)
-                    LogSource.LogWarning("RemixPersistentBehaviour: Plugin reference is null!");
-            }
+            if ((object)plugin == null && Time.frameCount % 300 == 0)
+                LogSource.LogWarning("RemixPersistentBehaviour: Plugin reference is null!");
         }
         
         void OnApplicationQuit()

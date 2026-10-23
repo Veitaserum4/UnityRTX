@@ -116,6 +116,12 @@ namespace UnityRemix
             LogSource.LogInfo($"Plugin {PluginName} v{PluginVersion} is loading!");
             RemixWatchdog.Start(LogSource);
             RemixProfiler.Logger = LogSource;
+            // Awake, not Start: some games destroy the plugin's GameObject before it starts.
+            if (!beforeRenderHooked)
+            {
+                beforeRenderHooked = true;
+                Application.onBeforeRender += CaptureBeforeRender;
+            }
 
             // Suppress conflicting Vulkan implicit layer (Steam overlay) for DXVK/Remix
             try
@@ -722,7 +728,18 @@ namespace UnityRemix
         
         void LateUpdate()
         {
-            // Capture frame data on main thread
+            // Frame data is captured in Application.onBeforeRender (CaptureBeforeRender), after
+            // every LateUpdate: capturing here could run before the game's own LateUpdate (a
+            // follow camera) and pair this frame's characters with last frame's camera.
+        }
+
+        private static bool beforeRenderHooked;
+        private int lastCaptureUnityFrame = -1;
+
+        // After all of the frame's LateUpdates and before it renders: the camera, characters and
+        // effects are where this frame shows them.
+        private void CaptureBeforeRender()
+        {
             UpdateFromPersistent();
         }
         
@@ -735,12 +752,16 @@ namespace UnityRemix
         
         public void UpdateFromPersistent()
         {
+            int unityFrame = Time.frameCount;
+            if (lastCaptureUnityFrame == unityFrame)
+                return; // once per Unity frame
             if (!remixInitialized)
                 return;
 
             AdvanceDeviceRegistration();
             if (!deviceRegistered)
                 return;
+            lastCaptureUnityFrame = unityFrame;
 
             double engineMs = engineFrameSw.IsRunning ? engineFrameSw.Elapsed.TotalMilliseconds : (Time.unscaledDeltaTime * 1000.0);
             mainTotalSw.Restart();
@@ -917,6 +938,9 @@ namespace UnityRemix
 
         public void OnEndOfFrame()
         {
+            // A frame that rendered nothing has no onBeforeRender: capture it now.
+            if (lastCaptureUnityFrame != Time.frameCount)
+                UpdateFromPersistent();
             if (lastEndOfFrameNumber == frameCount) return;
             lastEndOfFrameNumber = frameCount;
             eofSw.Restart();
