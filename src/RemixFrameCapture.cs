@@ -4094,9 +4094,9 @@ namespace UnityRemix
                 pr.BakeTrailsMesh(_reusableParticleTrailMesh, cam, false);
 #pragma warning restore CS0618
 
-                var verts = _reusableParticleTrailMesh.vertices;
-                var tris = _reusableParticleTrailMesh.triangles;
-                if (verts != null && verts.Length >= 3 && tris != null && tris.Length >= 3)
+                var trailMesh = _reusableParticleTrailMesh;
+                int vertexCount = trailMesh.vertexCount;
+                if (vertexCount >= 3 && trailMesh.subMeshCount > 0)
                 {
                     // Only use a dedicated trail material. Falling back to the particle's own
                     // billboard material (pr.sharedMaterial) causes opaque sprite quads to be
@@ -4135,17 +4135,71 @@ namespace UnityRemix
                     // this is essential so the trails follow the gib in world space.
                     Matrix4x4 trailLocalToWorld = pr.transform.localToWorldMatrix;
 
+                    // Read into reused buffers (a trail mesh is often tens of thousands of
+                    // vertices a frame). Trails rarely carry normals: face the camera, as the
+                    // billboards do, instead of computing face normals for every vertex.
+                    trailMesh.GetVertices(bakeVertices);
+                    trailMesh.GetNormals(bakeNormals);
+                    trailMesh.GetUVs(0, bakeUvs);
+                    trailMesh.GetColors(bakeColors);
+                    if (trailMesh.subMeshCount == 1)
+                        trailMesh.GetTriangles(bakeTriangles, 0);
+                    else
+                    {
+                        bakeTriangles.Clear();
+                        bakeTriangles.AddRange(trailMesh.triangles);
+                    }
+                    int indexCount = bakeTriangles.Count;
+                    if (indexCount < 3)
+                        return;
+                    var buffers = TakeParticleBuffers(trailHash, state.frameCount, vertexCount, indexCount);
+                    Vector3[] vertices, normals;
+                    Vector2[] uvs = null;
+                    Color32[] colors = null;
+                    int[] triangles;
+                    if (buffers != null)
+                    {
+                        bakeVertices.CopyTo(buffers.vertices);
+                        bakeTriangles.CopyTo(buffers.triangles);
+                        vertices = buffers.vertices;
+                        triangles = buffers.triangles;
+                        normals = buffers.normals;
+                        if (bakeUvs.Count == vertexCount) { bakeUvs.CopyTo(buffers.uvs); uvs = buffers.uvs; }
+                        if (bakeColors.Count == vertexCount) { bakeColors.CopyTo(buffers.colors); colors = buffers.colors; }
+                    }
+                    else
+                    {
+                        vertices = bakeVertices.ToArray();
+                        triangles = bakeTriangles.ToArray();
+                        normals = new Vector3[vertexCount];
+                        if (bakeUvs.Count == vertexCount) uvs = bakeUvs.ToArray();
+                        if (bakeColors.Count == vertexCount) colors = bakeColors.ToArray();
+                    }
+                    if (bakeNormals.Count == vertexCount)
+                    {
+                        bakeNormals.CopyTo(normals);
+                    }
+                    else
+                    {
+                        Vector3 facing = cam != null ? pr.transform.InverseTransformDirection(-cam.transform.forward) : Vector3.up;
+                        facing = facing.sqrMagnitude > 1e-12f ? facing.normalized : Vector3.up;
+                        for (int v = 0; v < vertexCount; v++)
+                            normals[v] = facing;
+                    }
+
                     state.skinned.Add(new SkinnedMeshData
                     {
                         source = DynamicSource.ParticleTrail,
                         meshId = pr.GetInstanceID() ^ 0x0F0F0F,
                         remixMeshHash = trailHash,
                         materialId = trailMatId,
-                        vertices = verts,
-                        normals = _reusableParticleTrailMesh.normals,
-                        uvs = _reusableParticleTrailMesh.uv,
-                        colors = _reusableParticleTrailMesh.colors32,
-                        triangles = tris,
+                        vertices = vertices,
+                        normals = normals,
+                        uvs = uvs,
+                        colors = colors,
+                        triangles = triangles,
+                        usedVertexCount = buffers != null ? vertexCount : 0,
+                        usedIndexCount = buffers != null ? indexCount : 0,
                         localToWorld = trailLocalToWorld,
                         boneTransforms = null,
                         skinningData = null,
