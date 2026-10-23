@@ -1013,6 +1013,7 @@ int queued = 0;
                 // Build per-submesh surfaces with separate materials
                 var materials = renderer.sharedMaterials;
                 var surfaces = new List<SubMeshSurface>();
+                var surfaceMaterials = new List<Material>();
 
                 // For combined meshes, each renderer only owns a slice of submeshes
                 int subStart = 0;
@@ -1074,6 +1075,7 @@ int queued = 0;
                         DescribeVertexColorsOnce(mat, mesh, colors);
                     }
                     surfaces.Add(new SubMeshSurface { Indices = tris, MaterialId = matId });
+                    surfaceMaterials.Add(materials != null && sub < materials.Length ? materials[sub] : null);
                 }
 
                 // For combined meshes, compact vertex arrays so each Remix mesh only
@@ -1102,8 +1104,12 @@ int queued = 0;
                 if (!valid)
                     continue;
 
-                // Use transform hierarchy in hash so each object gets its own persistent Remix mesh + material binding
-                ulong meshHash = GenerateInstanceMeshHash(mesh, filter.transform);
+                // Objects with the same mesh and materials share one Remix mesh (a level places the
+                // same rock thousands of times); each keeps its own instance. Combined static-batch
+                // meshes hold per-renderer world-space slices: one mesh per object.
+                ulong meshHash = isCombinedMesh
+                    ? GenerateInstanceMeshHash(mesh, filter.transform)
+                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials);
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
 
                 if (colors != null && colors.Length > 0)
@@ -1403,6 +1409,56 @@ int queued = 0;
                 foreach (var h in surfaceHandles) h.Free();
             }
         }
+
+        // Persistent across sessions (no instance IDs): the mesh's name, size and a sample of its
+        // vertices, and per surface its index count and its material's name, shader, main
+        // texture and colors.
+        private static ulong GenerateSharedMeshHash(Mesh mesh, Vector3[] vertices, List<SubMeshSurface> surfaces, List<Material> surfaceMaterials)
+        {
+            ulong hash = 14695981039346656037UL;
+            void Mix(ulong value) { hash = (hash ^ value) * 1099511628211UL; }
+            void MixString(string text)
+            {
+                if (text == null) { Mix(0); return; }
+                foreach (char c in text) Mix(c);
+                Mix(0xFF);
+            }
+            void MixFloat(float value) { Mix((ulong)BitConverter.ToInt32(BitConverter.GetBytes(value), 0)); }
+
+            Mix(0x5348415245444D53UL); // distinct from the per-object hashes
+            MixString(mesh.name);
+            Mix((ulong)vertices.Length);
+            int step = Math.Max(1, vertices.Length / 16);
+            for (int i = 0; i < vertices.Length; i += step)
+            {
+                MixFloat(vertices[i].x);
+                MixFloat(vertices[i].y);
+                MixFloat(vertices[i].z);
+            }
+            for (int s = 0; s < surfaces.Count; s++)
+            {
+                Mix((ulong)surfaces[s].Indices.Length);
+                var mat = s < surfaceMaterials.Count ? surfaceMaterials[s] : null;
+                if (mat == null) { Mix(0); continue; }
+                MixString(mat.name.Replace(" (Instance)", "").Replace("(Clone)", "").Trim());
+                MixString(mat.shader != null ? mat.shader.name : null);
+                try
+                {
+                    var tex = mat.HasProperty("_MainTex") ? mat.mainTexture : null;
+                    MixString(tex != null ? tex.name : null);
+                    foreach (var prop in SharedHashColorProps)
+                    {
+                        if (!mat.HasProperty(prop)) continue;
+                        var c = mat.GetColor(prop);
+                        MixFloat(c.r); MixFloat(c.g); MixFloat(c.b); MixFloat(c.a);
+                    }
+                }
+                catch { }
+            }
+            return hash == 0 ? 1 : hash;
+        }
+
+        private static readonly string[] SharedHashColorProps = { "_Color", "_BaseColor", "_Tint" };
 
         private static ulong GenerateInstanceMeshHash(Mesh mesh, Transform transform)
         {
