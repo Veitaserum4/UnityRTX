@@ -249,11 +249,12 @@ namespace UnityRemix
         public enum Detail
         {
             DrawRetained, DrawSceneApi, DrawScene, DrawGpuSkinned, DrawDynUpload, DrawDynDraw,
-            ParticleDiscover, ParticleRead, ParticleBuild, ParticleEmit, Trails, DynamicOther,
+            DynUploadPrep, DynUploadLock, DynUploadNative,
+            ParticleDiscover, ParticleRead, ParticleBuild, ParticleAppend, ParticleEmit, Trails, DynamicOther,
             Count
         }
         private static readonly double[] _detailSum = new double[(int)Detail.Count];
-        private static long _gpuSkinnedDraws, _dynUploads, _dynDraws, _particles;
+        private static long _gpuSkinnedDraws, _dynUploads, _dynDraws, _particles, _emittingSystems, _curveParticles;
         private static int _prevGcCount;
         private static readonly double TicksToMs = 1000.0 / Stopwatch.Frequency;
 
@@ -274,9 +275,11 @@ namespace UnityRemix
             _dynDraws += dynDraws;
         }
 
-        public static void AddParticles(int particles)
+        public static void AddParticles(int particles, int emittingSystems, int curveParticles)
         {
             _particles += particles;
+            _emittingSystems += emittingSystems;
+            _curveParticles += curveParticles;
         }
 
         public static void RecordScenePreparation(in RemixAPI.remixapi_ScenePreparationEXT scenePreparation)
@@ -344,15 +347,15 @@ namespace UnityRemix
                 $"Dynamic: {_sumDynamic / n:F2}ms (max {_maxDynamic:F1}ms), " +
                 $"Presenter: {_sumOverlay / n:F2}ms, HUD: {_sumHUD / n:F2}ms | AsyncOverlay: {_sumOverlayProcess / n:F2}ms (max {_maxOverlayProcess:F1}ms)" +
                 $"\n  Draw Breakdown: Retained={D(Detail.DrawRetained, rn)}ms (API {D(Detail.DrawSceneApi, rn)}ms), Scene={D(Detail.DrawScene, rn)}ms, " +
-                $"GpuSkinned={D(Detail.DrawGpuSkinned, rn)}ms ({_gpuSkinnedDraws / rn}), DynUpload={D(Detail.DrawDynUpload, rn)}ms ({_dynUploads / (double)rn:F1}), DynDraw={D(Detail.DrawDynDraw, rn)}ms ({_dynDraws / rn})" +
-                $"\n  Dynamic Breakdown: Particles[Discover={D(Detail.ParticleDiscover, n)}ms, Read={D(Detail.ParticleRead, n)}ms, Build={D(Detail.ParticleBuild, n)}ms, Emit={D(Detail.ParticleEmit, n)}ms] ({_particles / n} particles), " +
+                $"GpuSkinned={D(Detail.DrawGpuSkinned, rn)}ms ({_gpuSkinnedDraws / rn}), DynUpload={D(Detail.DrawDynUpload, rn)}ms ({_dynUploads / (double)rn:F1}) [Prep={D(Detail.DynUploadPrep, rn)}, Lock={D(Detail.DynUploadLock, rn)}, Native={D(Detail.DynUploadNative, rn)}], DynDraw={D(Detail.DrawDynDraw, rn)}ms ({_dynDraws / rn})" +
+                $"\n  Dynamic Breakdown: Particles[Discover={D(Detail.ParticleDiscover, n)}ms, Read={D(Detail.ParticleRead, n)}ms, Build={D(Detail.ParticleBuild, n)}ms (Append {D(Detail.ParticleAppend, n)}), Emit={D(Detail.ParticleEmit, n)}ms] ({_particles / n} particles, {_curveParticles / n} with lifetime curves, {_emittingSystems / n} systems), " +
                 $"Trails={D(Detail.Trails, n)}ms, Other={D(Detail.DynamicOther, n)}ms | GCs={gcCount - _prevGcCount} over {n} frames, heap {GC.GetTotalMemory(false) / (1024 * 1024)}MB" +
                 nativeMsg
             );
 
             _prevGcCount = gcCount;
             Array.Clear(_detailSum, 0, _detailSum.Length);
-            _gpuSkinnedDraws = _dynUploads = _dynDraws = _particles = 0;
+            _gpuSkinnedDraws = _dynUploads = _dynDraws = _particles = _emittingSystems = _curveParticles = 0;
             _statSampleCount = 0;
             _renderSampleCount = 0;
             _sumMainTotal = _maxMainTotal = 0;

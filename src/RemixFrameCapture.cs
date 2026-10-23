@@ -2855,6 +2855,8 @@ namespace UnityRemix
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleDiscover, RemixProfiler.ElapsedMs(discoverStart));
             long loopStart = System.Diagnostics.Stopwatch.GetTimestamp();
             double readMs = 0;
+            particleAppendMs = 0;
+            particleCurveCount = 0;
             List<ParticleEmitterInfo> emitterDetails = collectEmitters ? new List<ParticleEmitterInfo>(Math.Min(totalTracked, 256)) : null;
 
             for (int i = 0; i < trackedParticleSystems.Count; i++)
@@ -3089,7 +3091,9 @@ namespace UnityRemix
                         int particlesToDraw = Math.Min(actualAlive, 4096);
                         renderedParticles += particlesToDraw;
                         var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
+                        long appendStart = System.Diagnostics.Stopwatch.GetTimestamp();
                         AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, matAlpha, isSurfaceAligned);
+                        particleAppendMs += RemixProfiler.ElapsedMs(appendStart);
                         if (collectEmitters && emitterDetails.Count < 200)
                         {
                             emitterDetails.Add(new ParticleEmitterInfo
@@ -3122,7 +3126,9 @@ namespace UnityRemix
                     int particlesToDraw = Math.Min(actualAlive, 4096);
                     renderedParticles += particlesToDraw;
                     var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
+                    long appendStart = System.Diagnostics.Stopwatch.GetTimestamp();
                     AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, matAlpha, isSurfaceAligned);
+                    particleAppendMs += RemixProfiler.ElapsedMs(appendStart);
                     if (collectEmitters && emitterDetails.Count < 200)
                     {
                         emitterDetails.Add(new ParticleEmitterInfo
@@ -3145,7 +3151,8 @@ namespace UnityRemix
 
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleRead, readMs);
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleBuild, RemixProfiler.ElapsedMs(loopStart) - readMs);
-            RemixProfiler.AddParticles(renderedParticles);
+            RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleAppend, particleAppendMs);
+            RemixProfiler.AddParticles(renderedParticles, emittingCount, particleCurveCount);
             long emitStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
             // Emit batched billboard meshes to state.skinned
@@ -3301,6 +3308,9 @@ namespace UnityRemix
             return false;
         }
 
+        private double particleAppendMs;
+        private int particleCurveCount;
+
         private void AppendBillboardParticles(
             ParticleBatchBucket bucket,
             ParticleSystemRenderer pr,
@@ -3322,6 +3332,8 @@ namespace UnityRemix
             bool isStartSize3D = mainModule.startSize3D;
             bool hasSizeOverLifetime = ps.sizeOverLifetime.enabled;
             bool hasColorOverLifetime = ps.colorOverLifetime.enabled;
+            if (hasSizeOverLifetime || hasColorOverLifetime)
+                particleCurveCount += numParticlesAlive;
 
             var texModule = ps.textureSheetAnimation;
             bool useTexSheet = texModule.enabled;

@@ -564,6 +564,7 @@ namespace UnityRemix
         {
             if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0)
                 return IntPtr.Zero;
+            long prepStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
             // vertexMap: the mesh is the listed vertices only (triangles index the map).
             // Without normals to map, work on the compacted vertices instead.
@@ -752,16 +753,21 @@ namespace UnityRemix
                 
                 IntPtr handle;
                 RemixAPI.remixapi_ErrorCode result;
+                long lockStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                RemixProfiler.AddDetail(RemixProfiler.Detail.DynUploadPrep, (lockStart - prepStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
                 lock (apiLock)
                 {
+                    long nativeStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    RemixProfiler.AddDetail(RemixProfiler.Detail.DynUploadLock, (nativeStart - lockStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
                     result = createMeshFunc(ref meshInfo, out handle);
+                    RemixProfiler.AddDetail(RemixProfiler.Detail.DynUploadNative, RemixProfiler.ElapsedMs(nativeStart));
                 }
-                
+
                 if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                 {
                     return IntPtr.Zero;
                 }
-                
+
                 return handle;
             }
             finally
