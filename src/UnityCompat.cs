@@ -46,8 +46,41 @@ namespace UnityRemix
             return result.ToArray();
         }
 
+        // Object.FindObjectsByType<T>(FindObjectsSortMode.None) (Unity 2021.3.18+/2022.2+):
+        // active objects like FindObjectsOfType, without sorting them by instance ID.
+        private static class UnsortedSceneFinder<T> where T : Component
+        {
+            internal static readonly Func<T[]> Find = CreateFinder();
+
+            private static Func<T[]> CreateFinder()
+            {
+                try
+                {
+                    foreach (var method in typeof(UnityEngine.Object).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+                    {
+                        if (method.Name != "FindObjectsByType" || !method.IsGenericMethodDefinition)
+                            continue;
+                        var parameters = method.GetParameters();
+                        if (parameters.Length != 1 || !parameters[0].ParameterType.IsEnum ||
+                            parameters[0].ParameterType.Name != "FindObjectsSortMode")
+                            continue;
+                        var none = System.Linq.Expressions.Expression.Constant(Enum.ToObject(parameters[0].ParameterType, 0));
+                        var call = System.Linq.Expressions.Expression.Call(method.MakeGenericMethod(typeof(T)), none);
+                        return System.Linq.Expressions.Expression.Lambda<Func<T[]>>(call).Compile();
+                    }
+                }
+                catch
+                {
+                }
+                return null;
+            }
+        }
+
+        // Active scene components in no particular order.
         public static T[] FindActiveSceneComponents<T>() where T : Component
         {
+            if (UnsortedSceneFinder<T>.Find != null)
+                return UnsortedSceneFinder<T>.Find();
             if (SceneFinder<T>.Find != null)
                 return SceneFinder<T>.Find(false);
             return UnityEngine.Object.FindObjectsOfType<T>();

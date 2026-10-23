@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 using BepInEx.Configuration;
 using BepInEx.Logging;
@@ -132,6 +133,13 @@ namespace UnityRemix
 
         // Scrolling UV mesh tracking
         private static readonly int PropScrollOffset = Shader.PropertyToID("_ScrollOffset");
+        private static readonly int PropMainTex = Shader.PropertyToID("_MainTex");
+        private static readonly int PropBaseMap = Shader.PropertyToID("_BaseMap");
+        private static readonly int PropDiffuse = Shader.PropertyToID("_Diffuse");
+        private static readonly int PropTexture = Shader.PropertyToID("_Texture");
+        private static readonly int PropColor = Shader.PropertyToID("_Color");
+        private static readonly int PropBaseColor = Shader.PropertyToID("_BaseColor");
+        private static readonly int PropEmissiveColor = Shader.PropertyToID("_EmissiveColor");
         private class CachedScrollingMesh
         {
             public Vector3[] vertices;
@@ -592,6 +600,7 @@ namespace UnityRemix
             public int meshId;
             public Matrix4x4 localToWorld;
             public StaticGeometryKey dedupeKey;
+            public int drawnFrame; // frame the main capture loop last drew it (active that frame)
         }
         private readonly object persistentStaticLock = new object();
         private Dictionary<int, PersistentStaticInstance> persistentStaticInstances = new Dictionary<int, PersistentStaticInstance>();
@@ -661,6 +670,9 @@ namespace UnityRemix
             public uint categoryFlags;
             public Vector4 uvST;
             public int bakeFrame;
+            // Optional: the vertices this entry's triangles use (triangles index into it).
+            // Lets one submesh of a multi-material baked mesh upload only its own vertices.
+            public int[] vertexMap;
         }
 
         /// <summary>
@@ -872,6 +884,7 @@ namespace UnityRemix
             skinnedRoundRobinIndex = 0;
             persistentSkinnedData.Clear();
             cachedTopology.Clear();
+            bakedTopology.Clear();
             cachedSkinning.Clear();
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();
@@ -1312,18 +1325,18 @@ namespace UnityRemix
                         continue;
                     }
 
-                    Texture tex = sharedStaticMpb.GetTexture("_MainTex");
-                    if (tex == null) tex = sharedStaticMpb.GetTexture("_BaseMap");
-                    if (tex == null) tex = sharedStaticMpb.GetTexture("_Diffuse");
-                    if (tex == null) tex = sharedStaticMpb.GetTexture("_Texture");
+                    Texture tex = sharedStaticMpb.GetTexture(PropMainTex);
+                    if (tex == null) tex = sharedStaticMpb.GetTexture(PropBaseMap);
+                    if (tex == null) tex = sharedStaticMpb.GetTexture(PropDiffuse);
+                    if (tex == null) tex = sharedStaticMpb.GetTexture(PropTexture);
                     if (tex != null)
                     {
                         mpbMainTex = tex;
                         mpbHash = HashCombine(mpbHash, tex.GetInstanceID());
                     }
-                    Color col = sharedStaticMpb.GetColor("_Color");
+                    Color col = sharedStaticMpb.GetColor(PropColor);
                     if (col.a <= 0f && col.r <= 0f && col.g <= 0f && col.b <= 0f)
-                        col = sharedStaticMpb.GetColor("_BaseColor");
+                        col = sharedStaticMpb.GetColor(PropBaseColor);
                     if (col.a > 0f || col.r > 0f || col.g > 0f || col.b > 0f)
                     {
                         mpbColor = col;
@@ -1331,7 +1344,7 @@ namespace UnityRemix
                         int colInt = (c32.a << 24) | (c32.r << 16) | (c32.g << 8) | c32.b;
                         mpbHash = HashCombine(mpbHash, colInt);
                     }
-                    Color emis = sharedStaticMpb.GetColor("_EmissiveColor");
+                    Color emis = sharedStaticMpb.GetColor(PropEmissiveColor);
                     if (emis.a > 0f || emis.r > 0f || emis.g > 0f || emis.b > 0f)
                     {
                         mpbEmissive = emis;
@@ -1579,7 +1592,8 @@ namespace UnityRemix
                             meshKey = meshKey,
                             meshId = meshId,
                             localToWorld = transform,
-                            dedupeKey = dedupeKey
+                            dedupeKey = dedupeKey,
+                            drawnFrame = frameCount
                         };
                     }
                 }
@@ -1598,6 +1612,10 @@ namespace UnityRemix
                     foreach (var kv in persistentStaticInstances)
                     {
                         var entry = kv.Value;
+                        // Drawn by the loop above this frame: alive and active, nothing to check.
+                        if (entry.drawnFrame == frameCount)
+                            continue;
+
                         // Unity null check: renderer was destroyed
                         if (entry.renderer == null)
                         {
@@ -4018,6 +4036,229 @@ namespace UnityRemix
         /// <summary>
         /// BakeMesh fallback: CPU re-skin a single skinned mesh.
         /// </summary>
+        // BakeMesh fallback: what does not change between bakes of one renderer — its
+        // mesh hash (bone names included), UVs, vertex colors and per-submesh triangles,
+        // each compacted to the vertices it uses so a multi-material mesh does not
+        // upload every vertex once per submesh. Rebuilt when the shared mesh changes.
+        private sealed class BakedSubmesh
+        {
+            public int[] triangles;
+            public int[] vertexMap; // null: the triangles index the whole mesh
+        }
+        private sealed class BakedRendererTopology
+        {
+            public int sharedMeshId;
+            public int vertexCount;
+            public ulong meshHash;
+            public Vector2[] uvs;
+            public Color32[] colors;
+            public int[] mergedTriangles;
+            public BakedSubmesh[] submeshes; // null entries: no valid triangles
+            // Pose of the last bake (bones relative to the renderer, its scale, blendshape
+            // weights): an unchanged pose bakes the same vertices, so the last upload stands.
+            public ulong poseSignature;
+            public bool poseValid;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct FloatBits
+        {
+            [FieldOffset(0)] public float value;
+            [FieldOffset(0)] public uint bits;
+        }
+
+        private static void MixPose(ref ulong hash, float value)
+        {
+            var f = new FloatBits { value = value };
+            hash = (hash ^ f.bits) * 1099511628211UL;
+        }
+
+        private static ulong ComputePoseSignature(SkinnedMeshRenderer skinned, Transform root, Transform[] bones, Mesh sharedMesh)
+        {
+            ulong hash = 14695981039346656037UL;
+            var scale = root.lossyScale;
+            MixPose(ref hash, scale.x);
+            MixPose(ref hash, scale.y);
+            MixPose(ref hash, scale.z);
+            if (bones != null)
+            {
+                var rootInverse = root.worldToLocalMatrix;
+                for (int b = 0; b < bones.Length; b++)
+                {
+                    var bone = bones[b];
+                    if (bone == null)
+                    {
+                        hash = (hash ^ 0x9E3779B9UL) * 1099511628211UL;
+                        continue;
+                    }
+                    var m = rootInverse * bone.localToWorldMatrix;
+                    MixPose(ref hash, m.m00); MixPose(ref hash, m.m01); MixPose(ref hash, m.m02); MixPose(ref hash, m.m03);
+                    MixPose(ref hash, m.m10); MixPose(ref hash, m.m11); MixPose(ref hash, m.m12); MixPose(ref hash, m.m13);
+                    MixPose(ref hash, m.m20); MixPose(ref hash, m.m21); MixPose(ref hash, m.m22); MixPose(ref hash, m.m23);
+                }
+            }
+            int blendShapes = sharedMesh.blendShapeCount;
+            for (int i = 0; i < blendShapes; i++)
+                MixPose(ref hash, skinned.GetBlendShapeWeight(i));
+            return hash;
+        }
+
+        // The last bake still holds: move its entries and refresh their materials.
+        // A changed material uploads again (it is part of the mesh); false: bake.
+        private bool ReuseBake(SkinnedMeshRenderer skinned, int skinnedId, int matId, Matrix4x4 localToWorld,
+                               BakedRendererTopology topo, Material[] materials, bool doLog)
+        {
+            for (int sub = 0; sub < topo.submeshes.Length; sub++)
+            {
+                if (topo.submeshes[sub] == null) continue;
+                int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
+                if (!persistentSkinnedData.ContainsKey(subKey))
+                    return false;
+            }
+            for (int sub = 0; sub < topo.submeshes.Length; sub++)
+            {
+                if (topo.submeshes[sub] == null) continue;
+                int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
+                int subMatId = matId;
+                if (materials != null && sub < materials.Length && materials[sub] != null)
+                {
+                    subMatId = ResolveMaterial(skinned, materials[sub], doLog);
+                    if (subMatId == 0) subMatId = matId;
+                }
+                var entry = persistentSkinnedData[subKey];
+                entry.localToWorld = localToWorld;
+                if (entry.materialId != subMatId)
+                {
+                    entry.materialId = subMatId;
+                    entry.bakeFrame = Time.frameCount;
+                }
+                persistentSkinnedData[subKey] = entry;
+            }
+            return true;
+        }
+        private readonly Dictionary<int, BakedRendererTopology> bakedTopology = new Dictionary<int, BakedRendererTopology>();
+
+        private static BakedSubmesh CompactSubmesh(int[] triangles, int vertexCount)
+        {
+            var remap = new int[vertexCount];
+            for (int i = 0; i < remap.Length; i++) remap[i] = -1;
+            int used = 0;
+            for (int i = 0; i < triangles.Length; i++)
+            {
+                int v = triangles[i];
+                if (v < 0 || v >= vertexCount)
+                    return new BakedSubmesh { triangles = triangles }; // the converter rejects it
+                if (remap[v] < 0)
+                    remap[v] = used++;
+            }
+            if (used == vertexCount)
+                return new BakedSubmesh { triangles = triangles };
+
+            var map = new int[used];
+            for (int v = 0; v < vertexCount; v++)
+                if (remap[v] >= 0)
+                    map[remap[v]] = v;
+            var local = new int[triangles.Length];
+            for (int i = 0; i < triangles.Length; i++)
+                local[i] = remap[triangles[i]];
+            return new BakedSubmesh { triangles = local, vertexMap = map };
+        }
+
+        private BakedRendererTopology BuildBakedTopology(SkinnedMeshRenderer skinned, Mesh sharedMesh, Mesh bakedMesh, int sharedMeshId, int vertexCount)
+        {
+            // Reuse cached UVs and triangles — they never change between frames
+            Vector2[] uvCoords;
+            int[] tris;
+            if (cachedTopology.TryGetValue(sharedMeshId, out var topo) && topo.valid && topo.uvs != null && topo.triangles != null)
+            {
+                uvCoords = topo.uvs;
+                tris = topo.triangles;
+            }
+            else
+            {
+                uvCoords = bakedMesh.uv;
+                var allTris = new List<int>();
+                for (int i = 0; i < bakedMesh.subMeshCount; i++)
+                {
+                    if (bakedMesh.GetTopology(i) != MeshTopology.Triangles)
+                        continue;
+                    var subTris = bakedMesh.GetTriangles(i);
+                    if (subTris != null && subTris.Length > 0)
+                        allTris.AddRange(subTris);
+                }
+                tris = allTris.ToArray();
+            }
+
+            if (tris.Length == 0 || tris.Length % 3 != 0)
+                return null;
+
+            // Vertex colors don't change with animation — read from sharedMesh or baked mesh
+            Color32[] colors = null;
+            try
+            {
+                if (sharedMesh.isReadable)
+                {
+                    colors = sharedMesh.colors32;
+                    if (colors != null && colors.Length == 0) colors = null;
+                }
+                if (colors == null)
+                {
+                    colors = bakedMesh.colors32;
+                    if (colors != null && colors.Length == 0) colors = null;
+                }
+            }
+            catch { }
+
+            ulong combinedMeshHash = RemixMeshConverter.GenerateMeshHash(sharedMesh);
+            var bones = skinned.bones;
+            if (bones != null)
+            {
+                foreach (var b in bones)
+                {
+                    if (b != null)
+                        combinedMeshHash ^= HashUtils.HashStringFNV(b.name);
+                    combinedMeshHash *= 1099511628211UL;
+                }
+            }
+
+            // Per-submesh triangle arrays from bakedMesh
+            int subMeshCount = bakedMesh.subMeshCount;
+            var perSubTris = new int[subMeshCount][];
+            bool anySubValid = false;
+            for (int i = 0; i < subMeshCount; i++)
+            {
+                if (bakedMesh.GetTopology(i) != MeshTopology.Triangles) continue;
+                var st = bakedMesh.GetTriangles(i);
+                if (st != null && st.Length > 0)
+                {
+                    perSubTris[i] = st;
+                    anySubValid = true;
+                }
+            }
+            // Fallback: if no valid per-sub triangles, use merged
+            if (!anySubValid)
+                perSubTris = new int[][] { tris };
+
+            var submeshes = new BakedSubmesh[perSubTris.Length];
+            for (int i = 0; i < perSubTris.Length; i++)
+            {
+                var st = perSubTris[i];
+                if (st != null && st.Length > 0 && st.Length % 3 == 0)
+                    submeshes[i] = perSubTris.Length > 1 ? CompactSubmesh(st, vertexCount) : new BakedSubmesh { triangles = st };
+            }
+
+            return new BakedRendererTopology
+            {
+                sharedMeshId = sharedMeshId,
+                vertexCount = vertexCount,
+                meshHash = combinedMeshHash,
+                uvs = uvCoords,
+                colors = colors,
+                mergedTriangles = tris,
+                submeshes = submeshes
+            };
+        }
+
         private bool BakeSingleMesh(SkinnedMeshRenderer skinned, int skinnedId, int matId, Matrix4x4 localToWorld, bool doLog)
         {
             try
@@ -4028,97 +4269,60 @@ namespace UnityRemix
                     bakedMesh.name = $"Baked_{skinned.name}";
                     bakedMeshes[skinnedId] = bakedMesh;
                 }
-                
+
+                var sharedMesh = skinned.sharedMesh;
+                if (sharedMesh == null)
+                    return false;
+                int sharedMeshId = sharedMesh.GetInstanceID();
+                var skinnedInfo = GetOrCreateSkinnedInfo(skinned);
+                ulong pose = ComputePoseSignature(skinned, skinnedInfo.transform, skinnedInfo.bones, sharedMesh);
+                if (bakedTopology.TryGetValue(skinnedId, out var lastTopo) && lastTopo.sharedMeshId == sharedMeshId &&
+                    lastTopo.poseValid && lastTopo.poseSignature == pose &&
+                    ReuseBake(skinned, skinnedId, matId, localToWorld, lastTopo, skinnedInfo.sharedMaterials, doLog))
+                {
+                    return true;
+                }
+
                 skinned.BakeMesh(bakedMesh);
-                
+
                 var verts = bakedMesh.vertices;
                 var norms = bakedMesh.normals;
-                
-                // Reuse cached UVs and triangles — they never change between frames
-                int sharedMeshId2 = skinned.sharedMesh.GetInstanceID();
-                Vector2[] uvCoords;
-                int[] tris;
-                if (cachedTopology.TryGetValue(sharedMeshId2, out var topo) && topo.valid && topo.uvs != null && topo.triangles != null)
-                {
-                    uvCoords = topo.uvs;
-                    tris = topo.triangles;
-                }
-                else
-                {
-                    uvCoords = bakedMesh.uv;
-                    var allTris = new List<int>();
-                    for (int i = 0; i < bakedMesh.subMeshCount; i++)
-                    {
-                        if (bakedMesh.GetTopology(i) != MeshTopology.Triangles)
-                            continue;
-                        var subTris = bakedMesh.GetTriangles(i);
-                        if (subTris != null && subTris.Length > 0)
-                            allTris.AddRange(subTris);
-                    }
-                    tris = allTris.ToArray();
-                }
-                
-                if (verts == null || verts.Length == 0 || tris.Length == 0 || tris.Length % 3 != 0)
+                if (verts == null || verts.Length == 0)
                     return false;
-                
-                // Vertex colors don't change with animation — read from sharedMesh or baked mesh
-                Color32[] colors = null;
-                try
-                {
-                    var sharedMesh = skinned.sharedMesh;
-                    if (sharedMesh != null && sharedMesh.isReadable)
-                    {
-                        colors = sharedMesh.colors32;
-                        if (colors != null && colors.Length == 0) colors = null;
-                    }
-                    if (colors == null)
-                    {
-                        colors = bakedMesh.colors32;
-                        if (colors != null && colors.Length == 0) colors = null;
-                    }
-                }
-                catch { }
-                
-                ulong combinedMeshHash = RemixMeshConverter.GenerateMeshHash(skinned.sharedMesh);
-                ulong baseMeshHash = combinedMeshHash;
-                if (skinned.bones != null)
-                {
-                    foreach (var b in skinned.bones)
-                    {
-                        if (b != null)
-                            combinedMeshHash ^= HashUtils.HashStringFNV(b.name);
-                        combinedMeshHash *= 1099511628211UL;
-                    }
-                }
-                
 
-                
-                // Build per-submesh triangle arrays from bakedMesh
-                int subMeshCount = bakedMesh.subMeshCount;
-                var perSubTrisBake = new int[subMeshCount][];
-                for (int i = 0; i < subMeshCount; i++)
+                if (!bakedTopology.TryGetValue(skinnedId, out var topo) || topo.sharedMeshId != sharedMeshId || topo.vertexCount != verts.Length)
                 {
-                    if (bakedMesh.GetTopology(i) != MeshTopology.Triangles) { perSubTrisBake[i] = new int[0]; continue; }
-                    var st = bakedMesh.GetTriangles(i);
-                    perSubTrisBake[i] = (st != null && st.Length > 0) ? st : new int[0];
+                    topo = BuildBakedTopology(skinned, sharedMesh, bakedMesh, sharedMeshId, verts.Length);
+                    if (topo == null)
+                    {
+                        bakedTopology.Remove(skinnedId);
+                        return false;
+                    }
+                    bakedTopology[skinnedId] = topo;
+                    if (verts.Length > 20000)
+                        logger.LogInfo($"[Skinning] Large BakeMesh fallback '{skinned.name}': {verts.Length} verts, {topo.mergedTriangles.Length / 3} tris, {topo.submeshes.Length} submeshes");
+
+                    // Complete topology from baked mesh if triangles were unavailable (non-readable mesh)
+                    if (cachedTopology.TryGetValue(sharedMeshId, out var pendingTopo) && !pendingTopo.valid)
+                    {
+                        pendingTopo.uvs = topo.uvs;
+                        pendingTopo.triangles = topo.mergedTriangles;
+                        pendingTopo.valid = true;
+                        cachedTopology[sharedMeshId] = pendingTopo;
+                        logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' topology completed from BakeMesh: verts={pendingTopo.vertexCount} tris={topo.mergedTriangles.Length / 3} stride={pendingTopo.stride}");
+                    }
                 }
-                
-                // Fallback: if no valid per-sub triangles, use merged
-                bool anySubValid = false;
-                foreach (var st in perSubTrisBake) if (st != null && st.Length > 0) { anySubValid = true; break; }
-                if (!anySubValid)
+
+                topo.poseSignature = pose;
+                topo.poseValid = true;
+
+                var smMaterialsBake = skinnedInfo.sharedMaterials;
+                ulong combinedMeshHash = topo.meshHash;
+                for (int sub = 0; sub < topo.submeshes.Length; sub++)
                 {
-                    if (tris.Length == 0 || tris.Length % 3 != 0) return false;
-                    perSubTrisBake = new int[][] { tris };
-                }
-                
-                var smMaterialsBake = skinned.sharedMaterials;
-                
-                for (int sub = 0; sub < perSubTrisBake.Length; sub++)
-                {
-                    int[] subTris = perSubTrisBake[sub];
-                    if (subTris == null || subTris.Length == 0 || subTris.Length % 3 != 0) continue;
-                    
+                    var submesh = topo.submeshes[sub];
+                    if (submesh == null) continue;
+
                     int subMatId = matId;
                     if (smMaterialsBake != null && sub < smMaterialsBake.Length && smMaterialsBake[sub] != null)
                     {
@@ -4126,33 +4330,24 @@ namespace UnityRemix
                         subMatId = ResolveMaterial(skinned, subMat, doLog);
                         if (subMatId == 0) subMatId = matId;
                     }
-                    
+
                     int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                     ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
-                    
+
                     persistentSkinnedData[subKey] = new SkinnedMeshData
                     {
                         meshId = subKey,
-                        remixMeshHash = (sub == 0) ? combinedMeshHash : subMeshHash,
+                        remixMeshHash = subMeshHash,
                         materialId = subMatId,
                         vertices = verts,
                         normals = norms,
-                        uvs = uvCoords,
-                        colors = colors,
-                        triangles = subTris,
+                        uvs = topo.uvs,
+                        colors = topo.colors,
+                        triangles = submesh.triangles,
+                        vertexMap = submesh.vertexMap,
                         localToWorld = localToWorld,
                         bakeFrame = Time.frameCount
                     };
-                }
-
-                // Complete topology from baked mesh if triangles were unavailable (non-readable mesh)
-                if (cachedTopology.TryGetValue(sharedMeshId2, out var pendingTopo) && !pendingTopo.valid)
-                {
-                    pendingTopo.uvs = uvCoords;
-                    pendingTopo.triangles = tris;
-                    pendingTopo.valid = true;
-                    cachedTopology[sharedMeshId2] = pendingTopo;
-                    logger.LogInfo($"[MeshTopology] '{skinned.sharedMesh.name}' topology completed from BakeMesh: verts={pendingTopo.vertexCount} tris={tris.Length / 3} stride={pendingTopo.stride}");
                 }
 
                 return true;
@@ -4164,7 +4359,7 @@ namespace UnityRemix
                 return false;
             }
         }
-        
+
         /// <summary>
         /// Combine two ints into a unique hash for per-renderer material IDs
         /// </summary>
@@ -4348,6 +4543,7 @@ namespace UnityRemix
             }
             bakedMeshes.Clear();
             cachedTopology.Clear();
+            bakedTopology.Clear();
         }
     }
 }

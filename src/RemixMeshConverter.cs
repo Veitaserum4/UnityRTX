@@ -559,11 +559,36 @@ namespace UnityRemix
             int frameHash,
             int materialId = 0,
             Color32[] colors = null,
-            Vector4? uvST = null)
+            Vector4? uvST = null,
+            int[] vertexMap = null)
         {
             if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0)
                 return IntPtr.Zero;
-            
+
+            // vertexMap: the mesh is the listed vertices only (triangles index the map).
+            // Without normals to map, work on the compacted vertices instead.
+            if (vertexMap != null && (normals == null || normals.Length != vertices.Length))
+            {
+                var compactVertices = new Vector3[vertexMap.Length];
+                Vector2[] compactUvs = uvs != null && uvs.Length == vertices.Length ? new Vector2[vertexMap.Length] : null;
+                Color32[] compactColors = colors != null && colors.Length == vertices.Length ? new Color32[vertexMap.Length] : null;
+                for (int i = 0; i < vertexMap.Length; i++)
+                {
+                    int src = vertexMap[i];
+                    if (src < 0 || src >= vertices.Length)
+                        return IntPtr.Zero;
+                    compactVertices[i] = vertices[src];
+                    if (compactUvs != null) compactUvs[i] = uvs[src];
+                    if (compactColors != null) compactColors[i] = colors[src];
+                }
+                vertices = compactVertices;
+                uvs = compactUvs;
+                colors = compactColors;
+                normals = null;
+                vertexMap = null;
+            }
+            int vertexCount = vertexMap != null ? vertexMap.Length : vertices.Length;
+
             if (triangles.Length % 3 != 0)
             {
                 if (skinnedRenderCount % 300 == 1)
@@ -576,7 +601,7 @@ namespace UnityRemix
             {
                 for (int i = 0; i < triangles.Length; i++)
                 {
-                    if (triangles[i] < 0 || triangles[i] >= vertices.Length)
+                    if (triangles[i] < 0 || triangles[i] >= vertexCount)
                     {
                         if (skinnedRenderCount % 300 == 1)
                             logger.LogError($"Skinned mesh {meshHash} has out-of-bounds index");
@@ -604,8 +629,8 @@ namespace UnityRemix
                 pinnedMeshPool[meshHash] = poolData;
             }
             
-            poolData.EnsureCapacity(vertices.Length, triangles.Length);
-            
+            poolData.EnsureCapacity(vertexCount, triangles.Length);
+
             // Fill data (Y-up to Z-up conversion), applying UV tiling/offset
             Vector4 st = uvST.HasValue && (uvST.Value.x != 0f || uvST.Value.y != 0f || uvST.Value.z != 0f || uvST.Value.w != 0f)
                 ? uvST.Value
@@ -613,28 +638,29 @@ namespace UnityRemix
             if (st.x == 0f) st.x = 1f;
             if (st.y == 0f) st.y = 1f;
             bool hasColors = colors != null && colors.Length == vertices.Length;
-            for (int i = 0; i < vertices.Length; i++)
+            for (int i = 0; i < vertexCount; i++)
             {
-                float u = uvs[i].x * st.x + st.z;
-                float v = uvs[i].y * st.y + st.w;
-                uint col = hasColors ? Color32ToBGRA(colors[i]) : 0xFFFFFFFF;
+                int src = vertexMap != null ? vertexMap[i] : i;
+                float u = uvs[src].x * st.x + st.z;
+                float v = uvs[src].y * st.y + st.w;
+                uint col = hasColors ? Color32ToBGRA(colors[src]) : 0xFFFFFFFF;
                 poolData.vertices[i] = RemixAPI.MakeVertex(
-                    vertices[i].x, vertices[i].z, vertices[i].y,
-                    normals[i].x, normals[i].z, normals[i].y,
+                    vertices[src].x, vertices[src].z, vertices[src].y,
+                    normals[src].x, normals[src].z, normals[src].y,
                     u, v,
                     col
                 );
             }
-            
+
             int validIdxCount = 0;
             for (int i = 0; i + 2 < triangles.Length; i += 3)
             {
                 int i0 = triangles[i];
                 int i1 = triangles[i + 1];
                 int i2 = triangles[i + 2];
-                if (i0 >= 0 && i0 < vertices.Length &&
-                    i1 >= 0 && i1 < vertices.Length &&
-                    i2 >= 0 && i2 < vertices.Length)
+                if (i0 >= 0 && i0 < vertexCount &&
+                    i1 >= 0 && i1 < vertexCount &&
+                    i2 >= 0 && i2 < vertexCount)
                 {
                     poolData.indices[validIdxCount++] = (uint)i0;
                     poolData.indices[validIdxCount++] = (uint)i1;
@@ -657,7 +683,7 @@ namespace UnityRemix
             var surface = new RemixAPI.remixapi_MeshInfoSurfaceTriangles
             {
                 vertices_values = poolData.vertexHandle.AddrOfPinnedObject(),
-                vertices_count = (ulong)vertices.Length,
+                vertices_count = (ulong)vertexCount,
                 indices_values = poolData.indexHandle.AddrOfPinnedObject(),
                 indices_count = (ulong)validIdxCount,
                 skinning_hasvalue = 0,

@@ -53,6 +53,11 @@ namespace UnityRemix
         private RemixSkyboxManager skyboxManager;
         private RemixTerrainManager terrainManager;
         private readonly HashSet<ulong> updatedMeshes = new HashSet<ulong>();
+        // Dynamic mesh uploads (RenderSkinnedMeshes), summed between periodic log lines.
+        private int uploadLogFrames;
+        private long uploadedParticleMeshes, uploadedParticleVerts, uploadedMeshes, uploadedVerts;
+        private int largestUploadVerts;
+        private ulong largestUploadHash;
         private readonly HashSet<int> claimedRendererIds = new HashSet<int>();
         private readonly HashSet<StaticGeometryKey> claimedStaticKeys = new HashSet<StaticGeometryKey>();
         
@@ -336,6 +341,7 @@ namespace UnityRemix
         private readonly System.Diagnostics.Stopwatch renderPhaseSw = new System.Diagnostics.Stopwatch();
         private static readonly uint FramePerfStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_FramePerformanceEXT>();
         private static readonly uint FrameBreakdownStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_FrameBreakdownEXT>();
+        private static readonly uint ScenePreparationStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_ScenePreparationEXT>();
         private static readonly uint TracingStatsStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_TracingStatisticsEXT>();
         private static readonly uint TextureStatsStructSize = (uint)Marshal.SizeOf<RemixAPI.remixapi_TextureStatisticsEXT>();
 
@@ -474,6 +480,13 @@ namespace UnityRemix
             if (any)
             {
                 RemixProfiler.RecordNativeTelemetry(in fp, in fb, in ts, in tx);
+            }
+
+            if (any && RemixAPI.GetScenePreparationEXTFunc != null)
+            {
+                var sp = new RemixAPI.remixapi_ScenePreparationEXT { structSize = ScenePreparationStructSize };
+                if (RemixAPI.GetScenePreparationEXTFunc(ref sp) == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                    RemixProfiler.RecordScenePreparation(in sp);
             }
         }
         
@@ -1078,12 +1091,30 @@ namespace UnityRemix
                                 state.frameCount,
                                 skinned.materialId,
                                 skinned.colors,
-                                skinned.uvST
+                                skinned.uvST,
+                                skinned.vertexMap
                             );
                             
                             if (meshHandle == IntPtr.Zero)
                                 continue;
-                            
+
+                            int uploaded = skinned.vertexMap != null ? skinned.vertexMap.Length : skinned.vertices.Length;
+                            if ((skinned.remixMeshHash & 0x4000000000000000UL) != 0)
+                            {
+                                uploadedParticleMeshes++;
+                                uploadedParticleVerts += uploaded;
+                            }
+                            else
+                            {
+                                uploadedMeshes++;
+                                uploadedVerts += uploaded;
+                                if (uploaded > largestUploadVerts)
+                                {
+                                    largestUploadVerts = uploaded;
+                                    largestUploadHash = skinned.remixMeshHash;
+                                }
+                            }
+
                             meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount, skinned.bakeFrame);
                         }
                         updatedMeshes.Add(skinned.remixMeshHash);
@@ -1098,6 +1129,16 @@ namespace UnityRemix
                 catch { }
             }
             
+            if (++uploadLogFrames >= 300)
+            {
+                logger.LogInfo($"[DynamicUploads] per frame over {uploadLogFrames}: meshes {uploadedMeshes / (double)uploadLogFrames:F1} ({uploadedVerts / uploadLogFrames} verts), " +
+                    $"particle batches {uploadedParticleMeshes / (double)uploadLogFrames:F1} ({uploadedParticleVerts / uploadLogFrames} verts); largest mesh 0x{largestUploadHash:X16} {largestUploadVerts} verts");
+                uploadLogFrames = 0;
+                uploadedParticleMeshes = uploadedParticleVerts = uploadedMeshes = uploadedVerts = 0;
+                largestUploadVerts = 0;
+                largestUploadHash = 0;
+            }
+
             // Cleanup stale meshes periodically
             if (state.frameCount % 60 == 0)
             {
