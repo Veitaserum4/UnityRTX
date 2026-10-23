@@ -60,11 +60,43 @@ namespace UnityRemix
                 result = "no color pass";
                 return null;
             }
+            // Particle shaders read particle age, random values or custom data from the extra
+            // texture coordinate channels: zero first (no custom streams), then mid-life values.
+            Color32[] output = null;
+            float maxAlpha = 0f;
+            float stream = 0f;
+            foreach (float candidate in new[] { 0f, 0.5f, 1f })
+            {
+                output = Compose(material, pass, size, candidate, out maxAlpha);
+                stream = candidate;
+                if (maxAlpha >= 0.02f)
+                    break;
+            }
+            if (maxAlpha < 0.02f)
+            {
+                result = $"pass {pass} drew nothing";
+                return null;
+            }
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false, false)
+            {
+                name = "ParticleSnapshot_" + material.name,
+                wrapMode = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Bilinear
+            };
+            texture.SetPixels32(output);
+            texture.Apply(false, false);
+            result = $"pass {pass} '{PassName(material, pass)}', streams {stream:F1}, max alpha {maxAlpha:F2}";
+            return texture;
+        }
+
+        private static Color32[] Compose(Material material, int pass, int size, float stream, out float maxAlpha)
+        {
+            SetStreams(stream);
             var overBlack = Draw(material, pass, size, Color.clear);
             var overWhite = Draw(material, pass, size, Color.white);
 
             var output = new Color32[size * size];
-            float maxAlpha = 0f;
+            maxAlpha = 0f;
             bool linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
             for (int i = 0; i < output.Length; i++)
             {
@@ -82,21 +114,18 @@ namespace UnityRemix
                 output[i] = new Color32((byte)(Mathf.Clamp01(c.r) * 255f + 0.5f), (byte)(Mathf.Clamp01(c.g) * 255f + 0.5f),
                                         (byte)(Mathf.Clamp01(c.b) * 255f + 0.5f), (byte)(a * 255f + 0.5f));
             }
-            if (maxAlpha < 0.02f)
-            {
-                result = $"pass {pass} drew nothing";
-                return null;
-            }
-            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false, false)
-            {
-                name = "ParticleSnapshot_" + material.name,
-                wrapMode = TextureWrapMode.Clamp,
-                filterMode = FilterMode.Bilinear
-            };
-            texture.SetPixels32(output);
-            texture.Apply(false, false);
-            result = $"pass {pass} '{PassName(material, pass)}', max alpha {maxAlpha:F2}";
-            return texture;
+            return output;
+        }
+
+        // TEXCOORD0.zw and TEXCOORD1-2 of the quad: where particle custom vertex streams arrive.
+        private static void SetStreams(float value)
+        {
+            EnsureQuad();
+            var uv0 = new List<Vector4> { new Vector4(0, 0, value, value), new Vector4(1, 0, value, value), new Vector4(1, 1, value, value), new Vector4(0, 1, value, value) };
+            var extra = new List<Vector4> { new Vector4(value, value, value, value), new Vector4(value, value, value, value), new Vector4(value, value, value, value), new Vector4(value, value, value, value) };
+            quad.SetUVs(0, uv0);
+            quad.SetUVs(1, extra);
+            quad.SetUVs(2, extra);
         }
 
         // The first pass that draws color: not shadows, depth, motion vectors, meta or picking.
@@ -119,18 +148,22 @@ namespace UnityRemix
             catch { return ""; }
         }
 
+        private static void EnsureQuad()
+        {
+            if (quad != null)
+                return;
+            quad = new Mesh { name = "ParticleSnapshotQuad" };
+            quad.SetVertices(new List<Vector3> { new Vector3(-0.5f, -0.5f, 0f), new Vector3(0.5f, -0.5f, 0f), new Vector3(0.5f, 0.5f, 0f), new Vector3(-0.5f, 0.5f, 0f) });
+            quad.SetUVs(0, new List<Vector4> { new Vector4(0, 0, 0, 0), new Vector4(1, 0, 0, 0), new Vector4(1, 1, 0, 0), new Vector4(0, 1, 0, 0) });
+            quad.SetColors(new List<Color32> { new Color32(255, 255, 255, 255), new Color32(255, 255, 255, 255), new Color32(255, 255, 255, 255), new Color32(255, 255, 255, 255) });
+            quad.SetNormals(new List<Vector3> { Vector3.back, Vector3.back, Vector3.back, Vector3.back });
+            quad.SetTriangles(new[] { 0, 2, 1, 0, 3, 2 }, 0);
+            quad.RecalculateBounds();
+        }
+
         private static Color[] Draw(Material material, int pass, int size, Color background)
         {
-            if (quad == null)
-            {
-                quad = new Mesh { name = "ParticleSnapshotQuad" };
-                quad.SetVertices(new List<Vector3> { new Vector3(-0.5f, -0.5f, 0f), new Vector3(0.5f, -0.5f, 0f), new Vector3(0.5f, 0.5f, 0f), new Vector3(-0.5f, 0.5f, 0f) });
-                quad.SetUVs(0, new List<Vector4> { new Vector4(0, 0, 0, 0), new Vector4(1, 0, 0, 0), new Vector4(1, 1, 0, 0), new Vector4(0, 1, 0, 0) });
-                quad.SetColors(new List<Color32> { new Color32(255, 255, 255, 255), new Color32(255, 255, 255, 255), new Color32(255, 255, 255, 255), new Color32(255, 255, 255, 255) });
-                quad.SetNormals(new List<Vector3> { Vector3.back, Vector3.back, Vector3.back, Vector3.back });
-                quad.SetTriangles(new[] { 0, 2, 1, 0, 3, 2 }, 0);
-                quad.RecalculateBounds();
-            }
+            EnsureQuad();
             var target = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
             // Depth fade against the scene: put the scene at the far plane.
             var savedDepth = Shader.GetGlobalTexture(CameraDepthTexture);

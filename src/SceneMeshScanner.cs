@@ -851,7 +851,11 @@ namespace UnityRemix
         {
             var filters = Resources.FindObjectsOfTypeAll<MeshFilter>();
             var combinedDataCache = new Dictionary<int, (Vector3[] verts, Vector3[] norms, Vector2[] uvs, Color32[] cols, int[][] subIndices)>();
-            int queued = 0;
+            // Every other mesh, read once per scan and shared by all its renderers (a level places
+            // the same rock or plant thousands of times; nothing downstream writes to these arrays).
+            var sharedMeshData = new Dictionary<int, (Vector3[] verts, Vector3[] norms, Vector2[] uvs, Color32[] cols, int[][] subIndices)>();
+            int sharedMeshReuses = 0;
+int queued = 0;
             int skippedAlreadyScanned = 0, skippedWrongScene = 0, skippedNoRenderer = 0;
             int skippedInactive = 0, skippedDynamic = 0, skippedLayer = 0;
             int skippedNoMesh = 0, skippedNoVerts = 0, skippedNoTris = 0, skippedReadError = 0;
@@ -950,6 +954,16 @@ namespace UnityRemix
                         subMeshIndices = cached.subIndices;
                     }
                 }
+                else if (sharedMeshData.TryGetValue(mesh.GetInstanceID(), out var shared))
+                {
+                    vertices = shared.verts;
+                    normals = shared.norms;
+                    uvs = shared.uvs;
+                    colors = shared.cols;
+                    subMeshIndices = shared.subIndices;
+                    sharedMeshReuses++;
+                }
+                bool readThisMesh = vertices == null;
 
                 if (vertices == null)
                 {
@@ -1039,6 +1053,9 @@ namespace UnityRemix
                     }
                 }
 
+                if (readThisMesh && !isCombinedMesh)
+                    sharedMeshData[mesh.GetInstanceID()] = (vertices, normals, uvs, colors, subMeshIndices);
+
                 for (int sub = 0; sub < subMeshIndices.Length; sub++)
                 {
                     var tris = subMeshIndices[sub];
@@ -1117,7 +1134,7 @@ namespace UnityRemix
 
             if (logDiagnostics || queued > 0)
             {
-                logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
+                logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({sharedMeshData.Count} distinct meshes read, {sharedMeshReuses} reused; {gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
                     $" | skipped: {skippedWrongScene} wrong scene, {skippedAlreadyScanned} already scanned," +
                     $" {skippedInactive} inactive, {skippedLayer} layer excluded, {skippedDynamic} dynamic/ignored, {skippedNoRenderer} no renderer, {skippedNoMesh} no mesh," +
                     $" {skippedReadError} read error, {skippedNoVerts} no verts, {skippedNoTris} no tris");
