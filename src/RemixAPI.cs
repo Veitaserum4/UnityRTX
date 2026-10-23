@@ -713,19 +713,22 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// OpenRemix CPU breakdown of the last traced frame's scene preparation (160 bytes on x64).
+        /// OpenRemix CPU breakdown of the last traced frame's scene preparation by step (168 bytes on x64).
         /// </summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_ScenePreparationEXT
         {
             public uint structSize;
             public uint staticActive;
-            public double staticSyncMilliseconds;
-            public double viewModelMilliseconds;
+            public double totalMilliseconds;
             public double frameMilliseconds;
-            public double opacityMilliseconds;
             public double pruneMilliseconds;
-            public double lightingMilliseconds;
+            public double stageMilliseconds;
+            public double gatherMilliseconds;
+            public double splitMilliseconds;
+            public double treeMilliseconds;
+            public double visibilityMilliseconds;
+            public double staticSyncMilliseconds;
             public double staticTableMilliseconds;
             public ulong staticUnits;
             public ulong staticChanges;
@@ -735,10 +738,8 @@ namespace UnityRemix
             public ulong staticReusedSurfaces;
             public ulong staticRebuiltSurfaces;
             public ulong frameInstances;
-            public ulong frameSurfaces;
-            public ulong opacityProofs;
-            public ulong emitters;
             public ulong lights;
+            public ulong sphereLights;
         }
 
         /// <summary>

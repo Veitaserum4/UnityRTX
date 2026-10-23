@@ -289,8 +289,8 @@ namespace UnityRemix
                 {
                     var sp = _curScenePreparation;
                     nativeMsg +=
-                        $"\n  OpenRemix Scene: Sync={sp.staticSyncMilliseconds:F2}ms, Frame={sp.frameMilliseconds:F2}ms, Opacity={sp.opacityMilliseconds:F2}ms ({sp.opacityProofs} proofs), Prune={sp.pruneMilliseconds:F2}ms, Lighting={sp.lightingMilliseconds:F2}ms ({sp.lights} lights, {sp.emitters} emitters), ViewModel={sp.viewModelMilliseconds:F2}ms | " +
-                        $"Static(active={sp.staticActive}, units={sp.staticUnits}, changes={sp.staticChanges}, rebuilt={sp.staticRebuiltUnits}, removed={sp.staticRemovedUnits}, resyncs={sp.staticResyncs}, tables={sp.staticTableMilliseconds:F2}ms, surf reused/rebuilt={sp.staticReusedSurfaces}/{sp.staticRebuiltSurfaces}) | FrameInst={sp.frameInstances}, FrameSurf={sp.frameSurfaces}";
+                        $"\n  OpenRemix Scene: Total={sp.totalMilliseconds:F2}ms [Frame={sp.frameMilliseconds:F2}ms (Sync={sp.staticSyncMilliseconds:F2}ms), Prune={sp.pruneMilliseconds:F2}ms, Stage={sp.stageMilliseconds:F2}ms, Gather={sp.gatherMilliseconds:F2}ms, Split={sp.splitMilliseconds:F2}ms, Tree={sp.treeMilliseconds:F2}ms, Visibility={sp.visibilityMilliseconds:F2}ms] ({sp.lights} lights, {sp.sphereLights} spheres) | " +
+                        $"Static(active={sp.staticActive}, units={sp.staticUnits}, changes={sp.staticChanges}, rebuilt={sp.staticRebuiltUnits}, removed={sp.staticRemovedUnits}, resyncs={sp.staticResyncs}, tables={sp.staticTableMilliseconds:F2}ms, surf reused/rebuilt={sp.staticReusedSurfaces}/{sp.staticRebuiltSurfaces}) | FrameInst={sp.frameInstances}";
                 }
             }
 
