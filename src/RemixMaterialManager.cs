@@ -674,6 +674,21 @@ namespace UnityRemix
                     tex = FindAlbedoTexture(material, out matchedTexProp);
             }
 
+            // Layered stylized materials: their textures are masks; the composited layers are the albedo.
+            vertexColorWeights[materialId] = LayeredMaterialCompositor.VertexColorWeight(material);
+            bool layeredComposite = false;
+            if (captureTextures.Value && mpbMainTex == null && !(renderer is ParticleSystemRenderer) &&
+                LayeredMaterialCompositor.IsLayered(material))
+            {
+                var composite = GetLayeredComposite(material);
+                if (composite != null)
+                {
+                    tex = composite;
+                    matchedTexProp = null;
+                    layeredComposite = true;
+                }
+            }
+
             // Check for HSV / Brightness / Contrast adjustments (e.g. Unlit/ColorAdjust, stylized character customization)
             Vector4? hsbc = null;
             try
@@ -712,7 +727,7 @@ namespace UnityRemix
             // Get albedo color if not overridden by MPB (smart priority aligned with matched texture)
             if (!mpbColor.HasValue)
             {
-                matData.albedoColor = ResolveMaterialAlbedoColor(material, matchedTexProp);
+                matData.albedoColor = layeredComposite ? Color.white : ResolveMaterialAlbedoColor(material, matchedTexProp);
             }
 
             // Extract PBR metallic: prioritize _BaseMetallic if > 0 (designer value in stylized shaders like PEAK)
@@ -775,6 +790,13 @@ namespace UnityRemix
             if (matData.suppressLightGeneration && !shaderName.Contains("TextMeshPro"))
             {
                 matData.alphaMode = AlphaMode.Blend;
+            }
+            // A layered material's _Shape alpha cuts out its leaves and blades when it alpha tests.
+            if (layeredComposite && material.HasProperty("_Shape") && material.GetTexture("_Shape") != null &&
+                (material.IsKeywordEnabled("_ALPHATEST_ON") || (material.HasProperty("_AlphaClip") && material.GetFloat("_AlphaClip") > 0f)))
+            {
+                matData.alphaMode = AlphaMode.Cutout;
+                matData.alphaCutoff = material.HasProperty("_AlphaClip") && material.GetFloat("_AlphaClip") > 0f ? material.GetFloat("_AlphaClip") : 0.5f;
             }
 
             // Detect translucent kind (Water vs Glass vs None) for OpenRemix
@@ -3726,6 +3748,34 @@ namespace UnityRemix
         private static bool _shaderPropsReflected;
 
         private readonly Dictionary<string, int> describedShaderMaterials = new Dictionary<string, int>();
+
+        // Per material id: how much of a mesh's vertex colors is color (LayeredMaterialCompositor.VertexColorWeight).
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, float> vertexColorWeights = new System.Collections.Concurrent.ConcurrentDictionary<int, float>();
+        private readonly Dictionary<int, Texture2D> layeredComposites = new Dictionary<int, Texture2D>();
+
+        public float GetVertexColorWeight(int materialId)
+        {
+            return vertexColorWeights.TryGetValue(materialId, out float weight) ? weight : 1f;
+        }
+
+        private Texture2D GetLayeredComposite(Material material)
+        {
+            int id = material.GetInstanceID();
+            if (layeredComposites.TryGetValue(id, out var cached))
+                return cached;
+            Texture2D composite = null;
+            try
+            {
+                composite = LayeredMaterialCompositor.Compose(material, 256, out string description);
+                logger.LogInfo($"[LayeredMaterial] '{material.name}' shader '{(material.shader != null ? material.shader.name : "-")}': {description}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"[LayeredMaterial] '{material.name}': {ex.Message}");
+            }
+            layeredComposites[id] = composite;
+            return composite;
+        }
 
         // Particle materials whose look is computed by the shader rather than read from a texture,
         // drawn once by Unity (ParticleMaterialSnapshot). Null: the material's own texture serves.

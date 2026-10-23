@@ -189,6 +189,14 @@ namespace UnityRemix
                            $"range R {minR}-{maxR} G {minG}-{maxG} B {minB}-{maxB} A {minA}-{maxA}");
         }
 
+        private static Color32 WeightVertexColor(Color32 c, float weight)
+        {
+            if (weight >= 1f)
+                return c;
+            return new Color32((byte)(255 + (c.r - 255) * weight), (byte)(255 + (c.g - 255) * weight),
+                               (byte)(255 + (c.b - 255) * weight), c.a);
+        }
+
         public static bool IsMaterialOrShaderInvisible(Material mat)
         {
             if (mat == null) return false;
@@ -1241,6 +1249,11 @@ int queued = 0;
             var uvs = data.UVs;
             var cols = data.Colors;
             bool hasColors = cols != null && cols.Length == verts.Length;
+            // Vertex colors a layered material uses as masks are not color (weight 0); partly color
+            // where the shader scales them (_VertexColorAmount).
+            float vertexColorWeight = data.Surfaces.Length > 0 ? materialManager.GetVertexColorWeight(data.Surfaces[0].MaterialId) : 1f;
+            if (vertexColorWeight <= 0f)
+                hasColors = false;
 
             if (norms == null || norms.Length != verts.Length)
             {
@@ -1275,7 +1288,7 @@ int queued = 0;
                     sharedRemixVerts = new RemixAPI.remixapi_HardcodedVertex[verts.Length];
                     for (int i = 0; i < verts.Length; i++)
                     {
-                        uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(cols[i]) : 0xFFFFFFFF;
+                        uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(WeightVertexColor(cols[i], vertexColorWeight)) : 0xFFFFFFFF;
                         sharedRemixVerts[i] = RemixAPI.MakeVertex(
                             verts[i].x, verts[i].z, verts[i].y,
                             norms[i].x, norms[i].z, norms[i].y,
@@ -1336,7 +1349,7 @@ int queued = 0;
                         {
                             float u = uvs[i].x * st.x + st.z;
                             float v = uvs[i].y * st.y + st.w;
-                            uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(cols[i]) : 0xFFFFFFFF;
+                            uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(WeightVertexColor(cols[i], vertexColorWeight)) : 0xFFFFFFFF;
                             surfVerts[i] = RemixAPI.MakeVertex(
                                 verts[i].x, verts[i].z, verts[i].y,
                                 norms[i].x, norms[i].z, norms[i].y,

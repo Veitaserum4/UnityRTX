@@ -199,7 +199,7 @@ namespace UnityRemix
             }
         }
 
-        private static Color[] Read(Texture source, int size)
+        internal static Color[] Read(Texture source, int size)
         {
             var target = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
             var previous = RenderTexture.active;
