@@ -222,6 +222,7 @@ namespace UnityRemix
             lock (captureLock)
             {
                 currentFrameState = newState;
+                RemixFrameCapture.PublishedFrame = newState.frameCount;
             }
             frameReadyEvent.Set();
         }
@@ -500,6 +501,8 @@ namespace UnityRemix
             lock (captureLock)
             {
                 state = currentFrameState;
+                // Its reused particle buffers stay untouched until this thread takes a newer frame.
+                RemixFrameCapture.RenderingFrame = state.frameCount;
             }
             
             // Setup camera - CRITICAL for rendering!
@@ -1109,13 +1112,16 @@ namespace UnityRemix
                                 skinned.materialId,
                                 skinned.colors,
                                 skinned.uvST,
-                                skinned.vertexMap
+                                skinned.vertexMap,
+                                skinned.usedVertexCount,
+                                skinned.usedIndexCount
                             );
-                            
+
                             if (meshHandle == IntPtr.Zero)
                                 continue;
 
-                            int uploaded = skinned.vertexMap != null ? skinned.vertexMap.Length : skinned.vertices.Length;
+                            int uploaded = skinned.vertexMap != null ? skinned.vertexMap.Length
+                                : skinned.usedVertexCount > 0 ? skinned.usedVertexCount : skinned.vertices.Length;
                             if ((skinned.remixMeshHash & 0x4000000000000000UL) != 0)
                             {
                                 uploadedParticleMeshes++;

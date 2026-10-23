@@ -682,6 +682,10 @@ namespace UnityRemix
             // Optional: the vertices this entry's triangles use (triangles index into it).
             // Lets one submesh of a multi-material baked mesh upload only its own vertices.
             public int[] vertexMap;
+            // Nonzero: the arrays are reused buffers (ParticleBuffers) and only this many
+            // vertices / indices belong to the entry.
+            public int usedVertexCount;
+            public int usedIndexCount;
         }
 
         /// <summary>
@@ -3163,16 +3167,29 @@ namespace UnityRemix
 
                 ulong remixMeshHash = 0x4000000000000000UL | ((ulong)(uint)bucket.SubBucketIndex << 32) | (ulong)(uint)bucket.MaterialId;
 
+                int vertexCount = bucket.Vertices.Count, indexCount = bucket.Triangles.Count;
+                var buffers = TakeParticleBuffers(remixMeshHash, frameCount, vertexCount, indexCount);
+                if (buffers != null)
+                {
+                    bucket.Vertices.CopyTo(buffers.vertices);
+                    bucket.Normals.CopyTo(buffers.normals);
+                    bucket.UVs.CopyTo(buffers.uvs);
+                    bucket.Colors.CopyTo(buffers.colors);
+                    bucket.Triangles.CopyTo(buffers.triangles);
+                }
+
                 state.skinned.Add(new SkinnedMeshData
                 {
                     meshId = bucket.MaterialId,
                     remixMeshHash = remixMeshHash,
                     materialId = bucket.MaterialId,
-                    vertices = bucket.Vertices.ToArray(),
-                    normals = bucket.Normals.ToArray(),
-                    uvs = bucket.UVs.ToArray(),
-                    colors = bucket.Colors.ToArray(),
-                    triangles = bucket.Triangles.ToArray(),
+                    vertices = buffers != null ? buffers.vertices : bucket.Vertices.ToArray(),
+                    normals = buffers != null ? buffers.normals : bucket.Normals.ToArray(),
+                    uvs = buffers != null ? buffers.uvs : bucket.UVs.ToArray(),
+                    colors = buffers != null ? buffers.colors : bucket.Colors.ToArray(),
+                    triangles = buffers != null ? buffers.triangles : bucket.Triangles.ToArray(),
+                    usedVertexCount = buffers != null ? vertexCount : 0,
+                    usedIndexCount = buffers != null ? indexCount : 0,
                     localToWorld = Matrix4x4.identity,
                     boneTransforms = null,
                     skinningData = null,
@@ -3182,6 +3199,8 @@ namespace UnityRemix
             }
 
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleEmit, RemixProfiler.ElapsedMs(emitStart));
+            if (frameCount % 600 == 0)
+                PruneParticleBuffers(frameCount);
 
             if (emitterDetails != null)
             {
@@ -3310,6 +3329,89 @@ namespace UnityRemix
 
         private double particleAppendMs;
         private int particleCurveCount;
+
+        // Particle geometry goes to the render thread in reused buffers, not new arrays every
+        // frame (megabytes per frame, and a garbage collection every few frames). Each mesh
+        // has three sets; a set is refilled only when neither the frame the render thread is
+        // drawing nor the last published one uses it.
+        internal static volatile int RenderingFrame = -1;
+        internal static volatile int PublishedFrame = -1;
+
+        private sealed class ParticleBuffers
+        {
+            public Vector3[] vertices = Array.Empty<Vector3>();
+            public Vector3[] normals = Array.Empty<Vector3>();
+            public Vector2[] uvs = Array.Empty<Vector2>();
+            public Color32[] colors = Array.Empty<Color32>();
+            public int[] triangles = Array.Empty<int>();
+            public int frame = int.MinValue;
+
+            public void Ensure(int vertexCount, int indexCount)
+            {
+                if (vertices.Length < vertexCount)
+                {
+                    int capacity = Mathf.NextPowerOfTwo(vertexCount);
+                    vertices = new Vector3[capacity];
+                    normals = new Vector3[capacity];
+                    uvs = new Vector2[capacity];
+                    colors = new Color32[capacity];
+                }
+                if (triangles.Length < indexCount)
+                    triangles = new int[Mathf.NextPowerOfTwo(indexCount)];
+            }
+        }
+
+        private sealed class ParticleBufferRing
+        {
+            public readonly ParticleBuffers[] sets = { new ParticleBuffers(), new ParticleBuffers(), new ParticleBuffers() };
+            public int lastUsedFrame;
+        }
+
+        private readonly Dictionary<ulong, ParticleBufferRing> particleBufferRings = new Dictionary<ulong, ParticleBufferRing>();
+        private readonly List<ulong> staleParticleBufferKeys = new List<ulong>();
+
+        private ParticleBuffers TakeParticleBuffers(ulong meshHash, int frameCount, int vertexCount, int indexCount)
+        {
+            if (!particleBufferRings.TryGetValue(meshHash, out var ring))
+            {
+                ring = new ParticleBufferRing();
+                particleBufferRings[meshHash] = ring;
+            }
+            ring.lastUsedFrame = frameCount;
+            int rendering = RenderingFrame, published = PublishedFrame;
+            ParticleBuffers buffers = null;
+            foreach (var set in ring.sets)
+            {
+                if (set.frame != frameCount && set.frame != rendering && set.frame != published)
+                {
+                    buffers = set;
+                    break;
+                }
+            }
+            if (buffers == null)
+                return null; // cannot happen with three sets; the caller allocates instead
+            buffers.frame = frameCount;
+            buffers.Ensure(vertexCount, indexCount);
+            return buffers;
+        }
+
+        private void PruneParticleBuffers(int frameCount)
+        {
+            staleParticleBufferKeys.Clear();
+            foreach (var kvp in particleBufferRings)
+            {
+                if (frameCount - kvp.Value.lastUsedFrame > 600)
+                    staleParticleBufferKeys.Add(kvp.Key);
+            }
+            foreach (var key in staleParticleBufferKeys)
+                particleBufferRings.Remove(key);
+        }
+
+        private readonly List<Vector3> bakeVertices = new List<Vector3>();
+        private readonly List<Vector3> bakeNormals = new List<Vector3>();
+        private readonly List<Vector2> bakeUvs = new List<Vector2>();
+        private readonly List<Color32> bakeColors = new List<Color32>();
+        private readonly List<int> bakeTriangles = new List<int>();
 
         private void AppendBillboardParticles(
             ParticleBatchBucket bucket,
@@ -3585,17 +3687,59 @@ namespace UnityRemix
                 }
 #pragma warning restore CS0618
 
-                var verts = _reusableParticleMesh.vertices;
-                if (verts != null && verts.Length > 0 && _reusableParticleMesh.triangles.Length > 0)
+                var mesh = _reusableParticleMesh;
+                int vertexCount = mesh.vertexCount;
+                if (vertexCount > 0 && mesh.subMeshCount > 0)
                 {
                     ulong remixMeshHash = (ulong)(uint)pr.GetInstanceID() | 0x4000000000000000UL;
                     bool isWorldSpace = ps != null && ps.main.simulationSpace == ParticleSystemSimulationSpace.World;
                     Matrix4x4 particleLocalToWorld = isWorldSpace ? Matrix4x4.identity : pr.transform.localToWorldMatrix;
 
-                    var colors = _reusableParticleMesh.colors32;
-                    if (matAlpha < 0.999f && colors != null && colors.Length > 0)
+                    mesh.GetVertices(bakeVertices);
+                    mesh.GetNormals(bakeNormals);
+                    mesh.GetUVs(0, bakeUvs);
+                    mesh.GetColors(bakeColors);
+                    if (mesh.subMeshCount == 1)
+                        mesh.GetTriangles(bakeTriangles, 0);
+                    else
                     {
-                        for (int ci = 0; ci < colors.Length; ci++)
+                        bakeTriangles.Clear();
+                        bakeTriangles.AddRange(mesh.triangles);
+                    }
+                    int indexCount = bakeTriangles.Count;
+                    if (indexCount == 0)
+                        return false;
+                    bool hasNormals = bakeNormals.Count == vertexCount;
+                    bool hasUvs = bakeUvs.Count == vertexCount;
+                    bool hasColors = bakeColors.Count == vertexCount;
+
+                    var buffers = TakeParticleBuffers(remixMeshHash, state.frameCount, vertexCount, indexCount);
+                    Vector3[] vertices, normals = null;
+                    Vector2[] uvs = null;
+                    Color32[] colors = null;
+                    int[] triangles;
+                    if (buffers != null)
+                    {
+                        bakeVertices.CopyTo(buffers.vertices);
+                        bakeTriangles.CopyTo(buffers.triangles);
+                        vertices = buffers.vertices;
+                        triangles = buffers.triangles;
+                        if (hasNormals) { bakeNormals.CopyTo(buffers.normals); normals = buffers.normals; }
+                        if (hasUvs) { bakeUvs.CopyTo(buffers.uvs); uvs = buffers.uvs; }
+                        if (hasColors) { bakeColors.CopyTo(buffers.colors); colors = buffers.colors; }
+                    }
+                    else
+                    {
+                        vertices = bakeVertices.ToArray();
+                        triangles = bakeTriangles.ToArray();
+                        if (hasNormals) normals = bakeNormals.ToArray();
+                        if (hasUvs) uvs = bakeUvs.ToArray();
+                        if (hasColors) colors = bakeColors.ToArray();
+                    }
+
+                    if (matAlpha < 0.999f && colors != null)
+                    {
+                        for (int ci = 0; ci < vertexCount; ci++)
                         {
                             colors[ci].a = (byte)Mathf.Clamp(Mathf.RoundToInt(colors[ci].a * matAlpha), 0, 255);
                         }
@@ -3606,11 +3750,13 @@ namespace UnityRemix
                         meshId = pr.GetInstanceID(),
                         remixMeshHash = remixMeshHash,
                         materialId = matId,
-                        vertices = verts,
-                        normals = _reusableParticleMesh.normals,
-                        uvs = _reusableParticleMesh.uv,
+                        vertices = vertices,
+                        normals = normals,
+                        uvs = uvs,
                         colors = colors,
-                        triangles = _reusableParticleMesh.triangles,
+                        triangles = triangles,
+                        usedVertexCount = buffers != null ? vertexCount : 0,
+                        usedIndexCount = buffers != null ? indexCount : 0,
                         localToWorld = particleLocalToWorld,
                         boneTransforms = null,
                         skinningData = null,

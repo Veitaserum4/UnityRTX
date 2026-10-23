@@ -560,23 +560,29 @@ namespace UnityRemix
             int materialId = 0,
             Color32[] colors = null,
             Vector4? uvST = null,
-            int[] vertexMap = null)
+            int[] vertexMap = null,
+            int usedVertexCount = 0,
+            int usedIndexCount = 0)
         {
-            if (vertices == null || vertices.Length == 0 || triangles == null || triangles.Length == 0)
+            // usedVertexCount / usedIndexCount: the arrays are reused buffers, only their first
+            // elements belong to this mesh (normals, uvs and colors at least as long).
+            int sourceVertexCount = usedVertexCount > 0 && vertices != null ? Math.Min(usedVertexCount, vertices.Length) : (vertices?.Length ?? 0);
+            int indexCount = usedIndexCount > 0 && triangles != null ? Math.Min(usedIndexCount, triangles.Length) : (triangles?.Length ?? 0);
+            if (sourceVertexCount == 0 || indexCount == 0)
                 return IntPtr.Zero;
             long prepStart = System.Diagnostics.Stopwatch.GetTimestamp();
 
             // vertexMap: the mesh is the listed vertices only (triangles index the map).
             // Without normals to map, work on the compacted vertices instead.
-            if (vertexMap != null && (normals == null || normals.Length != vertices.Length))
+            if (vertexMap != null && (normals == null || normals.Length < sourceVertexCount))
             {
                 var compactVertices = new Vector3[vertexMap.Length];
-                Vector2[] compactUvs = uvs != null && uvs.Length == vertices.Length ? new Vector2[vertexMap.Length] : null;
-                Color32[] compactColors = colors != null && colors.Length == vertices.Length ? new Color32[vertexMap.Length] : null;
+                Vector2[] compactUvs = uvs != null && uvs.Length >= sourceVertexCount ? new Vector2[vertexMap.Length] : null;
+                Color32[] compactColors = colors != null && colors.Length >= sourceVertexCount ? new Color32[vertexMap.Length] : null;
                 for (int i = 0; i < vertexMap.Length; i++)
                 {
                     int src = vertexMap[i];
-                    if (src < 0 || src >= vertices.Length)
+                    if (src < 0 || src >= sourceVertexCount)
                         return IntPtr.Zero;
                     compactVertices[i] = vertices[src];
                     if (compactUvs != null) compactUvs[i] = uvs[src];
@@ -587,20 +593,21 @@ namespace UnityRemix
                 colors = compactColors;
                 normals = null;
                 vertexMap = null;
+                sourceVertexCount = vertices.Length;
             }
-            int vertexCount = vertexMap != null ? vertexMap.Length : vertices.Length;
+            int vertexCount = vertexMap != null ? vertexMap.Length : sourceVertexCount;
 
-            if (triangles.Length % 3 != 0)
+            if (indexCount % 3 != 0)
             {
                 if (skinnedRenderCount % 300 == 1)
-                    logger.LogError($"Skinned mesh {meshHash} has invalid triangle count: {triangles.Length}");
+                    logger.LogError($"Skinned mesh {meshHash} has invalid triangle count: {indexCount}");
                 return IntPtr.Zero;
             }
             
             // Validate indices (skip for bridge-generated particle meshes where indices are mathematically guaranteed valid)
             if ((meshHash & 0x4000000000000000UL) == 0)
             {
-                for (int i = 0; i < triangles.Length; i++)
+                for (int i = 0; i < indexCount; i++)
                 {
                     if (triangles[i] < 0 || triangles[i] >= vertexCount)
                     {
@@ -612,15 +619,20 @@ namespace UnityRemix
             }
             
             // Ensure normals — compute from face geometry when unavailable
-            if (normals == null || normals.Length != vertices.Length)
+            if (normals == null || normals.Length < sourceVertexCount)
             {
+                if (vertices.Length != sourceVertexCount || triangles.Length != indexCount)
+                {
+                    Array.Resize(ref vertices, sourceVertexCount);
+                    Array.Resize(ref triangles, indexCount);
+                }
                 normals = ComputeFaceNormals(vertices, triangles);
             }
-            
+
             // Ensure UVs
-            if (uvs == null || uvs.Length != vertices.Length)
+            if (uvs == null || uvs.Length < sourceVertexCount)
             {
-                uvs = new Vector2[vertices.Length];
+                uvs = new Vector2[sourceVertexCount];
             }
             
             // Use pooled GCHandles
@@ -630,7 +642,7 @@ namespace UnityRemix
                 pinnedMeshPool[meshHash] = poolData;
             }
             
-            poolData.EnsureCapacity(vertexCount, triangles.Length);
+            poolData.EnsureCapacity(vertexCount, indexCount);
 
             // Fill data (Y-up to Z-up conversion), applying UV tiling/offset
             Vector4 st = uvST.HasValue && (uvST.Value.x != 0f || uvST.Value.y != 0f || uvST.Value.z != 0f || uvST.Value.w != 0f)
@@ -638,7 +650,7 @@ namespace UnityRemix
                 : materialManager.GetMainTexST(materialId);
             if (st.x == 0f) st.x = 1f;
             if (st.y == 0f) st.y = 1f;
-            bool hasColors = colors != null && colors.Length == vertices.Length;
+            bool hasColors = colors != null && colors.Length >= sourceVertexCount;
             for (int i = 0; i < vertexCount; i++)
             {
                 int src = vertexMap != null ? vertexMap[i] : i;
@@ -654,7 +666,7 @@ namespace UnityRemix
             }
 
             int validIdxCount = 0;
-            for (int i = 0; i + 2 < triangles.Length; i += 3)
+            for (int i = 0; i + 2 < indexCount; i += 3)
             {
                 int i0 = triangles[i];
                 int i1 = triangles[i + 1];
