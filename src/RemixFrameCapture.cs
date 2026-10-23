@@ -982,6 +982,7 @@ namespace UnityRemix
             skeletonPoses.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            meshParticleInstancing.Clear();
             lastSkinnedTransforms.Clear();
             cachedStaticInstances.Clear();
             lock (meshQueueLock)
@@ -1007,6 +1008,7 @@ namespace UnityRemix
             }
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            meshParticleInstancing.Clear();
             trackedTrailRenderers.Clear();
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
@@ -1030,6 +1032,7 @@ namespace UnityRemix
             lastCameraTrackFrame = -100;
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
+            meshParticleInstancing.Clear();
             trackedTrailRenderers.Clear();
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
@@ -3090,7 +3093,8 @@ namespace UnityRemix
 
                 if (!isSurfaceAligned && pr.renderMode == ParticleSystemRenderMode.Mesh)
                 {
-                    if (!BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, matAlpha, state))
+                    if (!TryInstanceMeshParticles(tracked.id, pr, ps, mainCam, tintedMatId, matAlpha, actualAlive, state) &&
+                        !BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, matAlpha, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
                         renderedParticles += particlesToDraw;
@@ -3661,6 +3665,289 @@ namespace UnityRemix
             }
 
             bucket.ParticleCount += numParticlesAlive;
+        }
+
+        // Mesh-mode particle systems drawn as instances of their mesh, uploaded once, instead of
+        // BakeMesh'd and re-uploaded every frame (a swarm of a hundred small meshes is tens of
+        // thousands of vertices a frame). Unity documents no exact per-particle transform, so
+        // each system's is picked from a few models by matching BakeMesh, and checked again
+        // now and then; a system none matches keeps baking.
+        private sealed class MeshParticleInstancing
+        {
+            public Mesh mesh;
+            public bool rejected;
+            public int model = -1;
+            public int checkFrame;
+            public Vector3[] vertices, normals;
+            public Vector2[] uvs;
+            public Color32[] meshColors; // null: white
+            public int[] triangles;
+            // (material, quantized particle color) -> mesh with that color baked into its vertices
+            public readonly Dictionary<long, ulong> variantHashes = new Dictionary<long, ulong>();
+            public readonly Dictionary<ulong, Color32[]> variantColors = new Dictionary<ulong, Color32[]>();
+        }
+
+        private struct MeshParticleFrame
+        {
+            public Quaternion systemRotation, cameraRotation;
+            public Vector3 lossyScale, pivot;
+        }
+
+        private readonly Dictionary<int, MeshParticleInstancing> meshParticleInstancing = new Dictionary<int, MeshParticleInstancing>();
+        private readonly List<long> meshParticleVariantKeys = new List<long>();
+        private readonly List<Vector3> meshParticleSizes = new List<Vector3>();
+        private const int MaxInstancedMeshParticles = 1024;
+        private const int MeshParticleCheckInterval = 300;
+        private const int MeshParticleCheckParticles = 16;
+        private const int MeshParticleVariantLimit = 64;
+        // Rotation frames x Euler orders x scales.
+        private const int MeshParticleBases = 5, MeshParticleOrders = 3, MeshParticleScales = 2;
+        private const int MeshParticleModels = MeshParticleBases * MeshParticleOrders * MeshParticleScales;
+
+        private static Matrix4x4 MeshParticleMatrix(int model, ref ParticleSystem.Particle particle, Vector3 size, in MeshParticleFrame frame)
+        {
+            int scaleMode = model % MeshParticleScales;
+            int order = (model / MeshParticleScales) % MeshParticleOrders;
+            int frameMode = model / (MeshParticleScales * MeshParticleOrders);
+
+            Vector3 e = particle.rotation3D;
+            Quaternion rx = Quaternion.AngleAxis(e.x, Vector3.right);
+            Quaternion ry = Quaternion.AngleAxis(e.y, Vector3.up);
+            Quaternion rz = Quaternion.AngleAxis(e.z, Vector3.forward);
+            Quaternion rotation = order == 0 ? ry * rx * rz      // Quaternion.Euler: Z, then X, then Y
+                                : order == 1 ? rz * ry * rx      // X, then Y, then Z
+                                : rx * ry * rz;                  // Z, then Y, then X
+            switch (frameMode)
+            {
+                case 1: rotation = frame.systemRotation * rotation; break;
+                case 2: rotation = Quaternion.Inverse(frame.systemRotation) * rotation; break;
+                case 3: rotation = frame.cameraRotation * rotation; break;
+                case 4: rotation = frame.cameraRotation * Quaternion.AngleAxis(180f, Vector3.up) * rotation; break;
+            }
+            if (scaleMode == 1)
+                size = Vector3.Scale(size, frame.lossyScale);
+            return Matrix4x4.TRS(particle.position, rotation, size) * Matrix4x4.Translate(frame.pivot);
+        }
+
+        private bool PrepareMeshParticleInstancing(MeshParticleInstancing inst, ParticleSystemRenderer pr, Mesh mesh, out string reason)
+        {
+            reason = null;
+            inst.mesh = mesh;
+            inst.model = -1;
+            inst.variantHashes.Clear();
+            inst.variantColors.Clear();
+            if (mesh.isReadable)
+            {
+                inst.vertices = mesh.vertices;
+                var normals = mesh.normals;
+                inst.normals = normals != null && normals.Length == inst.vertices.Length ? normals : null;
+                var uvs = mesh.uv;
+                inst.uvs = uvs != null && uvs.Length == inst.vertices.Length ? uvs : null;
+                var colors = mesh.colors32;
+                inst.meshColors = colors != null && colors.Length == inst.vertices.Length ? colors : null;
+                inst.triangles = mesh.triangles;
+            }
+            else
+            {
+                if (!NativeMeshReader.ReadMeshFromGPU(mesh, out var positions, out var normals, out var uvs, out var subMeshIndices))
+                {
+                    reason = "GPU read of its non-readable mesh failed";
+                    return false;
+                }
+                inst.vertices = positions;
+                inst.normals = normals != null && normals.Length == positions.Length ? normals : null;
+                inst.uvs = uvs != null && uvs.Length == positions.Length ? uvs : null;
+                inst.meshColors = null;
+                var all = new List<int>();
+                foreach (var sub in subMeshIndices)
+                    if (sub != null) all.AddRange(sub);
+                inst.triangles = all.ToArray();
+            }
+            if (inst.vertices == null || inst.vertices.Length == 0 || inst.triangles == null || inst.triangles.Length < 3)
+            {
+                reason = "empty mesh";
+                return false;
+            }
+            return true;
+        }
+
+        // Compares the models with BakeMesh on the first particles: the current one first, then
+        // all of them when it no longer matches.
+        private bool CheckMeshParticleModel(MeshParticleInstancing inst, ParticleSystemRenderer pr, ParticleSystem ps, Camera cam,
+                                            int alive, in MeshParticleFrame frame, out string reason)
+        {
+            reason = null;
+            if (_reusableParticleMesh == null)
+                _reusableParticleMesh = new Mesh { name = "ReusableParticleBakeMesh" };
+            _reusableParticleMesh.Clear();
+#pragma warning disable CS0618
+            if (cam != null) pr.BakeMesh(_reusableParticleMesh, cam, false);
+            else pr.BakeMesh(_reusableParticleMesh, false);
+#pragma warning restore CS0618
+            _reusableParticleMesh.GetVertices(bakeVertices);
+            int meshVertices = inst.vertices.Length;
+            if (bakeVertices.Count != alive * meshVertices)
+            {
+                reason = $"BakeMesh made {bakeVertices.Count} vertices, not {alive} x {meshVertices}";
+                return false;
+            }
+            int checkCount = Math.Min(alive, MeshParticleCheckParticles);
+            meshParticleSizes.Clear();
+            for (int i = 0; i < checkCount; i++)
+                meshParticleSizes.Add(_particleBuffer[i].GetCurrentSize3D(ps));
+            float tolerance = Mathf.Max(1e-3f * _reusableParticleMesh.bounds.size.magnitude, 1e-4f);
+            float toleranceSqr = tolerance * tolerance;
+
+            int best = -1;
+            float bestError = float.PositiveInfinity;
+            for (int pass = 0; pass < 2 && best < 0; pass++)
+            {
+                for (int model = 0; model < MeshParticleModels; model++)
+                {
+                    if (pass == 0 ? model != inst.model : model == inst.model) continue;
+                    float worst = 0f;
+                    for (int i = 0; i < checkCount && worst <= toleranceSqr; i++)
+                    {
+                        var m = MeshParticleMatrix(model, ref _particleBuffer[i], meshParticleSizes[i], frame);
+                        int baseVertex = i * meshVertices;
+                        for (int v = 0; v < meshVertices; v++)
+                        {
+                            float d = (m.MultiplyPoint3x4(inst.vertices[v]) - bakeVertices[baseVertex + v]).sqrMagnitude;
+                            if (d > worst) { worst = d; if (worst > toleranceSqr) break; }
+                        }
+                    }
+                    if (worst < bestError) bestError = worst;
+                    if (worst <= toleranceSqr) { best = model; break; }
+                }
+            }
+            if (best < 0)
+            {
+                reason = $"no transform model matches BakeMesh (closest {Mathf.Sqrt(bestError):G3} > {tolerance:G3})";
+                return false;
+            }
+            if (best != inst.model && inst.model >= 0)
+                logger.LogInfo($"[MeshParticles] '{pr.name}' transform model {inst.model} -> {best}");
+            inst.model = best;
+            return true;
+        }
+
+        private bool TryInstanceMeshParticles(int systemId, ParticleSystemRenderer pr, ParticleSystem ps, Camera cam,
+                                              int matId, float matAlpha, int alive, FrameState state)
+        {
+            if (alive <= 0 || alive > MaxInstancedMeshParticles)
+                return false;
+            if (!meshParticleInstancing.TryGetValue(systemId, out var inst))
+            {
+                inst = new MeshParticleInstancing();
+                meshParticleInstancing[systemId] = inst;
+            }
+            if (inst.rejected)
+                return false;
+
+            var main = ps.main;
+            var space = main.simulationSpace;
+            Mesh mesh = pr.mesh;
+            string reason = null;
+            if (space == ParticleSystemSimulationSpace.Custom) reason = "custom simulation space";
+            else if (mesh == null || pr.meshCount != 1) reason = "not exactly one mesh";
+            else if (pr.flip != Vector3.zero) reason = "flipped particles";
+            else if (!ReferenceEquals(inst.mesh, mesh) && !PrepareMeshParticleInstancing(inst, pr, mesh, out reason)) { }
+            if (reason != null)
+            {
+                inst.rejected = true;
+                logger.LogInfo($"[MeshParticles] '{pr.name}' keeps BakeMesh: {reason}");
+                return false;
+            }
+
+            var tr = pr.transform;
+            Quaternion systemRotation = tr.rotation;
+            Quaternion cameraRotation = cam != null ? cam.transform.rotation : Quaternion.identity;
+            if (space == ParticleSystemSimulationSpace.Local)
+                cameraRotation = Quaternion.Inverse(systemRotation) * cameraRotation;
+            var frame = new MeshParticleFrame
+            {
+                systemRotation = systemRotation,
+                cameraRotation = cameraRotation,
+                lossyScale = tr.lossyScale,
+                pivot = pr.pivot
+            };
+
+            int frameCount = state.frameCount;
+            if (inst.model < 0 || frameCount >= inst.checkFrame)
+            {
+                bool first = inst.model < 0;
+                if (!CheckMeshParticleModel(inst, pr, ps, cam, alive, frame, out reason))
+                {
+                    if (first || !reason.StartsWith("BakeMesh made"))
+                    {
+                        inst.rejected = true;
+                        logger.LogInfo($"[MeshParticles] '{pr.name}' keeps BakeMesh: {reason}");
+                    }
+                    return false;
+                }
+                inst.checkFrame = frameCount + MeshParticleCheckInterval;
+                if (first)
+                    logger.LogInfo($"[MeshParticles] '{pr.name}' instanced: {alive} particles of '{inst.mesh.name}' ({inst.vertices.Length} verts), transform model {inst.model}");
+            }
+
+            // Particle colors, quantized like the billboard batches: one mesh per color in use.
+            meshParticleVariantKeys.Clear();
+            for (int i = 0; i < alive; i++)
+            {
+                Color32 c = _particleBuffer[i].GetCurrentColor(ps);
+                int a = matAlpha < 0.999f ? Mathf.RoundToInt(c.a * matAlpha) : c.a;
+                int key = ((c.r * 15 + 127) / 255 << 12) | ((c.g * 15 + 127) / 255 << 8) | ((c.b * 15 + 127) / 255 << 4) | ((a * 15 + 127) / 255);
+                long variantKey = ((long)matId << 32) | (uint)key;
+                if (!inst.variantHashes.ContainsKey(variantKey))
+                {
+                    if (inst.variantHashes.Count >= MeshParticleVariantLimit)
+                    {
+                        inst.rejected = true;
+                        logger.LogInfo($"[MeshParticles] '{pr.name}' keeps BakeMesh: more than {MeshParticleVariantLimit} particle colors");
+                        return false;
+                    }
+                    ulong hash = 14695981039346656037UL;
+                    hash = (hash ^ (uint)inst.mesh.GetInstanceID()) * 1099511628211UL;
+                    hash = (hash ^ (uint)systemId) * 1099511628211UL;
+                    hash = (hash ^ (ulong)variantKey) * 1099511628211UL;
+                    hash = (hash & 0x1FFFFFFFFFFFFFFFUL) | 0x6000000000000000UL;
+                    var tint = new Color32((byte)((key >> 12 & 15) * 17), (byte)((key >> 8 & 15) * 17), (byte)((key >> 4 & 15) * 17), (byte)((key & 15) * 17));
+                    var colors = new Color32[inst.vertices.Length];
+                    for (int v = 0; v < colors.Length; v++)
+                    {
+                        Color32 m = inst.meshColors != null ? inst.meshColors[v] : new Color32(255, 255, 255, 255);
+                        colors[v] = new Color32((byte)(m.r * tint.r / 255), (byte)(m.g * tint.g / 255), (byte)(m.b * tint.b / 255), (byte)(m.a * tint.a / 255));
+                    }
+                    inst.variantHashes[variantKey] = hash;
+                    inst.variantColors[hash] = colors;
+                }
+                meshParticleVariantKeys.Add(variantKey);
+            }
+
+            Matrix4x4 simToWorld = space == ParticleSystemSimulationSpace.World ? Matrix4x4.identity : tr.localToWorldMatrix;
+            for (int i = 0; i < alive; i++)
+            {
+                ref var particle = ref _particleBuffer[i];
+                var m = MeshParticleMatrix(inst.model, ref particle, particle.GetCurrentSize3D(ps), frame);
+                ulong hash = inst.variantHashes[meshParticleVariantKeys[i]];
+                state.skinned.Add(new SkinnedMeshData
+                {
+                    meshId = HashCombine(systemId, (int)particle.randomSeed),
+                    remixMeshHash = hash,
+                    materialId = matId,
+                    vertices = inst.vertices,
+                    normals = inst.normals,
+                    uvs = inst.uvs,
+                    colors = inst.variantColors[hash],
+                    triangles = inst.triangles,
+                    localToWorld = simToWorld * m,
+                    boneTransforms = null,
+                    skinningData = null,
+                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,
+                    bakeFrame = 1 // the geometry never changes: uploaded once
+                });
+            }
+            return true;
         }
 
         private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, ParticleSystem ps, Camera cam, int matId, float matAlpha, FrameState state)
