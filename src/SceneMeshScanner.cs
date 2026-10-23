@@ -160,6 +160,35 @@ namespace UnityRemix
             return false;
         }
 
+        // Vertex colors of the first scanned mesh of each shader, logged once: shaders that use
+        // them as blend masks rather than as color show here (Remix multiplies them into albedo).
+        private readonly HashSet<string> vertexColorShaders = new HashSet<string>();
+
+        private void DescribeVertexColorsOnce(Material mat, Mesh mesh, Color32[] colors)
+        {
+            string shaderName = mat.shader != null ? mat.shader.name : "(none)";
+            if (!vertexColorShaders.Add(shaderName))
+                return;
+            if (colors == null || colors.Length == 0)
+            {
+                logger.LogInfo($"[VertexColors] shader '{shaderName}' mesh '{mesh.name}': none ({(mesh.isReadable ? "readable" : "GPU readback")}, mesh has colors: {mesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color)})");
+                return;
+            }
+            long r = 0, g = 0, b = 0, a = 0;
+            byte minR = 255, minG = 255, minB = 255, minA = 255, maxR = 0, maxG = 0, maxB = 0, maxA = 0;
+            foreach (var c in colors)
+            {
+                r += c.r; g += c.g; b += c.b; a += c.a;
+                if (c.r < minR) minR = c.r; if (c.r > maxR) maxR = c.r;
+                if (c.g < minG) minG = c.g; if (c.g > maxG) maxG = c.g;
+                if (c.b < minB) minB = c.b; if (c.b > maxB) maxB = c.b;
+                if (c.a < minA) minA = c.a; if (c.a > maxA) maxA = c.a;
+            }
+            int n = colors.Length;
+            logger.LogInfo($"[VertexColors] shader '{shaderName}' mesh '{mesh.name}' material '{mat.name}': {n} verts, mean ({r / n},{g / n},{b / n},{a / n}), " +
+                           $"range R {minR}-{maxR} G {minG}-{maxG} B {minB}-{maxB} A {minA}-{maxA}");
+        }
+
         public static bool IsMaterialOrShaderInvisible(Material mat)
         {
             if (mat == null) return false;
@@ -1025,6 +1054,7 @@ namespace UnityRemix
 
                         matId = StaticGeometryDedupe.GetCanonicalMaterialId(mat);
                         materialManager.CaptureMaterialTextures(mat, matId);
+                        DescribeVertexColorsOnce(mat, mesh, colors);
                     }
                     surfaces.Add(new SubMeshSurface { Indices = tris, MaterialId = matId });
                 }

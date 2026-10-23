@@ -1293,7 +1293,24 @@ namespace UnityRemix
             
             // Store for later use
             materialTextureData[materialId] = matData;
-            
+
+            // The first materials of each shader, described once: what the shader offers and what Remix got.
+            if (material.shader != null)
+            {
+                describedShaderMaterials.TryGetValue(shaderName, out int described);
+                if (described < 2)
+                {
+                    describedShaderMaterials[shaderName] = described + 1;
+                    try
+                    {
+                        TryDescribeMaterial(materialId, out string result);
+                        logger.LogInfo($"[MaterialInfo] '{material.name}' shader '{shaderName}' queue {material.renderQueue}, albedo from {matchedTexProp ?? "none"} | " +
+                                       $"{DescribeMaterialProperties(material)} | Remix {result}");
+                    }
+                    catch (Exception) { } // Unity without Shader.GetPropertyCount (before 2019.3)
+                }
+            }
+
             // DISABLED: Async material creation causes deadlocks with Remix API
             // Materials are now created on-demand on the render thread during mesh creation
             // This prevents deadlocks between material thread and render thread competing for Remix device lock
@@ -3753,6 +3770,49 @@ namespace UnityRemix
         private static MethodInfo _getPropertyNameMethod;
         private static MethodInfo _getPropertyTypeMethod;
         private static bool _shaderPropsReflected;
+
+        private readonly Dictionary<string, int> describedShaderMaterials = new Dictionary<string, int>();
+
+        // Every property of the material's shader with its value on this material, and its keywords.
+        private string DescribeMaterialProperties(Material material)
+        {
+            var sb = new System.Text.StringBuilder();
+            try
+            {
+                var shader = material.shader;
+                int count = shader.GetPropertyCount();
+                for (int p = 0; p < count; p++)
+                {
+                    string name = shader.GetPropertyName(p);
+                    switch (shader.GetPropertyType(p))
+                    {
+                        case UnityEngine.Rendering.ShaderPropertyType.Texture:
+                            var t = material.GetTexture(name);
+                            sb.Append(t != null ? $"{name}='{t.name}' {t.width}x{t.height}; " : $"{name}=none; ");
+                            break;
+                        case UnityEngine.Rendering.ShaderPropertyType.Color:
+                            var c = material.GetColor(name);
+                            sb.Append($"{name}=({c.r:F2},{c.g:F2},{c.b:F2},{c.a:F2}); ");
+                            break;
+                        case UnityEngine.Rendering.ShaderPropertyType.Vector:
+                            var v = material.GetVector(name);
+                            sb.Append($"{name}=({v.x:G3},{v.y:G3},{v.z:G3},{v.w:G3}); ");
+                            break;
+                        default:
+                            sb.Append($"{name}={material.GetFloat(name):G3}; ");
+                            break;
+                    }
+                }
+                var keywords = material.shaderKeywords;
+                if (keywords != null && keywords.Length > 0)
+                    sb.Append($"keywords [{string.Join(" ", keywords)}]");
+            }
+            catch (Exception ex)
+            {
+                sb.Append($"(properties unavailable: {ex.Message})");
+            }
+            return sb.ToString();
+        }
 
         private void DumpShaderProperties(Shader shader, string shaderName)
         {
