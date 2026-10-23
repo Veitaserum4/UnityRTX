@@ -25,6 +25,7 @@ namespace UnityRemix
         private bool isOverlayVisible = false;
         private static volatile bool isAppFocused = true;
         private int lastPresentedNonZero = -1;
+        private int presentedWidth, presentedHeight; // the image OpenRemix holds (lastPresentedNonZero > 0)
         private int currentWidth = 0;
         private int currentHeight = 0;
 
@@ -475,10 +476,12 @@ namespace UnityRemix
                     return;
 
                 int byteCount = width * height * 4;
-                if (nativeProcessPixels == null || nativeProcessPixels.Length != byteCount)
+                bool comparable = nativeProcessPixels != null && nativeProcessPixels.Length == byteCount;
+                if (!comparable)
                 {
                     nativeProcessPixels = new byte[byteCount];
                 }
+                int changedRows = 0;
 
                 int totalPixels = width * height;
                 int nonZeroPixelCount = 0;
@@ -515,81 +518,81 @@ namespace UnityRemix
                             int localColorSemi = 0;
                             int localColorZeroA = 0;
 
+                            bool rowChanged = false;
                             for (int x = 0; x < width; x++)
                             {
                                 uint px = *(uint*)s;
+                                uint outPx;
                                 // Fast path for transparent empty pixels (typically >90% of screen)
                                 if (px == 0)
                                 {
-                                    *(uint*)d = 0;
-                                    s += 4;
-                                    d += 4;
-                                    continue;
-                                }
-
-                                byte r = s[0];
-                                byte g = s[1];
-                                byte b = s[2];
-                                byte a = s[3];
-
-                                bool isColor = (r > 0 || g > 0 || b > 0);
-
-                                if (!isColor)
-                                {
-                                    // If RGB is black (0,0,0) and alpha is 255:
-                                    // When clearBlack is true (e.g. URP games where target clears alpha to 1.0), treat as transparent.
-                                    // Otherwise (e.g. ULTRAKILL), preserve opaque black so UI boxes/panels remain solid.
-                                    if (a == 0 || (clearBlack && a == 255))
-                                    {
-                                        *(uint*)d = 0;
-                                        s += 4;
-                                        d += 4;
-                                        continue;
-                                    }
-
-                                    localNonZero++;
-                                    if (a == 255)
-                                    {
-                                        localOpaque++;
-                                        localBlackOpaque++;
-                                    }
-                                    d[0] = 0;
-                                    d[1] = 0;
-                                    d[2] = 0;
-                                    d[3] = a;
-                                    s += 4;
-                                    d += 4;
-                                    continue;
-                                }
-
-                                // Fallback for additive / unlit UI shaders that output color with a == 0
-                                byte effA = a;
-                                if (effA == 0)
-                                {
-                                    effA = (byte)Math.Max(r, Math.Max(g, b));
-                                    localColorZeroA++;
-                                }
-
-                                localNonZero++;
-                                if (effA == 255)
-                                {
-                                    localOpaque++;
-                                    localColorOpaque++;
+                                    outPx = 0;
                                 }
                                 else
                                 {
-                                    localColorSemi++;
+                                    byte r = s[0];
+                                    byte g = s[1];
+                                    byte b = s[2];
+                                    byte a = s[3];
+
+                                    bool isColor = (r > 0 || g > 0 || b > 0);
+
+                                    if (!isColor)
+                                    {
+                                        // If RGB is black (0,0,0) and alpha is 255:
+                                        // When clearBlack is true (e.g. URP games where target clears alpha to 1.0), treat as transparent.
+                                        // Otherwise (e.g. ULTRAKILL), preserve opaque black so UI boxes/panels remain solid.
+                                        if (a == 0 || (clearBlack && a == 255))
+                                        {
+                                            outPx = 0;
+                                        }
+                                        else
+                                        {
+                                            localNonZero++;
+                                            if (a == 255)
+                                            {
+                                                localOpaque++;
+                                                localBlackOpaque++;
+                                            }
+                                            outPx = (uint)a << 24;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        // Fallback for additive / unlit UI shaders that output color with a == 0
+                                        byte effA = a;
+                                        if (effA == 0)
+                                        {
+                                            effA = (byte)Math.Max(r, Math.Max(g, b));
+                                            localColorZeroA++;
+                                        }
+
+                                        localNonZero++;
+                                        if (effA == 255)
+                                        {
+                                            localOpaque++;
+                                            localColorOpaque++;
+                                        }
+                                        else
+                                        {
+                                            localColorSemi++;
+                                        }
+
+                                        // OpenRemix uses straight alpha (VK_BLEND_FACTOR_SRC_ALPHA) and REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                                        outPx = (uint)r | ((uint)g << 8) | ((uint)b << 16) | ((uint)effA << 24);
+                                    }
                                 }
 
-                                // OpenRemix uses straight alpha (VK_BLEND_FACTOR_SRC_ALPHA) and REMIXAPI_FORMAT_R8G8B8A8_UNORM
-                                d[0] = r;
-                                d[1] = g;
-                                d[2] = b;
-                                d[3] = effA;
-
+                                // The buffer still holds the last image: note whether this pixel differs.
+                                if (*(uint*)d != outPx)
+                                {
+                                    rowChanged = true;
+                                    *(uint*)d = outPx;
+                                }
                                 s += 4;
                                 d += 4;
                             }
+                            if (rowChanged) System.Threading.Interlocked.Increment(ref changedRows);
 
                             if (localNonZero > 0) System.Threading.Interlocked.Add(ref nonZeroPixelCount, localNonZero);
                             if (localOpaque > 0) System.Threading.Interlocked.Add(ref opaquePixelCount, localOpaque);
@@ -619,7 +622,18 @@ namespace UnityRemix
                             return;
                         }
 
+                        // Unchanged since the image OpenRemix holds (it keeps the overlay until
+                        // replaced): skip the call, its copy and its compare under the API lock.
+                        if (comparable && changedRows == 0 && lastPresentedNonZero > 0 &&
+                            presentedWidth == width && presentedHeight == height)
+                        {
+                            RemixProfiler.RecordOverlayThread(totalSw.Elapsed.TotalMilliseconds, 0);
+                            return;
+                        }
+
                         lastPresentedNonZero = nonZeroPixelCount;
+                        presentedWidth = width;
+                        presentedHeight = height;
 
                         double drawOverlayMs = 0;
                         using (RemixTracy.Zone("DrawScreenOverlay"))
@@ -634,6 +648,7 @@ namespace UnityRemix
                             if (status != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
                             {
                                 logger?.LogError($"[RemixUIOverlay] DrawScreenOverlay failed: {status}");
+                                lastPresentedNonZero = -1; // not held: send the next image again
                             }
                         }
 

@@ -91,6 +91,10 @@ namespace UnityRemix
         private readonly List<ParticleBatchBucket> _batchBucketPool = new List<ParticleBatchBucket>();
         private readonly HashSet<int> _capturedParticleMatIds = new HashSet<int>();
         private readonly Dictionary<int, Color> _materialTintCache = new Dictionary<int, Color>();
+        // Per (particle renderer, material): name- and shader-derived traits, read once instead of
+        // allocating the names every frame.
+        private struct ParticleTraits { public bool emissive, jumpPad; }
+        private readonly Dictionary<long, ParticleTraits> _particleTraitsCache = new Dictionary<long, ParticleTraits>();
 
         public class ParticleStatsSnapshot
         {
@@ -625,6 +629,8 @@ namespace UnityRemix
         
         // Cached GPU skinning data per sharedMesh + blendshape signature (bind-pose vertices + bone weights)
         private Dictionary<long, CachedSkinningData> cachedSkinning = new Dictionary<long, CachedSkinningData>(); // keyed by (sharedMeshId << 32) | blendShapeHash
+        private readonly Dictionary<int, CachedSkinningData> skinningBases = new Dictionary<int, CachedSkinningData>(); // per sharedMesh, no blendshapes; null: bake only
+        private readonly List<long> reusableStaleSkinningKeys = new List<long>();
         
 
 
@@ -692,6 +698,7 @@ namespace UnityRemix
             public int boneCount;
             public Matrix4x4[] bindPoses;
             public bool meshCreated;        // true after Remix mesh has been created on render thread
+            public int lastUsedFrame;       // PruneSkinningCache
         }
         
         public class FrameState
@@ -886,6 +893,7 @@ namespace UnityRemix
             cachedTopology.Clear();
             bakedTopology.Clear();
             cachedSkinning.Clear();
+            skinningBases.Clear();
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();
             cachedScrollingRenderers.Clear();
@@ -900,6 +908,7 @@ namespace UnityRemix
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
             _materialTintCache.Clear();
+            _particleTraitsCache.Clear();
             logger.LogInfo("Renderer caches invalidated");
         }
         
@@ -921,6 +930,7 @@ namespace UnityRemix
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
             _materialTintCache.Clear();
+            _particleTraitsCache.Clear();
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();
             cachedScrollingRenderers.Clear();
@@ -2153,6 +2163,8 @@ namespace UnityRemix
                         CacheSkinningData(skinned, skinCacheKey);
                         cachedSkinning.TryGetValue(skinCacheKey, out skinData);
                     }
+                    if (skinData != null)
+                        skinData.lastUsedFrame = frameCount;
                 }
 
                 var bones = info.bones;
@@ -2318,6 +2330,8 @@ namespace UnityRemix
                 }
             }
             
+            PruneSkinningCache(frameCount);
+
             // Capture world-space weapon UI screens (e.g. Nailgun ammo counter/heat, Shotgun slider, Rocket Launcher timer)
             CaptureWeaponCanvasScreens(state, frameCount);
             
@@ -2878,7 +2892,15 @@ namespace UnityRemix
                         finalParticleColor = new Color(matTint.r, matTint.g, matTint.b, finalParticleColor.a);
                 }
 
-                bool isEmissiveParticle = IsEmissiveParticleSystem(pr, mat);
+                long traitsKey = ((long)tracked.id << 32) | (uint)matInstId;
+                if (!_particleTraitsCache.TryGetValue(traitsKey, out var traits))
+                {
+                    traits.emissive = IsEmissiveParticleSystem(pr, mat);
+                    traits.jumpPad = pr.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0
+                        || (pr.transform.parent != null && pr.transform.parent.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0);
+                    _particleTraitsCache[traitsKey] = traits;
+                }
+                bool isEmissiveParticle = traits.emissive;
                 float emIntensity = isEmissiveParticle ? 0.8f : 0f;
 
                 // Quantize color (0..15 per channel) to group similar tints and prevent material explosion
@@ -2920,8 +2942,7 @@ namespace UnityRemix
                     ps.shape.shapeType == ParticleSystemShapeType.Rectangle
                 );
                 bool isShapeAligned = isFlatShape && ps.shape.alignToDirection;
-                bool isJumpPad = pr.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0 
-                    || (pr.transform.parent != null && pr.transform.parent.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0);
+                bool isJumpPad = traits.jumpPad;
                 bool isJumpPadRing = isJumpPad && (isShapeAligned || isFlatShape || ps.main.startSizeMultiplier >= 1.0f);
 
                 bool isSurfaceAligned = isShapeAligned || isJumpPadRing;
@@ -3874,10 +3895,11 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// Extract bind-pose geometry and bone weights from a SkinnedMeshRenderer's sharedMesh.
-        /// Stores result in cachedSkinning. Called once per unique sharedMesh + blendshape combination. Returns null on failure.
+        /// Extract bind-pose geometry and bone weights from a SkinnedMeshRenderer's sharedMesh,
+        /// without blendshapes. Once per sharedMesh (skinningBases). Returns null when the mesh
+        /// can only be baked (BakeMesh fallback).
         /// </summary>
-        private void CacheSkinningData(SkinnedMeshRenderer skinned, long skinCacheKey)
+        private CachedSkinningData BuildSkinningBase(SkinnedMeshRenderer skinned)
         {
             var mesh = skinned.sharedMesh;
             try
@@ -3888,16 +3910,14 @@ namespace UnityRemix
                 if (bindPoses == null || bindPoses.Length == 0 || bones == null || bones.Length == 0)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has no bones/bindposes — BakeMesh fallback");
-                    cachedSkinning[skinCacheKey] = null;
-                    return;
+                    return null;
                 }
                 
                 int boneCount = bindPoses.Length;
                 if (boneCount > MAX_REMIX_BONES)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' has {boneCount} bones (>{MAX_REMIX_BONES}) — BakeMesh fallback");
-                    cachedSkinning[skinCacheKey] = null;
-                    return;
+                    return null;
                 }
                 
                 // Extract bone weights — try modern API first (Unity 2019.3+), then legacy
@@ -3927,8 +3947,7 @@ namespace UnityRemix
                         if (legacyWeights == null || legacyWeights.Length == 0)
                         {
                             logger.LogInfo($"[Skinning] '{mesh.name}' bone weights not accessible — BakeMesh fallback");
-                            cachedSkinning[skinCacheKey] = null;
-                            return;
+                            return null;
                         }
                         
                         for (int v = 0; v < vertexCount; v++)
@@ -3948,8 +3967,7 @@ namespace UnityRemix
                     catch (Exception ex2)
                     {
                         logger.LogInfo($"[Skinning] '{mesh.name}' legacy bone weights failed: {ex2.Message} — BakeMesh fallback");
-                        cachedSkinning[skinCacheKey] = null;
-                        return;
+                        return null;
                     }
                 }
                 
@@ -3960,7 +3978,8 @@ namespace UnityRemix
                 int[] triangles;
                 int[][] perSubTrisLocal = null;
                 
-                if (mesh.isReadable && mesh.blendShapeCount == 0)
+                // Blendshapes are applied to these bind-pose vertices per weight set (CacheSkinningData).
+                if (mesh.isReadable)
                 {
                     bindVerts = mesh.vertices;
                     bindNorms = mesh.normals;
@@ -3987,16 +4006,14 @@ namespace UnityRemix
                 }
                 else
                 {
-                    logger.LogInfo($"[Skinning] '{mesh.name}' is non-readable or has blendshapes — BakeMesh fallback");
-                    cachedSkinning[skinCacheKey] = null;
-                    return;
+                    logger.LogInfo($"[Skinning] '{mesh.name}' is non-readable — BakeMesh fallback");
+                    return null;
                 }
                 
                 if (bindVerts == null || bindVerts.Length == 0 || triangles.Length == 0)
                 {
                     logger.LogInfo($"[Skinning] '{mesh.name}' empty geometry — BakeMesh fallback");
-                    cachedSkinning[skinCacheKey] = null;
-                    return;
+                    return null;
                 }
                 
                 if (bindNorms == null || bindNorms.Length != bindVerts.Length)
@@ -4008,7 +4025,7 @@ namespace UnityRemix
                 if (uvs == null || uvs.Length != bindVerts.Length)
                     uvs = new Vector2[bindVerts.Length];
                 
-                cachedSkinning[skinCacheKey] = new CachedSkinningData
+                var result = new CachedSkinningData
                 {
                     bindVertices = bindVerts,
                     bindNormals = bindNorms,
@@ -4024,15 +4041,136 @@ namespace UnityRemix
                     meshCreated = false
                 };
                 
-                logger.LogInfo($"[Skinning] '{mesh.name}' cached: {vertexCount} verts, {triangles.Length / 3} tris, {boneCount} bones, readable={mesh.isReadable}");
+                logger.LogInfo($"[Skinning] '{mesh.name}' cached: {vertexCount} verts, {triangles.Length / 3} tris, {boneCount} bones, {mesh.blendShapeCount} blendshapes, readable={mesh.isReadable}");
+                return result;
             }
             catch (Exception ex)
             {
                 logger.LogWarning($"[Skinning] '{mesh.name}' extraction failed: {ex.Message} — BakeMesh fallback");
-                cachedSkinning[skinCacheKey] = null;
+                return null;
             }
         }
         
+        /// <summary>
+        /// GPU skinning data for one sharedMesh and blendshape weight set (cachedSkinning). The
+        /// mesh's bones, weights and bind pose are read once (skinningBases); a weight set gets the
+        /// bind pose with its blendshapes applied, so characters with blendshapes are skinned on the
+        /// GPU and only re-blended when their weights change.
+        /// </summary>
+        private void CacheSkinningData(SkinnedMeshRenderer skinned, long skinCacheKey)
+        {
+            var mesh = skinned.sharedMesh;
+            int meshId = mesh.GetInstanceID();
+            if (!skinningBases.TryGetValue(meshId, out var baseData))
+            {
+                baseData = BuildSkinningBase(skinned);
+                skinningBases[meshId] = baseData;
+            }
+            if (baseData == null || mesh.blendShapeCount == 0)
+            {
+                cachedSkinning[skinCacheKey] = baseData;
+                return;
+            }
+            try
+            {
+                var vertices = (Vector3[])baseData.bindVertices.Clone();
+                var normals = (Vector3[])baseData.bindNormals.Clone();
+                ApplyBlendShapes(mesh, skinned, vertices, normals);
+                cachedSkinning[skinCacheKey] = new CachedSkinningData
+                {
+                    bindVertices = vertices,
+                    bindNormals = normals,
+                    uvs = baseData.uvs,
+                    colors = baseData.colors,
+                    triangles = baseData.triangles,
+                    submeshTriangles = baseData.submeshTriangles,
+                    blendWeights = baseData.blendWeights,
+                    blendIndices = baseData.blendIndices,
+                    bonesPerVertex = baseData.bonesPerVertex,
+                    boneCount = baseData.boneCount,
+                    bindPoses = baseData.bindPoses,
+                    meshCreated = false
+                };
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"[Skinning] '{mesh.name}' blendshapes failed: {ex.Message} — BakeMesh fallback");
+                cachedSkinning[skinCacheKey] = null;
+            }
+        }
+
+        private Vector3[] blendDeltaVertices, blendDeltaNormals;
+
+        // Blendshapes as Unity applies them before skinning: a weight up to the first frame scales
+        // that frame, between frames it interpolates, past the last it extrapolates the last two.
+        private void ApplyBlendShapes(Mesh mesh, SkinnedMeshRenderer skinned, Vector3[] vertices, Vector3[] normals)
+        {
+            int count = vertices.Length;
+            if (blendDeltaVertices == null || blendDeltaVertices.Length != count)
+            {
+                blendDeltaVertices = new Vector3[count];
+                blendDeltaNormals = new Vector3[count];
+            }
+            bool touched = false;
+            void Add(int shape, int frame, float factor)
+            {
+                if (factor == 0f) return;
+                mesh.GetBlendShapeFrameVertices(shape, frame, blendDeltaVertices, blendDeltaNormals, null);
+                for (int v = 0; v < count; v++)
+                {
+                    vertices[v] += blendDeltaVertices[v] * factor;
+                    normals[v] += blendDeltaNormals[v] * factor;
+                }
+                touched = true;
+            }
+            int shapes = mesh.blendShapeCount;
+            for (int shape = 0; shape < shapes; shape++)
+            {
+                float weight = skinned.GetBlendShapeWeight(shape);
+                if (weight == 0f) continue;
+                int frames = mesh.GetBlendShapeFrameCount(shape);
+                if (frames <= 0) continue;
+                float first = mesh.GetBlendShapeFrameWeight(shape, 0);
+                if (frames == 1 || weight <= first)
+                {
+                    if (first != 0f) Add(shape, 0, weight / first);
+                    continue;
+                }
+                int upper = 1;
+                while (upper < frames - 1 && mesh.GetBlendShapeFrameWeight(shape, upper) < weight)
+                    upper++;
+                float low = mesh.GetBlendShapeFrameWeight(shape, upper - 1);
+                float high = mesh.GetBlendShapeFrameWeight(shape, upper);
+                float t = high != low ? (weight - low) / (high - low) : 1f;
+                Add(shape, upper - 1, 1f - t);
+                Add(shape, upper, t);
+            }
+            if (touched)
+            {
+                for (int v = 0; v < count; v++)
+                {
+                    var n = normals[v];
+                    float lengthSqr = n.sqrMagnitude;
+                    normals[v] = lengthSqr > 1e-12f ? n / Mathf.Sqrt(lengthSqr) : Vector3.up;
+                }
+            }
+        }
+
+        // Weight sets no renderer has used for a while (an animated face's past expressions).
+        private void PruneSkinningCache(int frameCount)
+        {
+            if (frameCount % 300 != 0 || cachedSkinning.Count == 0)
+                return;
+            reusableStaleSkinningKeys.Clear();
+            foreach (var kv in cachedSkinning)
+            {
+                if (kv.Value == null || frameCount - kv.Value.lastUsedFrame > 600)
+                    reusableStaleSkinningKeys.Add(kv.Key);
+            }
+            for (int i = 0; i < reusableStaleSkinningKeys.Count; i++)
+                cachedSkinning.Remove(reusableStaleSkinningKeys[i]);
+        }
+
         /// <summary>
         /// BakeMesh fallback: CPU re-skin a single skinned mesh.
         /// </summary>
