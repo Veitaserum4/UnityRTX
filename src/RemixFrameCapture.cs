@@ -631,6 +631,9 @@ namespace UnityRemix
         private Dictionary<long, CachedSkinningData> cachedSkinning = new Dictionary<long, CachedSkinningData>(); // keyed by (sharedMeshId << 32) | blendShapeHash
         private readonly Dictionary<int, CachedSkinningData> skinningBases = new Dictionary<int, CachedSkinningData>(); // per sharedMesh, no blendshapes; null: bake only
         private readonly List<long> reusableStaleSkinningKeys = new List<long>();
+        private const int OffscreenBakeInterval = 4;
+        private readonly Plane[] skinnedFrustumPlanes = new Plane[6];
+        private int offscreenBakeSkips;
         
 
 
@@ -2057,6 +2060,13 @@ namespace UnityRemix
             float maxDistSqr = configMaxRenderDistance.Value * configMaxRenderDistance.Value;
             bool useHwSkinning = configHardwareSkinning.Value;
             bool useEvenBuffer = (frameCount & 1) == 0;
+            // Baked renderers outside the camera's view (seen only in reflections and shadows)
+            // are re-baked every OffscreenBakeInterval frames, staggered; they still follow their
+            // transform every frame.
+            offscreenBakeSkips = 0;
+            bool haveFrustum = mainCam != null;
+            if (haveFrustum)
+                GeometryUtility.CalculateFrustumPlanes(mainCam, skinnedFrustumPlanes);
             
             for (int i = 0; i < total; i++)
             {
@@ -2265,6 +2275,14 @@ namespace UnityRemix
                     }
                 }
                 
+                if (haveFrustum && ((frameCount + skinnedId) % OffscreenBakeInterval) != 0 &&
+                    persistentSkinnedData.ContainsKey(skinnedId) &&
+                    !GeometryUtility.TestPlanesAABB(skinnedFrustumPlanes, skinned.bounds))
+                {
+                    offscreenBakeSkips++;
+                    continue;
+                }
+
                 // Queue for BakeMesh fallback
                 bakeFallbackQueue.Add((i, skinned, skinnedId, unscaledMatrix, matId));
             }
@@ -2337,7 +2355,7 @@ namespace UnityRemix
             
             if (frameCount % 60 == 0) // Force log every 60 frames
             {
-                logger.LogInfo($"CaptureSkinnedMeshes: gpuSkinned={gpuSkinned}, baked={baked}, " +
+                logger.LogInfo($"CaptureSkinnedMeshes: gpuSkinned={gpuSkinned}, baked={baked}, offscreenSkipped={offscreenBakeSkips}, " +
                     $"skip(null={skipNull},layer={skipLayer},vis={skipVis},dist={skipDist},mesh={skipNoMesh}), " +
                     $"cached={persistentSkinnedData.Count}, total={total}");
             }
