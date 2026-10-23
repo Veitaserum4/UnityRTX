@@ -702,6 +702,7 @@ namespace UnityRemix
             public Matrix4x4[] bindPoses;
             public bool meshCreated;        // true after Remix mesh has been created on render thread
             public int lastUsedFrame;       // PruneSkinningCache
+            internal SkinnedMeshGpuReader.SparseShape[] sparseBlendShapes; // non-readable meshes: blendshape deltas read from the GPU
         }
         
         public class FrameState
@@ -3937,6 +3938,10 @@ namespace UnityRemix
                     logger.LogInfo($"[Skinning] '{mesh.name}' has {boneCount} bones (>{MAX_REMIX_BONES}) — BakeMesh fallback");
                     return null;
                 }
+
+                // Read/Write disabled (the import default): the CPU copy is gone, read the GPU's.
+                if (!mesh.isReadable)
+                    return BuildSkinningBaseFromGpu(skinned, mesh, bindPoses, boneCount);
                 
                 // Extract bone weights — try modern API first (Unity 2019.3+), then legacy
                 int vertexCount = mesh.vertexCount;
@@ -4070,6 +4075,119 @@ namespace UnityRemix
         }
         
         /// <summary>
+        /// GPU skinning data of a non-readable mesh, read back from its GPU buffers once
+        /// (SkinnedMeshGpuReader), then checked against Unity's own BakeMesh of the renderer's
+        /// current pose: a layout this does not understand bakes instead of rendering wrong.
+        /// </summary>
+        private CachedSkinningData BuildSkinningBaseFromGpu(SkinnedMeshRenderer skinned, Mesh mesh, Matrix4x4[] bindPoses, int boneCount)
+        {
+            SkinnedMeshGpuReader.Data gpu;
+            string reason;
+            try
+            {
+                if (!SkinnedMeshGpuReader.TryRead(mesh, BONES_PER_VERTEX, out gpu, out reason))
+                {
+                    logger.LogInfo($"[Skinning] '{mesh.name}' is non-readable, GPU read failed: {reason} — BakeMesh fallback");
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogInfo($"[Skinning] '{mesh.name}' is non-readable, GPU read unavailable: {ex.Message} — BakeMesh fallback");
+                return null;
+            }
+
+            var allTris = new List<int>();
+            foreach (var sub in gpu.submeshTriangles)
+                allTris.AddRange(sub);
+            if (gpu.positions.Length == 0 || allTris.Count == 0)
+            {
+                logger.LogInfo($"[Skinning] '{mesh.name}' empty geometry on the GPU — BakeMesh fallback");
+                return null;
+            }
+            var normals = gpu.normals ?? NativeMeshReader.ComputeFaceNormals(gpu.positions, gpu.submeshTriangles);
+            var result = new CachedSkinningData
+            {
+                bindVertices = gpu.positions,
+                bindNormals = normals,
+                uvs = gpu.uvs ?? new Vector2[gpu.positions.Length],
+                colors = gpu.colors,
+                triangles = allTris.ToArray(),
+                submeshTriangles = gpu.submeshTriangles,
+                blendWeights = gpu.weights,
+                blendIndices = gpu.indices,
+                bonesPerVertex = BONES_PER_VERTEX,
+                boneCount = boneCount,
+                bindPoses = bindPoses,
+                meshCreated = false,
+                sparseBlendShapes = gpu.blendShapes
+            };
+            if (!ValidateGpuSkinning(skinned, mesh, result, out float error, out float tolerance))
+            {
+                logger.LogInfo($"[Skinning] '{mesh.name}' GPU skinning data differs from BakeMesh (max error {error:G3} > {tolerance:G3}) — BakeMesh fallback");
+                return null;
+            }
+            logger.LogInfo($"[Skinning] '{mesh.name}' cached from the GPU (non-readable): {gpu.positions.Length} verts, {allTris.Count / 3} tris, {boneCount} bones, {mesh.blendShapeCount} blendshapes; matches BakeMesh within {error:G3}");
+            return result;
+        }
+
+        private Mesh skinningValidationMesh;
+
+        // Skins the data on the CPU as the renderer will on the GPU (bones relative to the
+        // unscaled renderer transform, blendshapes at the current weights) and compares with
+        // BakeMesh of the same pose. False also when the data cannot be compared.
+        private bool ValidateGpuSkinning(SkinnedMeshRenderer skinned, Mesh mesh, CachedSkinningData data, out float error, out float tolerance)
+        {
+            error = float.PositiveInfinity;
+            tolerance = 0f;
+            if (skinningValidationMesh == null)
+                skinningValidationMesh = new Mesh { name = "SkinningValidationBake" };
+            skinned.BakeMesh(skinningValidationMesh);
+            var baked = skinningValidationMesh.vertices;
+            int count = data.bindVertices.Length;
+            if (baked == null || baked.Length != count)
+                return false;
+
+            var vertices = (Vector3[])data.bindVertices.Clone();
+            var normals = (Vector3[])data.bindNormals.Clone();
+            if (mesh.blendShapeCount > 0)
+                ApplyBlendShapes(mesh, skinned, vertices, normals, data.sparseBlendShapes);
+
+            var tr = skinned.transform;
+            var ls = tr.lossyScale;
+            var inverse = Matrix4x4.TRS(tr.position, tr.rotation,
+                new Vector3(Mathf.Sign(ls.x), Mathf.Sign(ls.y), Mathf.Sign(ls.z))).inverse;
+            var bones = skinned.bones;
+            var matrices = new Matrix4x4[data.boneCount];
+            for (int b = 0; b < matrices.Length; b++)
+            {
+                matrices[b] = bones != null && b < bones.Length && bones[b] != null
+                    ? inverse * bones[b].localToWorldMatrix * data.bindPoses[b]
+                    : Matrix4x4.identity;
+            }
+
+            float worst = 0f;
+            for (int v = 0; v < count; v++)
+            {
+                Vector3 p = Vector3.zero;
+                int baseIndex = v * data.bonesPerVertex;
+                for (int k = 0; k < data.bonesPerVertex; k++)
+                {
+                    float w = data.blendWeights[baseIndex + k];
+                    if (w == 0f) continue;
+                    uint bone = data.blendIndices[baseIndex + k];
+                    if (bone >= (uint)matrices.Length)
+                        return false;
+                    p += matrices[bone].MultiplyPoint3x4(vertices[v]) * w;
+                }
+                worst = Mathf.Max(worst, (p - baked[v]).sqrMagnitude);
+            }
+            error = Mathf.Sqrt(worst);
+            tolerance = Mathf.Max(1e-3f * skinningValidationMesh.bounds.size.magnitude, 1e-4f);
+            return error <= tolerance;
+        }
+
+        /// <summary>
         /// GPU skinning data for one sharedMesh and blendshape weight set (cachedSkinning). The
         /// mesh's bones, weights and bind pose are read once (skinningBases); a weight set gets the
         /// bind pose with its blendshapes applied, so characters with blendshapes are skinned on the
@@ -4093,7 +4211,7 @@ namespace UnityRemix
             {
                 var vertices = (Vector3[])baseData.bindVertices.Clone();
                 var normals = (Vector3[])baseData.bindNormals.Clone();
-                ApplyBlendShapes(mesh, skinned, vertices, normals);
+                ApplyBlendShapes(mesh, skinned, vertices, normals, baseData.sparseBlendShapes);
                 cachedSkinning[skinCacheKey] = new CachedSkinningData
                 {
                     bindVertices = vertices,
@@ -4107,7 +4225,8 @@ namespace UnityRemix
                     bonesPerVertex = baseData.bonesPerVertex,
                     boneCount = baseData.boneCount,
                     bindPoses = baseData.bindPoses,
-                    meshCreated = false
+                    meshCreated = false,
+                    sparseBlendShapes = baseData.sparseBlendShapes
                 };
             }
             catch (Exception ex)
@@ -4121,9 +4240,39 @@ namespace UnityRemix
 
         // Blendshapes as Unity applies them before skinning: a weight up to the first frame scales
         // that frame, between frames it interpolates, past the last it extrapolates the last two.
-        private void ApplyBlendShapes(Mesh mesh, SkinnedMeshRenderer skinned, Vector3[] vertices, Vector3[] normals)
+        private void ApplyBlendShapes(Mesh mesh, SkinnedMeshRenderer skinned, Vector3[] vertices, Vector3[] normals,
+                                      SkinnedMeshGpuReader.SparseShape[] sparse = null)
         {
             int count = vertices.Length;
+            if (sparse != null)
+            {
+                // Read from the GPU (non-readable mesh): single-frame shapes, only the vertices they move.
+                bool moved = false;
+                for (int shape = 0; shape < sparse.Length; shape++)
+                {
+                    float weight = skinned.GetBlendShapeWeight(shape);
+                    var deltas = sparse[shape];
+                    if (weight == 0f || deltas == null || deltas.frameWeight == 0f) continue;
+                    float factor = weight / deltas.frameWeight;
+                    for (int i = 0; i < deltas.indices.Length; i++)
+                    {
+                        int v = deltas.indices[i];
+                        vertices[v] += deltas.positions[i] * factor;
+                        normals[v] += deltas.normals[i] * factor;
+                    }
+                    moved = true;
+                }
+                if (moved)
+                {
+                    for (int v = 0; v < count; v++)
+                    {
+                        var n = normals[v];
+                        float lengthSqr = n.sqrMagnitude;
+                        normals[v] = lengthSqr > 1e-12f ? n / Mathf.Sqrt(lengthSqr) : Vector3.up;
+                    }
+                }
+                return;
+            }
             if (blendDeltaVertices == null || blendDeltaVertices.Length != count)
             {
                 blendDeltaVertices = new Vector3[count];
