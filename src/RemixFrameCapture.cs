@@ -3083,6 +3083,19 @@ namespace UnityRemix
                     }
                 }
 
+                if (!describedParticleSystems.Contains(tracked.id) &&
+                    materialManager.TryDescribeMaterial(tintedMatId, out string matDescription))
+                {
+                    describedParticleSystems.Add(tracked.id);
+                    var trailsModule = ps.trails;
+                    string trailText = trailsModule.enabled
+                        ? $"trails {trailsModule.mode} (texture {trailsModule.textureMode}, ribbons {trailsModule.ribbonCount}, mat '{(pr.trailMaterial != null ? pr.trailMaterial.name : "none")}' shader '{(pr.trailMaterial != null && pr.trailMaterial.shader != null ? pr.trailMaterial.shader.name : "-")}')"
+                        : "no trails";
+                    logger.LogInfo($"[ParticleSystem] '{pr.name}': {pr.renderMode}, align {pr.alignment}, space {ps.main.simulationSpace}, {actualAlive} alive, " +
+                                   $"mat '{mat.name}' shader '{(mat.shader != null ? mat.shader.name : "-")}' queue {mat.renderQueue}{DescribeBlend(mat)}, " +
+                                   $"tint ({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}) matAlpha {matAlpha:F2} emissive {isEmissiveParticle}, {trailText} | Remix {matDescription}");
+                }
+
                 if (pr.renderMode == ParticleSystemRenderMode.None)
                     continue;
 
@@ -3340,6 +3353,22 @@ namespace UnityRemix
 
         private double particleAppendMs;
         private int particleCurveCount;
+        // Particle systems and trails described in the log once (what they are, and how they reach Remix).
+        private readonly HashSet<int> describedParticleSystems = new HashSet<int>();
+        private readonly HashSet<int> describedParticleTrails = new HashSet<int>();
+
+        private static string DescribeBlend(Material mat)
+        {
+            string text = "";
+            if (mat.HasProperty("_SrcBlend")) text += $" src {mat.GetFloat("_SrcBlend")}";
+            if (mat.HasProperty("_DstBlend")) text += $" dst {mat.GetFloat("_DstBlend")}";
+            if (mat.HasProperty("_Surface")) text += $" surface {mat.GetFloat("_Surface")}";
+            if (mat.HasProperty("_Blend")) text += $" blend {mat.GetFloat("_Blend")}";
+            if (mat.HasProperty("_ZWrite")) text += $" zwrite {mat.GetFloat("_ZWrite")}";
+            var keywords = mat.shaderKeywords;
+            if (keywords != null && keywords.Length > 0) text += $" keywords [{string.Join(" ", keywords)}]";
+            return text.Length > 0 ? " (" + text.Trim() + ")" : "";
+        }
 
         // Particle geometry goes to the render thread in reused buffers, not new arrays every
         // frame (megabytes per frame, and a garbage collection every few frames). Each mesh
@@ -4128,6 +4157,13 @@ namespace UnityRemix
                     );
 
                     ulong trailHash = (ulong)(uint)pr.GetInstanceID() | 0x4800000000000000UL;
+                    if (!describedParticleTrails.Contains(pr.GetInstanceID()) &&
+                        materialManager.TryDescribeMaterial(trailMatId, out string trailDescription))
+                    {
+                        describedParticleTrails.Add(pr.GetInstanceID());
+                        logger.LogInfo($"[ParticleTrail] '{pr.name}': {trailMesh.vertexCount} verts, {trailMesh.subMeshCount} submeshes, mat '{trailMat.name}' shader '{(trailMat.shader != null ? trailMat.shader.name : "-")}' queue {trailMat.renderQueue}{DescribeBlend(trailMat)}, " +
+                                       $"normals {trailMesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Normal)}, colors {trailMesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color)} | Remix {trailDescription}");
+                    }
 
                     // Use the full local-to-world matrix so position is correctly applied.
                     // For world-space simulated particles the transform is usually identity/origin

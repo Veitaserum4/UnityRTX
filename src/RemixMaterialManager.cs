@@ -249,6 +249,23 @@ namespace UnityRemix
         /// <summary>
         /// Get _MainTex_ST (tiling/offset) for a material. Returns (1,1,0,0) if unknown.
         /// </summary>
+        /// <summary>
+        /// How a captured material will reach Remix, for diagnostics; false while it is not captured yet.
+        /// </summary>
+        public bool TryDescribeMaterial(int materialId, out string description)
+        {
+            if (!materialTextureData.TryGetValue(materialId, out var d))
+            {
+                description = null;
+                return false;
+            }
+            description = $"alpha={d.alphaMode} (cutoff {d.alphaCutoff:F2}), albedoTex={(d.albedoHandle != IntPtr.Zero || d.albedoTextureHash != 0)}, " +
+                          $"color=({d.albedoColor.r:F2},{d.albedoColor.g:F2},{d.albedoColor.b:F2},{d.albedoColor.a:F2}), " +
+                          $"emissive={d.emissiveIntensity:F2} ({d.emissiveColor.r:F2},{d.emissiveColor.g:F2},{d.emissiveColor.b:F2}) emissiveTex={d.emissiveHandle != IntPtr.Zero} " +
+                          $"emissiveBlend={d.useEmissiveBlend}, translucent={d.translucentKind}";
+            return true;
+        }
+
         public Vector4 GetMainTexST(int materialId)
         {
             if (materialTextureData.TryGetValue(materialId, out var data))
