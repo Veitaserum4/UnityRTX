@@ -3475,7 +3475,7 @@ namespace UnityRemix
             {
                 if (!materialTextureData.TryGetValue(id, out var matData))
                     continue;
-                IntPtr handle = CreateRemixMaterialSimple(ref matData, id);
+                IntPtr handle = CreateRemixMaterialSimple(ref matData, id, replace: true);
                 matData.remixMaterialHandle = handle;
                 materialTextureData[id] = matData;
             }
@@ -3490,7 +3490,9 @@ namespace UnityRemix
 
         private static bool IsFinite(float x) => !float.IsNaN(x) && !float.IsInfinity(x);
         
-        private IntPtr CreateRemixMaterialSimple(ref MaterialTextureData matData, int materialId)
+        /// <param name="replace">Create it even if a material with its hash exists: OpenRemix
+        /// replaces that one in place (a live settings change).</param>
+        private IntPtr CreateRemixMaterialSimple(ref MaterialTextureData matData, int materialId, bool replace = false)
         {
             if (createMaterialFunc == null)
                 return IntPtr.Zero;
@@ -3506,7 +3508,7 @@ namespace UnityRemix
 
                 lock (apiLock)
                 {
-                    if (materialHandleByHash.TryGetValue(matHash, out IntPtr existingHandle) && existingHandle != IntPtr.Zero)
+                    if (!replace && materialHandleByHash.TryGetValue(matHash, out IntPtr existingHandle) && existingHandle != IntPtr.Zero)
                     {
                         return existingHandle;
                     }
