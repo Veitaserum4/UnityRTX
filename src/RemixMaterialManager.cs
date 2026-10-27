@@ -438,8 +438,8 @@ namespace UnityRemix
                 normalTextureHash = normalHash,
                 albedoColor = Color.white,
                 alphaMode = AlphaMode.Opaque,
-                wrapModeU = 0,
-                wrapModeV = 0,
+                wrapModeU = 1, // MDL Repeat
+                wrapModeV = 1,
                 filterMode = 1,
                 mainTexST = new Vector4(1, 1, 0, 0),
                 roughness = roughness,
@@ -3474,8 +3474,8 @@ namespace UnityRemix
                         spriteSheetCol = 1,
                         spriteSheetFps = 0,
                         filterMode = (byte)(matData.filterMode <= 1 ? matData.filterMode : 1),
-                        wrapModeU = (byte)(matData.wrapModeU <= 4 ? matData.wrapModeU : 1),
-                        wrapModeV = (byte)(matData.wrapModeV <= 4 ? matData.wrapModeV : 1)
+                        wrapModeU = (byte)(matData.wrapModeU <= 3 ? matData.wrapModeU : 1),
+                        wrapModeV = (byte)(matData.wrapModeV <= 3 ? matData.wrapModeV : 1)
                     };
                     
                     IntPtr materialHandle;
