@@ -3970,7 +3970,7 @@ namespace UnityRemix
 
 
         // Every property of the material's shader with its value on this material, and its keywords.
-        private string DescribeMaterialProperties(Material material)
+        internal string DescribeMaterialProperties(Material material)
         {
             var sb = new System.Text.StringBuilder();
             try

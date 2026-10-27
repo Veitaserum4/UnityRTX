@@ -50,6 +50,15 @@ namespace UnityRemix
         private CameraClearFlags lastCapturedClearFlags = (CameraClearFlags)(-1);
         private Color lastCapturedBgColor = Color.clear;
         private bool needsCapture = true;
+        private Material lastLoggedSkyMat;
+
+        // Procedural skies (rendered by the capture camera) follow the sun: recaptured when it
+        // has turned this far since the last capture.
+        private const float SunRecaptureAngle = 5f;
+        private bool lastCaptureProcedural;
+        private Vector3 capturedSunDirection;
+        private Light sun;
+        private int sunSearchFrame = -1000;
 
         private string statusText = "Initializing...";
         public string StatusText => statusText;
@@ -145,10 +154,44 @@ namespace UnityRemix
             bool flagsChanged = (curFlags != lastCapturedClearFlags);
             bool bgChanged = (currentSkyMat == null && curBg != lastCapturedBgColor);
 
-            if (needsCapture || matChanged || flagsChanged || bgChanged)
+            Vector3 sunDirection = SunDirection(frameCount);
+            bool sunMoved = lastCaptureProcedural && sunDirection != Vector3.zero && capturedSunDirection != Vector3.zero &&
+                            Vector3.Angle(sunDirection, capturedSunDirection) > SunRecaptureAngle;
+
+            if (needsCapture || matChanged || flagsChanged || bgChanged || sunMoved)
             {
+                if (sunMoved)
+                    logger?.LogInfo($"[RemixSkyboxManager] Sun turned {Vector3.Angle(sunDirection, capturedSunDirection):F1} deg since the last capture, recapturing the sky.");
+                capturedSunDirection = sunDirection;
                 CaptureAndPrepareSkybox(mainCam, currentSkyMat, curFlags, curBg);
             }
+        }
+
+        /// <summary>
+        /// Forward of the scene's sun: RenderSettings.sun, else its brightest active directional
+        /// light (re-found every 300 frames, when the directional lights are also logged).
+        /// Zero if there is none.
+        /// </summary>
+        private Vector3 SunDirection(int frameCount)
+        {
+            if (frameCount - sunSearchFrame >= 300 || frameCount < sunSearchFrame)
+            {
+                sunSearchFrame = frameCount;
+                sun = RenderSettings.sun;
+                var sb = new System.Text.StringBuilder();
+                foreach (var light in UnityEngine.Object.FindObjectsOfType<Light>())
+                {
+                    if (light.type != LightType.Directional)
+                        continue;
+                    bool active = light.enabled && light.gameObject.activeInHierarchy;
+                    sb.Append($" '{light.name}' {(active ? "on" : "off")} intensity {light.intensity:F2} color {light.color} forward {light.transform.forward};");
+                    if (RenderSettings.sun == null && active && (sun == null || light.intensity > sun.intensity))
+                        sun = light;
+                }
+                if (frameCount % 1800 < 300)
+                    logger?.LogInfo($"[Sun] RenderSettings.sun '{(RenderSettings.sun != null ? RenderSettings.sun.name : "none")}', directional lights:{sb}");
+            }
+            return sun != null ? sun.transform.forward : Vector3.zero;
         }
 
         /// <summary>
@@ -234,9 +277,11 @@ namespace UnityRemix
                     }
 
                     // 4. Fallback to Camera.RenderToCubemap
+                    lastCaptureProcedural = false;
                     if (!captured)
                     {
                         captured = CaptureCubemapTextures(mainCam, skyMat);
+                        lastCaptureProcedural = captured;
                     }
                 }
 
@@ -1006,6 +1051,11 @@ namespace UnityRemix
                     mainTexInfo = $"{t.name} ({t.width}x{t.height}, {t.GetType().Name})";
                 }
                 logger?.LogInfo($"[RemixSkyboxManager] Capturing skyMat: '{skyMat.name}', shader='{skyMat.shader?.name}', mainTexture={mainTexInfo}");
+                if (skyboxVersion <= 1 || skyMat != lastLoggedSkyMat)
+                {
+                    lastLoggedSkyMat = skyMat;
+                    logger?.LogInfo($"[RemixSkyboxManager] Sky material: {materialManager?.DescribeMaterialProperties(skyMat)} | fog {RenderSettings.fog} {RenderSettings.fogMode} color {RenderSettings.fogColor} density {RenderSettings.fogDensity} range {RenderSettings.fogStartDistance}-{RenderSettings.fogEndDistance}");
+                }
 
                 // If material directly has a readable Cubemap texture, extract faces directly
                 if (skyMat.HasProperty("_Tex"))
@@ -1030,15 +1080,16 @@ namespace UnityRemix
                 skyCamGo.hideFlags = HideFlags.HideAndDontSave;
                 Camera skyCam = skyCamGo.AddComponent<Camera>();
                 skyCam.enabled = false;
-                // Elevate the capture camera high into the sky (y=50000) away from all level geometry,
-                // ProBuilder meshes, and room colliders. Use layer 31 (SpecialLighting) so Unity's
-                // camera pipeline triggers without drawing any world objects.
-                skyCam.cullingMask = (1 << 31);
+                // Cull everything but an unused layer, so Unity's camera pipeline runs and draws only the sky.
+                skyCam.cullingMask = 1 << EmptyLayer();
                 skyCam.clearFlags = CameraClearFlags.Skybox;
                 skyCam.nearClipPlane = 0.1f;
                 skyCam.farClipPlane = 1000f;
                 skyCam.backgroundColor = mainCam != null ? mainCam.backgroundColor : Color.black;
-                skyCam.transform.position = new Vector3(0f, 50000f, 0f);
+                // From the player's viewpoint: skies that vary with height or position (procedural
+                // clouds, horizon fog) look as they do in game. The culling mask keeps level
+                // geometry out.
+                skyCam.transform.position = mainCam != null ? mainCam.transform.position : new Vector3(0f, 50000f, 0f);
                 skyCam.transform.rotation = Quaternion.identity;
 
                 if (skyMat != null)
@@ -1047,7 +1098,12 @@ namespace UnityRemix
                     skyComp.material = skyMat;
                 }
 
-                bool renderOk = skyCam.RenderToCubemap(rt);
+                // Distance fog would cover the whole sky at the far plane (PEAK: all white).
+                bool fog = RenderSettings.fog;
+                RenderSettings.fog = false;
+                bool renderOk;
+                try { renderOk = skyCam.RenderToCubemap(rt); }
+                finally { RenderSettings.fog = fog; }
                 if (!renderOk)
                 {
                     logger?.LogWarning("[RemixSkyboxManager] Camera.RenderToCubemap returned false");
@@ -1145,6 +1201,17 @@ namespace UnityRemix
                     UnityEngine.Object.Destroy(skyCamGo);
                 }
             }
+        }
+
+        // An unnamed layer (nothing is put on it) so the capture draws only the sky; 31 if all are named.
+        private static int EmptyLayer()
+        {
+            for (int layer = 31; layer >= 8; layer--)
+            {
+                if (string.IsNullOrEmpty(LayerMask.LayerToName(layer)))
+                    return layer;
+            }
+            return 31;
         }
 
         private bool ExtractFromDirectCubemap(Cubemap cubemap)
