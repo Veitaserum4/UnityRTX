@@ -61,14 +61,12 @@ namespace UnityRemix
             return 0f;
         }
 
-        // World-position multiplier of every triplanar layer: _TriplanarScale times the
-        // material's _GlobalWorldScale (0.1 on the big salt rocks).
+        // World-position multiplier of every triplanar layer. Shaders without a _TriplanarScale
+        // property (PEAK's W/Peak_Standard) project at about 0.2, measured against the game's view;
+        // _GlobalWorldScale does not scale the projection.
         private static float TriplanarScale(Material material)
         {
-            float scale = material.HasProperty("_TriplanarScale") ? material.GetFloat("_TriplanarScale") : 1f;
-            if (material.HasProperty("_GlobalWorldScale"))
-                scale *= material.GetFloat("_GlobalWorldScale");
-            return Mathf.Max(0.001f, scale);
+            return material.HasProperty("_TriplanarScale") ? Mathf.Max(0.001f, material.GetFloat("_TriplanarScale")) : 0.2f;
         }
 
         public static bool IsLayered(Material material)
