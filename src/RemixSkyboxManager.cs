@@ -30,6 +30,12 @@ namespace UnityRemix
         private RemixAPI.PFN_remixapi_CreateLight createLightFunc;
         private RemixAPI.PFN_remixapi_DestroyLight destroyLightFunc;
         private RemixAPI.PFN_remixapi_DrawLightInstance drawLightInstanceFunc;
+        private RemixAPI.PFN_remixapi_CreateTexture createTextureFunc;
+        private RemixAPI.PFN_remixapi_DestroyTexture destroyTextureFunc;
+        // OpenRemix: the dome light's texture, uploaded from memory (DomeTexture), and the one it
+        // replaced, destroyed once the new dome light exists.
+        private IntPtr domeTexture = IntPtr.Zero;
+        private IntPtr replacedDomeTexture = IntPtr.Zero;
         private object apiLock;
         private IntPtr currentDomeLightHandle = IntPtr.Zero;
 
@@ -88,6 +94,65 @@ namespace UnityRemix
                 destroyLightFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_DestroyLight>(remixInterface.DestroyLight);
             if (remixInterface.DrawLightInstance != IntPtr.Zero)
                 drawLightInstanceFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_DrawLightInstance>(remixInterface.DrawLightInstance);
+            if (remixInterface.CreateTexture != IntPtr.Zero)
+                createTextureFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_CreateTexture>(remixInterface.CreateTexture);
+            if (remixInterface.DestroyTexture != IntPtr.Zero)
+                destroyTextureFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_DestroyTexture>(remixInterface.DestroyTexture);
+        }
+
+        /// <summary>
+        /// The dome light's colorTexture for these pixels (rows top = zenith). OpenRemix: uploaded
+        /// from memory with CreateTexture and named by hash ("0x..."), which its dome light resolves
+        /// like a material texture. Otherwise, or if the upload fails: written to the DDS file.
+        /// </summary>
+        private string DomeTexture(string ddsFullPath, int width, int height, Color32[] pixels)
+        {
+            if (RemixAPI.IsOpenRemix && createTextureFunc != null)
+            {
+                ulong hash = 0x534B595445580000UL | (ulong)(uint)(skyboxVersion & 0xFFFF);
+                GCHandle pinned = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+                try
+                {
+                    var info = new RemixAPI.remixapi_TextureInfo
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_TEXTURE_INFO,
+                        pNext = IntPtr.Zero,
+                        hash = hash,
+                        width = (uint)width,
+                        height = (uint)height,
+                        depth = 1,
+                        mipLevels = 1,
+                        format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM,
+                        data = pinned.AddrOfPinnedObject(),
+                        dataSize = (ulong)pixels.Length * 4
+                    };
+                    IntPtr handle;
+                    RemixAPI.remixapi_ErrorCode result;
+                    lock (apiLock ?? this) { result = createTextureFunc(ref info, out handle); }
+                    if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                    {
+                        replacedDomeTexture = domeTexture;
+                        domeTexture = handle;
+                        return $"0x{hash:X16}";
+                    }
+                    logger?.LogWarning($"[RemixSkyboxManager] Uploading the sky texture failed ({result}), writing a DDS instead.");
+                }
+                finally
+                {
+                    pinned.Free();
+                }
+            }
+            WriteDdsFile(ddsFullPath, width, height, pixels);
+            return ddsFullPath;
+        }
+
+        private void DestroyReplacedDomeTexture()
+        {
+            if (replacedDomeTexture != IntPtr.Zero && destroyTextureFunc != null)
+            {
+                lock (apiLock ?? this) { destroyTextureFunc(replacedDomeTexture); }
+            }
+            replacedDomeTexture = IntPtr.Zero;
         }
 
         public void ForceRecapture()
@@ -404,7 +469,7 @@ namespace UnityRemix
                 }
             });
 
-            WriteDdsFile(ddsFullPath, dstW, dstH, ddsPixels);
+            string domeTexturePath = DomeTexture(ddsFullPath, dstW, dstH, ddsPixels);
             CleanupOldDdsFiles(modsDir, ddsFileName);
 
             Color32[] texPixels = new Color32[dstW * dstH];
@@ -426,9 +491,9 @@ namespace UnityRemix
 
             string filterDesc = isClosest ? "Closest (Pixelated)" : "Linear (Smooth)";
             statusText = $"Skybox (Panoramic v{skyboxVersion}, {filterDesc})";
-            logger?.LogInfo($"[RemixSkyboxManager] Generated direct panoramic DDS & mesh: {ddsFullPath} ({filterDesc})");
+            logger?.LogInfo($"[RemixSkyboxManager] Generated direct panoramic sky & mesh: {domeTexturePath} ({filterDesc})");
 
-            CreateRemixDomeLight(ddsFullPath);
+            CreateRemixDomeLight(domeTexturePath);
         }
 
         private static Color32 SampleBilinear(Color32[] pixels, int w, int h, float x, float y)
@@ -553,13 +618,14 @@ namespace UnityRemix
 
             bool isClosest = (configSkyboxFiltering != null && configSkyboxFiltering.Value == SkyboxFiltering.Closest);
             string filterDesc = isClosest ? "Closest (Pixelated)" : "Linear (Smooth)";
+            string domeTexturePath = ddsFullPath;
 
             if (hasCubemap)
             {
                 Color32[] panoPixels = GenerateEquirectangularPixels(2048, 1024);
                 if (panoPixels != null)
                 {
-                    WriteDdsFile(ddsFullPath, 2048, 1024, panoPixels);
+                    domeTexturePath = DomeTexture(ddsFullPath, 2048, 1024, panoPixels);
 
                     Color32[] texPixels = new Color32[2048 * 1024];
                     for (int y = 0; y < 1024; y++)
@@ -579,12 +645,12 @@ namespace UnityRemix
                     UpdateSkyMeshAndMaterial(skyTexture, isClosest);
                 }
                 statusText = $"Skybox (Cubemap v{skyboxVersion}, {filterDesc})";
-                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama DDS & mesh: {ddsFullPath} ({filterDesc})");
+                logger?.LogInfo($"[RemixSkyboxManager] Generated equirectangular panorama & mesh: {domeTexturePath} ({filterDesc})");
             }
             else
             {
                 Color32[] solidPixels = GenerateSolidColorPixels(16, 16, bgColor);
-                WriteDdsFile(ddsFullPath, 16, 16, solidPixels);
+                domeTexturePath = DomeTexture(ddsFullPath, 16, 16, solidPixels);
 
                 if (skyTexture != null) UnityEngine.Object.Destroy(skyTexture);
                 skyTexture = new Texture2D(16, 16, TextureFormat.RGBA32, false);
@@ -597,11 +663,11 @@ namespace UnityRemix
                 UpdateSkyMeshAndMaterial(skyTexture, isClosest);
 
                 statusText = $"Skybox (Solid v{skyboxVersion})";
-                logger?.LogInfo($"[RemixSkyboxManager] Generated solid color DDS & mesh ({bgColor}): {ddsFullPath}");
+                logger?.LogInfo($"[RemixSkyboxManager] Generated solid color sky & mesh ({bgColor}): {domeTexturePath}");
             }
 
             CleanupOldDdsFiles(modsDir, ddsFileName);
-            CreateRemixDomeLight(ddsFullPath);
+            CreateRemixDomeLight(domeTexturePath);
         }
 
         private void EnsureSkyboxSphereMesh()
@@ -741,7 +807,7 @@ namespace UnityRemix
             }
         }
 
-        private void CreateRemixDomeLight(string ddsFullPath)
+        private void CreateRemixDomeLight(string texturePath)
         {
             if (createLightFunc == null)
             {
@@ -782,7 +848,7 @@ namespace UnityRemix
                 );
             }
 
-            IntPtr pathPtr = Marshal.StringToHGlobalUni(ddsFullPath);
+            IntPtr pathPtr = Marshal.StringToHGlobalUni(texturePath);
 
             var domeExt = new RemixAPI.remixapi_LightInfoDomeEXT
             {
@@ -828,6 +894,7 @@ namespace UnityRemix
             {
                 domeHandle.Free();
                 Marshal.FreeHGlobal(pathPtr);
+                DestroyReplacedDomeTexture();
             }
         }
 
