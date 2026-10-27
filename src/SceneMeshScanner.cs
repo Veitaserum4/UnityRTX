@@ -201,6 +201,20 @@ namespace UnityRemix
                                (byte)(255 + (c.b - 255) * weight), c.a);
         }
 
+        /// <summary>True if the renderer has materials and all of them are invisible.</summary>
+        public static bool IsRendererInvisible(Renderer renderer)
+        {
+            var materials = renderer.sharedMaterials;
+            if (materials == null || materials.Length == 0)
+                return false;
+            foreach (var mat in materials)
+            {
+                if (mat == null || !IsMaterialOrShaderInvisible(mat))
+                    return false;
+            }
+            return true;
+        }
+
         public static bool IsMaterialOrShaderInvisible(Material mat)
         {
             if (mat == null) return false;
@@ -223,8 +237,11 @@ namespace UnityRemix
             if (shader != null && !string.IsNullOrEmpty(shader.name))
             {
                 string sName = shader.name;
+                // Fog effects (screen fog quads, fog spheres and walls) shade from scene depth, which a
+                // Remix surface cannot; drawn as surfaces they become white walls hiding the sky.
                 if (sName.IndexOf("Invisible", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    sName.IndexOf("Clear", StringComparison.OrdinalIgnoreCase) >= 0)
+                    sName.IndexOf("Clear", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    sName.IndexOf("Fog", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     return true;
                 }

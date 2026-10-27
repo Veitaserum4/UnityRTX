@@ -1054,7 +1054,8 @@ namespace UnityRemix
             for (int i = 0; i < allStatic.Length; i++)
             {
                 var r = allStatic[i];
-                if (r != null && !lowerLodRenderers.Contains(r.GetInstanceID()) && cachedRendererIds.Add(r.GetInstanceID()))
+                if (r != null && !lowerLodRenderers.Contains(r.GetInstanceID()) && !SceneMeshScanner.IsRendererInvisible(r) &&
+                    cachedRendererIds.Add(r.GetInstanceID()))
                 {
                     if (RemixScrollingTextureDetector.IsScrollingRenderer(r))
                     {
@@ -1070,7 +1071,8 @@ namespace UnityRemix
             for (int i = 0; i < allSkinned.Length; i++)
             {
                 var sr = allSkinned[i];
-                if (sr != null && !lowerLodRenderers.Contains(sr.GetInstanceID()) && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
+                if (sr != null && !lowerLodRenderers.Contains(sr.GetInstanceID()) && !SceneMeshScanner.IsRendererInvisible(sr) &&
+                    cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                 {
                     cachedSkinnedRenderers.Add(sr);
                     if (!sr.updateWhenOffscreen)
