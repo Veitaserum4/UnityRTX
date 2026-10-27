@@ -695,6 +695,8 @@ namespace UnityRemix
             if (lastUpdateUnityFrame == curUnityFrame) return;
             lastUpdateUnityFrame = curUnityFrame;
 
+            ApplyAutoPbrSettingChange();
+
             // Engine frame throttling and DeltaTime slow-motion prevention
             if (initialSingleWindowEnabled)
             {
@@ -1171,8 +1173,23 @@ namespace UnityRemix
         /// Immediately updates all captured materials, clears mesh caches, and invalidates frame renderers
         /// so changes reflect on screen live without scene reload or restart.
         /// </summary>
+        // Set by OnAutoPbrSettingChanged, applied on Unity's main thread (ApplyAutoPbrSettingChange).
+        private int autoPbrChangeRequested;
+
+        /// <summary>
+        /// AutoPBR or auto normal settings changed. The settings UI draws on the render thread
+        /// (inside Present), but applying the change uses Unity (texture reads, a scene rescan),
+        /// so it runs on the main thread's next Update.
+        /// </summary>
         public void OnAutoPbrSettingChanged()
         {
+            System.Threading.Interlocked.Exchange(ref autoPbrChangeRequested, 1);
+        }
+
+        private void ApplyAutoPbrSettingChange()
+        {
+            if (System.Threading.Interlocked.Exchange(ref autoPbrChangeRequested, 0) == 0)
+                return;
             materialManager?.UpdateAllAutoPbrMaterials();
             meshConverter?.ClearMeshCache();
             frameCapture?.InvalidateCaches();
