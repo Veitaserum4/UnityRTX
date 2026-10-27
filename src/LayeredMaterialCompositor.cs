@@ -24,6 +24,45 @@ namespace UnityRemix
             public float scale;
         }
 
+        // In the material's keyword list: IsKeywordEnabled reports keywords the shader does not
+        // declare as disabled, though the material carries them (shader-graph toggles).
+        private static bool HasKeyword(Material material, string keyword)
+        {
+            if (material.IsKeywordEnabled(keyword))
+                return true;
+            var keywords = material.shaderKeywords;
+            return keywords != null && Array.IndexOf(keywords, keyword) >= 0;
+        }
+
+        /// <summary>
+        /// For a layered material drawn by world-projected (triplanar) layers and no UV-mapped base
+        /// texture: how many texture repeats per object-space unit the box-projected UVs that
+        /// stand in for the projection need (the first triplanar layer's _UVn times
+        /// _TriplanarScale). 0: the material uses mesh UVs.
+        /// </summary>
+        public static float ProjectionScale(Material material)
+        {
+            if (!IsLayered(material))
+                return 0f;
+            if (material.HasProperty("_BaseTexture") && material.GetTexture("_BaseTexture") != null)
+                return 0f;
+            var layers = new List<Layer>();
+            AddLayer(material, layers, "_Color1", "_Texture1", "_Remap1", "_Triplanar1On", "_Triplanar1", "_UV1");
+            AddLayer(material, layers, material.HasProperty("_Color21") ? "_Color21" : "_Color2", "_Texture2", "_Remap2", "_Triplanar2On", "_Triplanar2", "_UV2");
+            AddLayer(material, layers, "_Color3", "_Texture3", "_Remap3", "_Triplanar3On", "_Triplanar3", "_UV3");
+            foreach (var layer in layers)
+            {
+                if (layer.triplanar && layer.texture != null)
+                    return layer.scale * TriplanarScale(material);
+            }
+            return 0f;
+        }
+
+        private static float TriplanarScale(Material material)
+        {
+            return material.HasProperty("_TriplanarScale") ? Mathf.Max(0.001f, material.GetFloat("_TriplanarScale")) : 1f;
+        }
+
         public static bool IsLayered(Material material)
         {
             return material.HasProperty("_BaseColor") && material.HasProperty("_Color1") &&
@@ -48,7 +87,7 @@ namespace UnityRemix
         public static bool UsesTopColor(Material material, out float threshold)
         {
             threshold = 0.5f;
-            if (!IsLayered(material) || !material.IsKeywordEnabled("_USETOPCOLOR_ON") || !material.HasProperty("_TopColor"))
+            if (!IsLayered(material) || !HasKeyword(material, "_USETOPCOLOR_ON") || !material.HasProperty("_TopColor"))
                 return false;
             if (material.HasProperty("_TopColorAmount") && material.GetFloat("_TopColorAmount") <= 0.01f)
                 return false;
@@ -92,6 +131,10 @@ namespace UnityRemix
             Texture baseTexture = material.HasProperty("_BaseTexture") ? material.GetTexture("_BaseTexture") : null;
             float baseAmount = material.HasProperty("_BaseTexAmount") ? Mathf.Clamp01(material.GetFloat("_BaseTexAmount")) : 1f;
             Color[] basePixels = baseTexture != null ? ParticleMaterialSnapshot.Read(baseTexture, size) : null;
+            // Projected: the composite is laid out in box-projected UVs (ProjectionScale), where the
+            // triplanar layers show their pattern; otherwise in mesh UVs, where the UV layers do.
+            float projection = ProjectionScale(material);
+            float reference = projection > 0f ? projection / TriplanarScale(material) : 0f;
 
             // Each layer's mask over the texture, and its mean (what a triplanar layer contributes).
             ReadMasks(layers, size, out var masks, out var means);
@@ -107,9 +150,9 @@ namespace UnityRemix
                     Color c = baseColor;
                     if (basePixels != null)
                         c *= Color.Lerp(Color.white, basePixels[i], baseAmount);
-                    c = ApplyLayers(c, layers, masks, means, x, y, size);
+                    c = ApplyLayers(c, layers, masks, means, x, y, size, reference);
                     if (top)
-                        c = Color.Lerp(c, ApplyLayers(topColor, topLayers, topMasks, topMeans, x, y, size), topAmount);
+                        c = Color.Lerp(c, ApplyLayers(topColor, topLayers, topMasks, topMeans, x, y, size, reference), topAmount);
                     c *= tint;
                     float a = alpha != null ? alpha[i].a : 1f;
                     if (linear)
@@ -130,7 +173,7 @@ namespace UnityRemix
             description = $"base ({baseColor.r:F2},{baseColor.g:F2},{baseColor.b:F2}){(baseTexture != null ? $" x '{baseTexture.name}' ({baseAmount:F2})" : "")} tint ({tint.r:F2},{tint.g:F2},{tint.b:F2}), " +
                           $"layers [{DescribeLayers(layers, means)}]{(shape != null ? $", alpha from '{shape.name}'" : "")}" +
                           (top ? $"; top ({topColor.r:F2},{topColor.g:F2},{topColor.b:F2}) x{topAmount:F2} layers [{DescribeLayers(topLayers, topMeans)}]" : "") +
-                          " (linear)";
+                          (projection > 0f ? $", box-projected x{projection:G3}" : "") + " (linear)";
             return texture;
         }
 
@@ -170,18 +213,21 @@ namespace UnityRemix
             }
         }
 
-        private static Color ApplyLayers(Color c, List<Layer> layers, float[][] masks, float[] means, int x, int y, int size)
+        // reference: the projected layout's layer scale (0: mesh UVs), see Compose.
+        private static Color ApplyLayers(Color c, List<Layer> layers, float[][] masks, float[] means, int x, int y, int size, float reference)
         {
             for (int l = 0; l < layers.Count; l++)
             {
                 var layer = layers[l];
+                bool sampled = masks[l] != null && (reference > 0f ? layer.triplanar : !layer.triplanar);
                 float m;
-                if (masks[l] == null || layer.triplanar)
+                if (!sampled)
                     m = means[l];
                 else
                 {
-                    // the layer tiles _UVn times across the texture's 0..1
-                    int sx = (int)((x * layer.scale) % size), sy = (int)((y * layer.scale) % size);
+                    // the layer tiles this many times across the texture's 0..1
+                    float tiling = reference > 0f ? layer.scale / reference : layer.scale;
+                    int sx = (int)((x * tiling) % size), sy = (int)((y * tiling) % size);
                     m = masks[l][Mathf.Clamp(sy, 0, size - 1) * size + Mathf.Clamp(sx, 0, size - 1)];
                 }
                 c = Color.Lerp(c, layer.color, Mathf.Clamp01(m * layer.color.a));

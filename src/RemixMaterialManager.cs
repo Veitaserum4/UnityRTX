@@ -1284,6 +1284,13 @@ namespace UnityRemix
             // Store for later use
             materialTextureData[materialId] = matData;
 
+            // World-projected layered materials: meshes give them box-projected UVs.
+            if (layeredComposite)
+            {
+                float projection = LayeredMaterialCompositor.ProjectionScale(material);
+                if (projection > 0f)
+                    projectionScales[materialId] = projection;
+            }
             // Upward-facing surfaces of a top-colored layered material: a variant with the top albedo.
             if (layeredComposite && LayeredMaterialCompositor.UsesTopColor(material, out float topThreshold))
                 RegisterTopVariant(material, materialId, matData, topThreshold);
@@ -3808,6 +3815,8 @@ namespace UnityRemix
                 int topId = unchecked(materialId * 486187739 + 0x70C010);
                 materialTextureData[topId] = data;
                 vertexColorWeights[topId] = vertexColorWeights.TryGetValue(materialId, out float w) ? w : 1f;
+                if (projectionScales.TryGetValue(materialId, out float projection))
+                    projectionScales[topId] = projection;
                 topVariants[materialId] = (topId, threshold);
                 logger.LogInfo($"[LayeredMaterial] '{material.name}' top surfaces (up > {threshold:F2}): {description}");
             }
@@ -3815,6 +3824,19 @@ namespace UnityRemix
             {
                 logger.LogWarning($"[LayeredMaterial] '{material.name}' top: {ex.Message}");
             }
+        }
+
+        // Material id -> repeats per object-space unit of the box-projected UVs it needs.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, float> projectionScales =
+            new System.Collections.Concurrent.ConcurrentDictionary<int, float>();
+
+        /// <summary>
+        /// For a layered material drawn by world-projected layers: the scale of the box-projected
+        /// UVs (RemixMeshConverter.ProjectUV) its surfaces need instead of the mesh's own.
+        /// </summary>
+        public bool TryGetProjection(int materialId, out float scale)
+        {
+            return projectionScales.TryGetValue(materialId, out scale);
         }
 
         public float GetVertexColorWeight(int materialId)

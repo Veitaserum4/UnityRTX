@@ -100,6 +100,7 @@ namespace UnityRemix
         private RemixTerrainManager terrainManager;
         private RemixSettingsUI settingsUI;
         private RemixDebugHUD debugHUD;
+        private LookAtDiagnostics lookAt;
         private RemixSkyboxManager skyboxManager;
         private RemixFogManager fogManager;
         private RemixWaterManager waterManager;
@@ -915,6 +916,8 @@ namespace UnityRemix
             // Update debug HUD snapshot after all frame data is captured
             mainPhaseSw.Restart();
             debugHUD?.UpdateSnapshot();
+            if (lookAt == null) lookAt = new LookAtDiagnostics(LogSource);
+            lookAt.Update(cameraHandler != null ? cameraHandler.GetPreferredCamera() : Camera.main, frameCount);
             hudMs = mainPhaseSw.Elapsed.TotalMilliseconds;
 
             double totalMs = mainTotalSw.Elapsed.TotalMilliseconds;

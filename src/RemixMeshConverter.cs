@@ -43,6 +43,19 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// Box-projected UV standing in for a triplanar (world-projected) texture: the position on
+        /// the plane facing the normal's dominant axis, times scale (object space).
+        /// </summary>
+        internal static Vector2 ProjectUV(Vector3 position, Vector3 normal, float scale)
+        {
+            float ax = Mathf.Abs(normal.x), ay = Mathf.Abs(normal.y), az = Mathf.Abs(normal.z);
+            Vector2 uv = ay >= ax && ay >= az ? new Vector2(position.x, position.z)
+                       : ax >= az ? new Vector2(position.z, position.y)
+                       : new Vector2(position.x, position.y);
+            return uv * scale;
+        }
+
+        /// <summary>
         /// Splits triangles by the up component of their averaged vertex normals (object space).
         /// </summary>
         internal static void SplitByUp(IList<uint> indices, Vector3[] normals, float threshold, out uint[] up, out uint[] other)
@@ -410,7 +423,7 @@ namespace UnityRemix
             if (vertexColorWeight <= 0f)
                 hasColors = false;
 
-            // Check if any surface needs UV tiling/offset applied
+            // Check if any surface needs UV tiling/offset applied, or box-projected UVs
             bool anyNonIdentityST = false;
             for (int s = 0; s < submeshMaterials.Count; s++)
             {
@@ -423,6 +436,11 @@ namespace UnityRemix
                         break;
                     }
                 }
+            }
+            for (int s = 0; !anyNonIdentityST && data.SubmeshMaterialIds != null && s < data.SubmeshMaterialIds.Count; s++)
+            {
+                if (materialManager.TryGetProjection(data.SubmeshMaterialIds[s], out _))
+                    anyNonIdentityST = true;
             }
 
             var vertexHandles = new List<GCHandle>();
@@ -528,12 +546,14 @@ namespace UnityRemix
                             Vector4 st = new Vector4(1, 1, 0, 0);
                             if (targetMatId != 0)
                                 st = materialManager.GetMainTexST(targetMatId);
+                            bool projected = materialManager.TryGetProjection(targetMatId, out float projection);
 
                             var surfVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
                             for (int i = 0; i < vertices.Length; i++)
                             {
-                                float u = uvs[i].x * st.x + st.z;
-                                float v = uvs[i].y * st.y + st.w;
+                                Vector2 uv = projected ? ProjectUV(vertices[i], normals[i], projection) : uvs[i];
+                                float u = uv.x * st.x + st.z;
+                                float v = uv.y * st.y + st.w;
                                 uint col = hasColors ? Color32ToBGRA(WeightVertexColor(colors[i], vertexColorWeight)) : 0xFFFFFFFF;
                                 surfVerts[i] = RemixAPI.MakeVertex(
                                     vertices[i].x, vertices[i].z, vertices[i].y,
