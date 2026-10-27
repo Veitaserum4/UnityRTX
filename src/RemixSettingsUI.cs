@@ -18,6 +18,7 @@ namespace UnityRemix
         private float _maxRenderDistance;
         private float _particleMaxDistance;
         private bool _enableParticleDistanceCulling;
+        private bool _rasterParticles;
         private bool _enableSkybox;
         private int _skyboxFiltering;
         private float _lightIntensityMultiplier;
@@ -217,6 +218,11 @@ namespace UnityRemix
             if (_captureParticles)
             {
                 RemixImGui.Indent();
+                if (RemixImGui.Checkbox("Raster Particles", ref _rasterParticles))
+                    _plugin.SetConfig("RasterParticles", _rasterParticles);
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Draws particles with OpenRemix's raster backend over the path-traced image.\nCheaper with many particles; they are not lit, reflected or shadowed by the path tracer.");
+
                 if (RemixImGui.Checkbox("Particle Distance Culling", ref _enableParticleDistanceCulling))
                     _plugin.SetConfig("EnableParticleDistanceCulling", _enableParticleDistanceCulling);
                 if (RemixImGui.IsItemHovered())
@@ -783,6 +789,7 @@ namespace UnityRemix
             _maxRenderDistance = _plugin.GetConfigFloat("MaxRenderDistance");
             _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
             _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
+            _rasterParticles = _plugin.GetConfigBool("RasterParticles");
             _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
             _skyboxFiltering = _plugin.GetConfigInt("SkyboxFiltering");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");

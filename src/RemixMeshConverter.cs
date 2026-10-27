@@ -350,6 +350,12 @@ namespace UnityRemix
         private HashSet<string> loggedMaterialWarnings = new HashSet<string>();
         
         private int skinnedRenderCount = 0;
+
+        /// <summary>
+        /// Particle instances are drawn raster-only (REMIXAPI_INSTANCE_RASTER_ONLY_EXT): rasterized
+        /// over the path-traced image instead of traced.
+        /// </summary>
+        public ConfigEntry<bool> RasterParticles { get; set; }
         
         public RemixMeshConverter(
             ManualLogSource logger,
@@ -1108,7 +1114,9 @@ namespace UnityRemix
             ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
             if (targetInstanceId != 0)
             {
-                uint classification = (isDynamic || isParticleInstance) ? 1u : 0u;
+                uint classification = isParticleInstance && RasterParticles != null && RasterParticles.Value
+                    ? (uint)RemixAPI.remixapi_InstanceClassEXT.REMIXAPI_INSTANCE_RASTER_ONLY_EXT
+                    : (isDynamic || isParticleInstance) ? 1u : 0u;
                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT,

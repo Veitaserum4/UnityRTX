@@ -29,6 +29,7 @@ namespace UnityRemix
         private ConfigEntry<float> configMaxRenderDistance;
         private ConfigEntry<float> configParticleMaxDistance;
         private ConfigEntry<bool> configEnableParticleDistanceCulling;
+        private ConfigEntry<bool> configRasterParticles;
         private ConfigEntry<bool> configEnableSkybox;
         private ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
         private ConfigEntry<bool> configUseVisibilityCulling;
@@ -222,6 +223,10 @@ namespace UnityRemix
 
             configEnableParticleDistanceCulling = Config.Bind("Rendering", "EnableParticleDistanceCulling", false,
                 "Enable distance-based culling for particle systems. When enabled, particle systems beyond ParticleMaxDistance are not rendered.");
+
+            configRasterParticles = Config.Bind("Rendering", "RasterParticles", false,
+                "Draw particle systems and trails with OpenRemix's raster backend over the path-traced image instead of path tracing them. " +
+                "Cheaper with many particles; they are not lit, reflected, refracted or shadowed by the path tracer.");
             
             configEnableSkybox = Config.Bind("Rendering", "EnableSkybox", true,
                 "Automatically detect and render skyboxes in RTX Remix as a native Dome Light environment.");
@@ -520,6 +525,7 @@ namespace UnityRemix
                 remixInterface,
                 remixApiLock
             );
+            meshConverter.RasterParticles = configRasterParticles;
             
             frameCapture = new RemixFrameCapture(
                 LogSource,
@@ -1028,6 +1034,7 @@ namespace UnityRemix
                 case "CaptureSkinnedMeshes": return configCaptureSkinnedMeshes.Value;
                 case "CaptureParticles": return configCaptureParticles.Value;
                 case "EnableParticleDistanceCulling": return configEnableParticleDistanceCulling.Value;
+                case "RasterParticles": return configRasterParticles.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
                 case "CaptureTextures": return configCaptureTextures.Value;
                 case "CaptureMaterials": return configCaptureMaterials.Value;
@@ -1107,6 +1114,7 @@ namespace UnityRemix
                 case "CaptureSkinnedMeshes": configCaptureSkinnedMeshes.Value = value; break;
                 case "CaptureParticles": configCaptureParticles.Value = value; break;
                 case "EnableParticleDistanceCulling": configEnableParticleDistanceCulling.Value = value; break;
+                case "RasterParticles": configRasterParticles.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;
                 case "CaptureTextures": configCaptureTextures.Value = value; break;
                 case "CaptureMaterials": configCaptureMaterials.Value = value; break;
