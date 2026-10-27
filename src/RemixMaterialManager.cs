@@ -165,6 +165,15 @@ namespace UnityRemix
             public IntPtr originalNormalHandle;
             public ulong originalNormalTextureHash;
             public Texture2D albedoTex;
+            // AutoPBR: which values it may set (the material has no explicit one), the keyword
+            // table's values, and whether the albedo's statistics refined them (RefineInferredPbr).
+            public bool inferMetallic, inferRoughness;
+            public float categoryMetallic, categoryRoughness;
+            public bool pbrRefined;
+            // AutoPBR roughness detail: the albedo doubles as the roughness map, its inverted green
+            // channel remapped to bias + scale * x (remixapi_MaterialPbrRemapEXT).
+            public bool hasRoughnessDetail;
+            public float roughnessDetailBias, roughnessDetailScale;
         }
         private System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData> materialTextureData = new System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData>();
         private RemixWaterManager waterManager;
@@ -180,6 +189,7 @@ namespace UnityRemix
         public int AutoPbrMaterialCount => autoPbrMaterialCount;
         public int AutoNormalMapCount => autoNormalMapCount;
         private readonly Dictionary<long, (IntPtr handle, ulong hash)> autoNormalCache = new Dictionary<long, (IntPtr, ulong)>();
+        private readonly Dictionary<int, AlbedoStats> albedoStatsCache = new Dictionary<int, AlbedoStats>();
         
         // Track all texture hashes confirmed to be uploaded into OpenRemix native runtime
         private readonly HashSet<ulong> uploadedTextureHashes = new HashSet<ulong>();
@@ -764,15 +774,21 @@ namespace UnityRemix
                 if (InferPbrProperties(material, tex, renderer, shaderName, out float infMetal, out float infRough, out string matchedCat))
                 {
                     matData.hasInferredPbr = true;
+                    matData.inferMetallic = !hasExplicitMetallic;
+                    matData.inferRoughness = !hasExplicitRoughness;
+                    matData.categoryMetallic = infMetal;
+                    matData.categoryRoughness = infRough;
                     matData.inferredMetallic = Mathf.Clamp01(!hasExplicitMetallic ? infMetal : metallic);
                     matData.inferredRoughness = Mathf.Clamp(!hasExplicitRoughness ? infRough : roughness, 0.04f, 1.0f);
                     if (ConfigAutoPBR != null && ConfigAutoPBR.Value)
                     {
-                        if (!hasExplicitMetallic) metallic = infMetal;
-                        if (!hasExplicitRoughness) roughness = infRough;
+                        RefineInferredPbr(ref matData, tex);
+                        if (!hasExplicitMetallic) metallic = matData.inferredMetallic;
+                        if (!hasExplicitRoughness) roughness = matData.inferredRoughness;
                         autoPbrMaterialCount++;
                         if (verboseTextureLogging.Value)
-                            logger.LogInfo($"[AutoPBR] Inferred '{material.name}': cat={matchedCat} metal={metallic:F2} rough={roughness:F2}");
+                            logger.LogInfo($"[AutoPBR] Inferred '{material.name}': cat={matchedCat} metal={metallic:F2} rough={roughness:F2}" +
+                                           (matData.hasRoughnessDetail ? $" detail={matData.roughnessDetailBias:F2}+{matData.roughnessDetailScale:F2}x" : ""));
                     }
                 }
             }
@@ -2906,6 +2922,144 @@ namespace UnityRemix
             return false;
         }
 
+        /// <summary>Albedo statistics from a 64x64 downsample (sRGB bytes / 255 unless noted).</summary>
+        private struct AlbedoStats
+        {
+            public bool valid;
+            public float luminance;   // mean, linear
+            public float saturation;  // mean HSV saturation
+            public float detail;      // mean |luminance - its 4 neighbours' mean|
+            public float greenMean, greenStd, greenLow, greenHigh; // green channel: mean, deviation, 2nd/98th percentile
+        }
+
+        private AlbedoStats GetAlbedoStats(Texture2D tex)
+        {
+            int id = tex.GetInstanceID();
+            if (albedoStatsCache.TryGetValue(id, out var cached))
+                return cached;
+            var stats = new AlbedoStats();
+            try
+            {
+                const int size = 64;
+                RenderTexture tmp = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                RenderTexture prev = RenderTexture.active;
+                Graphics.Blit(tex, tmp);
+                RenderTexture.active = tmp;
+                var readable = new Texture2D(size, size, TextureFormat.RGBA32, false, false);
+                readable.ReadPixels(new Rect(0, 0, size, size), 0, 0);
+                readable.Apply();
+                RenderTexture.active = prev;
+                RenderTexture.ReleaseTemporary(tmp);
+                Color32[] px = readable.GetPixels32();
+                UnityEngine.Object.Destroy(readable);
+
+                int n = px.Length;
+                var lum = new float[n];
+                var histogram = new int[256];
+                double lumSum = 0, satSum = 0, gSum = 0, gSq = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    var c = px[i];
+                    lum[i] = (c.r * 0.299f + c.g * 0.587f + c.b * 0.114f) / 255f;
+                    lumSum += Mathf.Pow(lum[i], 2.2f);
+                    int max = Math.Max(c.r, Math.Max(c.g, c.b)), min = Math.Min(c.r, Math.Min(c.g, c.b));
+                    satSum += max > 0 ? (max - min) / (float)max : 0f;
+                    gSum += c.g / 255.0;
+                    gSq += (c.g / 255.0) * (c.g / 255.0);
+                    histogram[c.g]++;
+                }
+                double detailSum = 0;
+                for (int y = 0; y < size; y++)
+                {
+                    for (int x = 0; x < size; x++)
+                    {
+                        float around = (lum[y * size + (x + 1) % size] + lum[y * size + (x + size - 1) % size] +
+                                        lum[((y + 1) % size) * size + x] + lum[((y + size - 1) % size) * size + x]) * 0.25f;
+                        detailSum += Mathf.Abs(lum[y * size + x] - around);
+                    }
+                }
+                float Percentile(float q)
+                {
+                    int target = (int)(q * n), count = 0;
+                    for (int v = 0; v < 256; v++)
+                    {
+                        count += histogram[v];
+                        if (count > target)
+                            return v / 255f;
+                    }
+                    return 1f;
+                }
+                stats.valid = true;
+                stats.luminance = (float)(lumSum / n);
+                stats.saturation = (float)(satSum / n);
+                stats.detail = (float)(detailSum / n);
+                stats.greenMean = (float)(gSum / n);
+                stats.greenStd = Mathf.Sqrt(Mathf.Max(0f, (float)(gSq / n) - stats.greenMean * stats.greenMean));
+                stats.greenLow = Percentile(0.02f);
+                stats.greenHigh = Percentile(0.98f);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"[AutoPBR] Could not read '{tex.name}' for statistics: {ex.Message}");
+            }
+            albedoStatsCache[id] = stats;
+            return stats;
+        }
+
+        /// <summary>
+        /// Varies AutoPBR's keyword-table values by the albedo, so materials in one category (a
+        /// level of materials named METAL) differ: saturated "metal" is painted (a dielectric),
+        /// near-black metal is roughened, busy textures are rougher, and each texture gets a small
+        /// stable offset. Inferred roughness also varies across the surface: the albedo's green
+        /// channel serves as the roughness map, brighter texels smoother.
+        /// </summary>
+        private void RefineInferredPbr(ref MaterialTextureData d, Texture2D tex)
+        {
+            d.pbrRefined = true;
+            d.hasRoughnessDetail = false;
+            if (tex == null)
+                return;
+            var stats = GetAlbedoStats(tex);
+            if (!stats.valid)
+                return;
+
+            float metal = d.categoryMetallic, rough = d.categoryRoughness;
+            if (metal > 0.5f)
+            {
+                float painted = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f, 0.55f, stats.saturation));
+                metal = Mathf.Lerp(metal, 0.05f, painted);
+                rough = Mathf.Lerp(rough, 0.45f, painted);
+                float dark = 1f - Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.03f, 0.15f, stats.luminance));
+                rough = Mathf.Lerp(rough, Mathf.Max(rough, 0.55f), dark);
+            }
+            rough += Mathf.Clamp((stats.detail - 0.05f) * 1.5f, -0.08f, 0.15f);
+            rough += ((int)(HashUtils.HashStringFNV(tex.name) & 0xFF) / 255f - 0.5f) * 0.12f;
+            metal = Mathf.Clamp01(metal);
+            rough = Mathf.Clamp(rough, 0.04f, 1f);
+
+            if (d.inferMetallic)
+                d.inferredMetallic = metal;
+            if (!d.inferRoughness)
+                return;
+            d.inferredRoughness = rough;
+
+            // value = bias + scale * (1 - green): the mean green gives rough, two deviations either
+            // side give rough -/+ spread; the 2nd..98th percentile stays within 0.04..1.
+            if (stats.greenStd < 0.02f)
+                return;
+            float spread = Mathf.Lerp(0.08f, 0.2f, rough);
+            float scale = spread / (2f * stats.greenStd);
+            if (stats.greenHigh > stats.greenMean)
+                scale = Mathf.Min(scale, (rough - 0.04f) / (stats.greenHigh - stats.greenMean));
+            if (stats.greenMean > stats.greenLow)
+                scale = Mathf.Min(scale, (1f - rough) / (stats.greenMean - stats.greenLow));
+            if (scale <= 0.01f)
+                return;
+            d.hasRoughnessDetail = true;
+            d.roughnessDetailScale = scale;
+            d.roughnessDetailBias = rough - scale * (1f - stats.greenMean);
+        }
+
         /// <summary>
         /// Generates a tangent-space normal map from an albedo texture via a Sobel height filter on luminance.
         /// Caches generated normal maps by texture instance ID to prevent redundant GPU/CPU work.
@@ -3070,10 +3224,19 @@ namespace UnityRemix
 
                 if (pbrEnabled && matData.hasInferredPbr)
                 {
+                    if (!matData.pbrRefined)
+                    {
+                        RefineInferredPbr(ref matData, matData.albedoTex);
+                        changed = true;
+                    }
                     targetMetallic = matData.inferredMetallic;
                     targetRoughness = matData.inferredRoughness;
                     newPbrCount++;
                 }
+
+                // The roughness detail map follows the AutoPBR toggle (CreateRemixMaterialSimple).
+                if (matData.hasRoughnessDetail)
+                    changed = true;
 
                 if (Mathf.Abs(matData.metallic - targetMetallic) > 0.001f ||
                     Mathf.Abs(matData.roughness - targetRoughness) > 0.001f)
@@ -3209,6 +3372,8 @@ namespace UnityRemix
                 
                 GCHandle extHandle;
                 GCHandle emissionExtHandle = default;
+                GCHandle remapExtHandle = default;
+                IntPtr roughnessPathPtr = IntPtr.Zero;
                 IntPtr extPtr;
                 IntPtr emissionExtPtr = IntPtr.Zero;
                 RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw transExt = default;
@@ -3345,10 +3510,36 @@ namespace UnityRemix
                         $"invertedBlend={opaqueExt.invertedBlend} useDrawCallAlpha={opaqueExt.useDrawCallAlphaState} " +
                         $"structSize={System.Runtime.InteropServices.Marshal.SizeOf<RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw>()}");
                     
+                    // AutoPBR roughness detail: the albedo, remapped, is the roughness map (RefineInferredPbr).
+                    if (matData.hasRoughnessDetail && matData.hasInferredPbr && ConfigAutoPBR != null && ConfigAutoPBR.Value &&
+                        albedoPath != null && albedoPath != DebugTextureHashPath)
+                    {
+                        var identity = new RemixAPI.remixapi_MaterialPbrChannelEXT { exponent = 1f, scale = 1f };
+                        var remapExt = new RemixAPI.remixapi_MaterialPbrRemapEXT
+                        {
+                            sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT,
+                            pNext = opaqueExt.pNext,
+                            roughness = new RemixAPI.remixapi_MaterialPbrChannelEXT
+                            {
+                                channel = 1, // green
+                                invert = 1,  // brighter texels smoother
+                                curve = 0,
+                                exponent = 1f,
+                                bias = matData.roughnessDetailBias,
+                                scale = matData.roughnessDetailScale
+                            },
+                            metallic = identity
+                        };
+                        remapExtHandle = GCHandle.Alloc(remapExt, GCHandleType.Pinned);
+                        roughnessPathPtr = Marshal.StringToHGlobalUni(albedoPath);
+                        opaqueExt.roughnessTexture = roughnessPathPtr;
+                        opaqueExt.pNext = remapExtHandle.AddrOfPinnedObject();
+                    }
+
                     extHandle = GCHandle.Alloc(opaqueExt, GCHandleType.Pinned);
                     extPtr = extHandle.AddrOfPinnedObject();
                 }
-                
+
                 try
                 {
                     // Emissive color: Remix expects a normalized direction color + scalar intensity.
@@ -3409,6 +3600,8 @@ namespace UnityRemix
                 finally
                 {
                     if (emissionExtHandle.IsAllocated) emissionExtHandle.Free();
+                    if (remapExtHandle.IsAllocated) remapExtHandle.Free();
+                    if (roughnessPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(roughnessPathPtr);
                     extHandle.Free();
                 }
             }

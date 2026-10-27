@@ -104,6 +104,7 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT = 0x7fff1008,
             REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
             REMIXAPI_STRUCT_TYPE_MATERIAL_EMISSION_EXT = 0x7fff100a,
+            REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT = 0x7fff101a,
             REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT = 0x7fff1018,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT = unchecked((int)0x7fff101c),
         }
@@ -566,6 +567,31 @@ namespace UnityRemix
             public int alphaTestType;
             public byte alphaReferenceValue;
             public float displaceOut;
+        }
+
+        /// <summary>
+        /// How a roughness or metallic map's texels become values (remix_native_ext.h):
+        /// x = texel[channel]; inverted, x = 1 - x; x = x^exponent; curve 0: bias + scale * x.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialPbrChannelEXT
+        {
+            public uint channel;   // 0 red, 1 green, 2 blue, 3 alpha
+            public uint invert;    // remixapi_Bool
+            public uint curve;     // 0 linear, 1 Blinn-Phong exponent
+            public float exponent; // 0 to 15
+            public float bias;
+            public float scale;
+        }
+
+        /// <summary>Optional pNext on opaque MaterialInfo: remaps its roughness and metallic maps.</summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialPbrRemapEXT
+        {
+            public int sType;      // REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT
+            public IntPtr pNext;
+            public remixapi_MaterialPbrChannelEXT roughness;
+            public remixapi_MaterialPbrChannelEXT metallic;
         }
 
         /// <summary>

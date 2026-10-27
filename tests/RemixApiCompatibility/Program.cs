@@ -73,4 +73,9 @@ Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("inside") == (IntPtr)16, "insid
 Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("transmittanceColor") == (IntPtr)20, "transmittanceColor offset");
 Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("transmittanceMeasurementDistance") == (IntPtr)32, "transmittanceMeasurementDistance offset");
 
+Check(Marshal.SizeOf<remixapi_MaterialPbrChannelEXT>() == 24, "remixapi_MaterialPbrChannelEXT size must be 24 bytes");
+Check(Marshal.SizeOf<remixapi_MaterialPbrRemapEXT>() == 64, "remixapi_MaterialPbrRemapEXT size must be 64 bytes");
+Check(Marshal.OffsetOf<remixapi_MaterialPbrRemapEXT>("roughness") == (IntPtr)16, "roughness offset");
+Check(Marshal.OffsetOf<remixapi_MaterialPbrRemapEXT>("metallic") == (IntPtr)40, "metallic offset");
+
 Console.WriteLine("Passed: openremix API negotiation, pointer mapping, buffer clearing, error propagation, and struct layouts.");
