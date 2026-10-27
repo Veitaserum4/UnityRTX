@@ -62,11 +62,11 @@ namespace UnityRemix
         }
 
         // World-position multiplier of every triplanar layer. Shaders without a _TriplanarScale
-        // property (PEAK's W/Peak_Standard) project at about 0.2, measured against the game's view;
+        // property (PEAK's W/Peak_Standard) project at about 0.1, measured against the game's view;
         // _GlobalWorldScale does not scale the projection.
         private static float TriplanarScale(Material material)
         {
-            return material.HasProperty("_TriplanarScale") ? Mathf.Max(0.001f, material.GetFloat("_TriplanarScale")) : 0.2f;
+            return material.HasProperty("_TriplanarScale") ? Mathf.Max(0.001f, material.GetFloat("_TriplanarScale")) : 0.1f;
         }
 
         public static bool IsLayered(Material material)

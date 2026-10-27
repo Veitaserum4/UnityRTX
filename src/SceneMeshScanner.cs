@@ -1406,14 +1406,20 @@ int queued = 0;
                             // Per-surface vertex buffer with _MainTex_ST applied
                             var st = materialManager.GetMainTexST(partMaterialId);
                             bool projected = materialManager.TryGetProjection(partMaterialId, out float projection);
-                            var surfVerts = new RemixAPI.remixapi_HardcodedVertex[verts.Length];
-                            for (int i = 0; i < verts.Length; i++)
+                            int[] source = null;
+                            Vector2[] projectedUvs = null;
+                            if (projected)
+                                RemixMeshConverter.ProjectTriangles(surfIndices, verts, data.ObjectScale, projection, out source, out projectedUvs);
+
+                            var surfVerts = new RemixAPI.remixapi_HardcodedVertex[projected ? source.Length : verts.Length];
+                            for (int k = 0; k < surfVerts.Length; k++)
                             {
-                                Vector2 uv = projected ? RemixMeshConverter.ProjectUV(Vector3.Scale(verts[i], data.ObjectScale), norms[i], projection) : uvs[i];
+                                int i = projected ? source[k] : k;
+                                Vector2 uv = projected ? projectedUvs[k] : uvs[i];
                                 float u = uv.x * st.x + st.z;
                                 float v = uv.y * st.y + st.w;
                                 uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(WeightVertexColor(cols[i], vertexColorWeight)) : 0xFFFFFFFF;
-                                surfVerts[i] = RemixAPI.MakeVertex(
+                                surfVerts[k] = RemixAPI.MakeVertex(
                                     verts[i].x, verts[i].z, verts[i].y,
                                     norms[i].x, norms[i].z, norms[i].y,
                                     u, v,

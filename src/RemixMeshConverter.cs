@@ -61,6 +61,44 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// Box projection with one plane per triangle (its face's dominant axis). Projecting per
+        /// vertex lets a triangle's corners land on different planes, which smears the texture into
+        /// rings; here a corner shared by triangles on different planes gets a vertex per plane.
+        /// Rewrites indices in place to the returned vertices: source vertex and projected UV each.
+        /// </summary>
+        internal static void ProjectTriangles(uint[] indices, Vector3[] vertices, Vector3 objectScale, float scale,
+                                              out int[] source, out Vector2[] projectedUvs)
+        {
+            var map = new Dictionary<long, uint>(indices.Length);
+            var sourceList = new List<int>(indices.Length);
+            var uvList = new List<Vector2>(indices.Length);
+            for (int i = 0; i + 2 < indices.Length; i += 3)
+            {
+                Vector3 a = Vector3.Scale(vertices[indices[i]], objectScale);
+                Vector3 b = Vector3.Scale(vertices[indices[i + 1]], objectScale);
+                Vector3 c = Vector3.Scale(vertices[indices[i + 2]], objectScale);
+                Vector3 face = Vector3.Cross(b - a, c - a);
+                float ax = Mathf.Abs(face.x), ay = Mathf.Abs(face.y), az = Mathf.Abs(face.z);
+                int axis = ay >= ax && ay >= az ? 1 : ax >= az ? 0 : 2;
+                for (int k = 0; k < 3; k++)
+                {
+                    uint v = indices[i + k];
+                    long key = (long)v * 3 + axis;
+                    if (!map.TryGetValue(key, out uint index))
+                    {
+                        index = (uint)sourceList.Count;
+                        map[key] = index;
+                        sourceList.Add((int)v);
+                        uvList.Add(ProjectUV(Vector3.Scale(vertices[v], objectScale), face, scale));
+                    }
+                    indices[i + k] = index;
+                }
+            }
+            source = sourceList.ToArray();
+            projectedUvs = uvList.ToArray();
+        }
+
+        /// <summary>
         /// Splits triangles by how far their averaged vertex normal points along objectUp (world
         /// up in the mesh's space: InverseTransformDirection(Vector3.up) of its object).
         /// </summary>
@@ -674,14 +712,20 @@ namespace UnityRemix
                                 st = materialManager.GetMainTexST(targetMatId);
                             bool projected = materialManager.TryGetProjection(targetMatId, out float projection);
 
-                            var surfVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
-                            for (int i = 0; i < vertices.Length; i++)
+                            int[] source = null;
+                            Vector2[] projectedUvs = null;
+                            if (projected)
+                                ProjectTriangles(validatedIndices, vertices, data.ObjectScale, projection, out source, out projectedUvs);
+
+                            var surfVerts = new RemixAPI.remixapi_HardcodedVertex[projected ? source.Length : vertices.Length];
+                            for (int k = 0; k < surfVerts.Length; k++)
                             {
-                                Vector2 uv = projected ? ProjectUV(Vector3.Scale(vertices[i], data.ObjectScale), normals[i], projection) : uvs[i];
+                                int i = projected ? source[k] : k;
+                                Vector2 uv = projected ? projectedUvs[k] : uvs[i];
                                 float u = uv.x * st.x + st.z;
                                 float v = uv.y * st.y + st.w;
                                 uint col = hasColors ? Color32ToBGRA(WeightVertexColor(colors[i], vertexColorWeight)) : 0xFFFFFFFF;
-                                surfVerts[i] = RemixAPI.MakeVertex(
+                                surfVerts[k] = RemixAPI.MakeVertex(
                                     vertices[i].x, vertices[i].z, vertices[i].y,
                                     normals[i].x, normals[i].z, normals[i].y,
                                     u, v,
