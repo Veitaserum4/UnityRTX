@@ -105,7 +105,7 @@ namespace UnityRemix
         {
             if (RemixAPI.SetFogStateFunc == null)
             {
-                StatusText = "RemixAPI SetFogState unavailable (non-OpenRemix runtime)";
+                StatusText = "RemixAPI SetFogState unavailable (remix.dll lacks it)";
                 return;
             }
 

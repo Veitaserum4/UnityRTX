@@ -179,7 +179,6 @@ namespace UnityRemix
         public int WindowHeight => windowHeight;
         public static bool IsRemixUIOpen => isRemixUIOpen;
         public static void SetRemixUIOpen(bool open) => isRemixUIOpen = open;
-        public static void ToggleRemixUI() => isRemixUIOpen = !isRemixUIOpen;
 
         private static bool lastSyncedRemixOpen = false;
         private static volatile int cachedNativeUIState = -1;
@@ -288,55 +287,8 @@ namespace UnityRemix
 
         public void HandleAltX()
         {
-            if (RemixAPI.IsOpenRemix)
-            {
-                // Unity detects Alt+X on its main thread; apply it on the render thread.
-                System.Threading.Interlocked.Exchange(ref nativeSettingsToggleRequested, 1);
-                return;
-            }
-            if (RemixAPI.SetUIStateFunc != null && RemixAPI.GetUIStateFunc != null)
-            {
-                var curState = RemixAPI.GetUIStateFunc();
-                var newState = (curState == RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE)
-                    ? RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_BASIC
-                    : RemixAPI.remixapi_UIState.REMIXAPI_UI_STATE_NONE;
-                RemixAPI.SetUIStateFunc(newState);
-                SyncUIStateWithRemix(logger);
-            }
-            else
-            {
-                ToggleRemixUI();
-                if (remixWindow != IntPtr.Zero)
-                {
-                    ReleaseCapture();
-
-                    PostMessage(remixWindow, WM_SYSKEYDOWN, (IntPtr)0x58 /* VK_X */, (IntPtr)0x20000001);
-                    PostMessage(remixWindow, WM_SYSKEYUP, (IntPtr)0x58 /* VK_X */, (IntPtr)unchecked((int)0xE0000001));
-
-                    if (gameWindow != IntPtr.Zero)
-                    {
-                        if (isRemixUIOpen)
-                        {
-                            SetActiveWindow(remixWindow);
-                            SetFocus(remixWindow);
-                        }
-                        else
-                        {
-                            SetForegroundWindow(gameWindow);
-                            SetActiveWindow(gameWindow);
-                            SetFocus(gameWindow);
-                        }
-                    }
-
-                    UpdateCursorClipping(false);
-                    ReleaseCapture();
-                }
-
-                if (isEmbedded)
-                {
-                    RemixGameStateHelper.SetRemixMenuState(isRemixUIOpen, logger);
-                }
-            }
+            // Unity detects Alt+X on its main thread; apply it on the render thread.
+            System.Threading.Interlocked.Exchange(ref nativeSettingsToggleRequested, 1);
         }
         
         #region Win32 API Declarations
@@ -848,11 +800,8 @@ namespace UnityRemix
             this.configOpenRemixSamples = samples;
             if (remixInterface.SetConfigVariable != IntPtr.Zero)
                 setConfigVariableFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetConfigVariable>(remixInterface.SetConfigVariable);
-            if (RemixAPI.IsOpenRemix)
-            {
-                getUIStateFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_GetUIState>(remixInterface.GetUIState);
-                setUIStateFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetUIState>(remixInterface.SetUIState);
-            }
+            getUIStateFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_GetUIState>(remixInterface.GetUIState);
+            setUIStateFunc = Marshal.GetDelegateForFunctionPointer<RemixAPI.PFN_remixapi_SetUIState>(remixInterface.SetUIState);
             
             // Cache delegates
             if (remixInterface.dxvk_CreateD3D9 != IntPtr.Zero)
@@ -1163,7 +1112,7 @@ namespace UnityRemix
             }
 
             // Create window
-            string rendererName = RemixAPI.IsOpenRemix ? "openremix" : "RTX Remix";
+            string rendererName = "openremix";
             string windowTitle = $"{Application.productName} - {rendererName} - {BuildInfo.GitHash}";
             remixWindow = CreateWindowExW(
                 dwExStyle,
@@ -1244,7 +1193,7 @@ namespace UnityRemix
             
             logger.LogInfo("Remix Startup succeeded!");
             EnsureRemixWindowSubclassed();
-            if (RemixAPI.IsOpenRemix && setConfigVariableFunc != null)
+            if (setConfigVariableFunc != null)
             {
                 string backend = configNativeBackend?.Value ?? "raster";
                 bool asyncPresent = configOpenRemixAsyncPresent?.Value ?? true;
@@ -1292,11 +1241,8 @@ namespace UnityRemix
             RemixWatchdog.BeatRender("PumpMessages.SDLPumpEvents");
             RemixAPI.NativePumpEvents?.Invoke();
 
-            if (RemixAPI.IsOpenRemix)
-            {
-                RemixWatchdog.BeatRender("PumpMessages.NativeSettings");
-                UpdateNativeSettings();
-            }
+            RemixWatchdog.BeatRender("PumpMessages.NativeSettings");
+            UpdateNativeSettings();
             RemixWatchdog.BeatRender("PumpMessages.End");
         }
 

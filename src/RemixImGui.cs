@@ -5,7 +5,7 @@ using BepInEx.Logging;
 namespace UnityRemix
 {
     /// <summary>
-    /// P/Invoke bindings for the ImGui exports from the Remix d3d9.dll.
+    /// P/Invoke bindings for the ImGui exports from remix.dll.
     /// All functions are resolved via GetProcAddress at initialization time.
     /// Call <see cref="Initialize"/> after RemixAPI has loaded the DLL.
     /// </summary>
@@ -359,7 +359,7 @@ namespace UnityRemix
             _plotPlotLine = Resolve<D_PlotPlotLine>("remixapi_imgui_PlotPlotLine");
             _plotPlotBars = Resolve<D_PlotPlotBars>("remixapi_imgui_PlotPlotBars");
 
-            // DrawList (non-critical — graceful fallback if old d3d9.dll)
+            // DrawList (non-critical — graceful fallback if old remix.dll)
             _drawListAddLine = Resolve<D_DrawList_AddLine>("remixapi_imgui_DrawList_AddLine");
             _drawListAddRect = Resolve<D_DrawList_AddRect>("remixapi_imgui_DrawList_AddRect");
             _drawListAddRectFilled = Resolve<D_DrawList_AddRectFilled>("remixapi_imgui_DrawList_AddRectFilled");
@@ -371,7 +371,7 @@ namespace UnityRemix
             if (HasDrawListSupport)
                 log.LogInfo("[RemixImGui] DrawList exports resolved — 3D debug overlay available");
             else
-                log.LogWarning("[RemixImGui] DrawList exports NOT found — 3D debug boxes disabled (old d3d9.dll?)");
+                log.LogWarning("[RemixImGui] DrawList exports NOT found — 3D debug boxes disabled (old remix.dll?)");
             return true;
         }
 

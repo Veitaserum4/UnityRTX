@@ -6,6 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../src/RemixAPI.cs" Link="RemixAPI.cs" />
-    <Compile Include="../../src/RemixAPI.Compatibility.cs" Link="RemixAPI.Compatibility.cs" />
+    <Compile Include="../../src/RemixAPI.Interface.cs" Link="RemixAPI.Interface.cs" />
   </ItemGroup>
 </Project>

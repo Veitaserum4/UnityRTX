@@ -869,7 +869,7 @@ namespace UnityRemix
                     var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint);
                     matData.albedoHandle = partHandle;
                     matData.albedoTextureHash = partHash;
-                    if (RemixAPI.IsOpenRemix && isTinted)
+                    if (isTinted)
                     {
                         Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
                         matData.albedoColor = new Color(linTint.r, linTint.g, linTint.b, matData.albedoColor.a);
@@ -879,7 +879,7 @@ namespace UnityRemix
                         matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
                     }
                 }
-                else if (remap.HasValue || hsbc.HasValue || (!RemixAPI.IsOpenRemix && isTinted))
+                else if (remap.HasValue || hsbc.HasValue)
                 {
                     var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap, hsbc);
                     matData.albedoHandle = tintedHandle;
@@ -896,7 +896,7 @@ namespace UnityRemix
                             matData.albedoTextureHash = hash;
                         }
                     }
-                    if (RemixAPI.IsOpenRemix && isTinted)
+                    if (isTinted)
                     {
                         // OpenRemix natively multiplies s.tint (opaqueExt.albedoConstant) in linear space in scene.glsl
                         Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
@@ -1087,7 +1087,7 @@ namespace UnityRemix
                             && ((material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") > 0.5f) || hasMpbOverride)
                             && matData.albedoHandle != IntPtr.Zero)
                         {
-                            if (matData.suppressLightGeneration && RemixAPI.IsOpenRemix)
+                            if (matData.suppressLightGeneration)
                             {
                                 // Reuse the de-fringed particle albedo texture directly; OpenRemix multiplies emissiveColorConstant in the shader
                                 matData.emissiveHandle = matData.albedoHandle;
@@ -1608,121 +1608,17 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Upload an emissive texture pre-tinted by the emission color.
-        /// Remix's shader ignores emissiveColorConstant when a texture is present,
-        /// so we bake the color multiplication into the texture pixels.
+        /// Upload an emissive texture. OpenRemix multiplies it by emissiveColorConstant *
+        /// emissiveIntensity on the GPU (scene.glsl), so it is not pre-tinted.
         /// Returns (handle, hash) for the uploaded texture.
         /// </summary>
         private (IntPtr handle, ulong hash) UploadTintedEmissiveTexture(Texture2D tex, Color emissiveColor)
         {
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
-            
-            // OpenRemix natively multiplies emissiveTexture by emissiveColorConstant * emissiveIntensity on the GPU (scene.glsl:235).
-            // Pre-tinting on the CPU causes a synchronous GPU readback stall, duplicates textures per tint, and double-tints the emission color.
-            if (RemixAPI.IsOpenRemix)
-            {
-                var handle = UploadUnityTexture(tex);
-                int texId = tex.GetInstanceID();
-                textureHashCache.TryGetValue(texId, out ulong h);
-                return (handle, h);
-            }
-
-            // Compute normalized tint direction (all components <= 1.0)
-            float maxCh = Mathf.Max(emissiveColor.r, Mathf.Max(emissiveColor.g, emissiveColor.b));
-            float tintR = maxCh > 0f ? emissiveColor.r / maxCh : 1f;
-            float tintG = maxCh > 0f ? emissiveColor.g / maxCh : 1f;
-            float tintB = maxCh > 0f ? emissiveColor.b / maxCh : 1f;
-            
-            // If tint is white, use normal upload path (benefits from per-texId caching)
-            if (tintR > 0.99f && tintG > 0.99f && tintB > 0.99f)
-            {
-                var handle = UploadUnityTexture(tex);
-                int texId = tex.GetInstanceID();
-                textureHashCache.TryGetValue(texId, out ulong h);
-                return (handle, h);
-            }
-            
-            // Compound cache key: texture ID + quantized tint color
-            int tintKey = ((int)(tintR * 255) << 16) | ((int)(tintG * 255) << 8) | (int)(tintB * 255);
-            long cacheKey = ((long)tex.GetInstanceID() << 24) ^ (uint)tintKey;
-            
-            lock (pendingTextureLock)
-            {
-                if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
-                    return cached;
-                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
-                    return (new IntPtr((long)pHash), pHash);
-            }
-            
-            try
-            {
-                Color32[] pixels;
-                if (tex.isReadable)
-                {
-                    pixels = tex.GetPixels32();
-                }
-                else
-                {
-                    RenderTexture tmp = RenderTexture.GetTemporary(
-                        tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
-                    RenderTexture prev = RenderTexture.active;
-                    Graphics.Blit(tex, tmp);
-                    RenderTexture.active = tmp;
-                    Texture2D readable = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, false);
-                    readable.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
-                    readable.Apply();
-                    RenderTexture.active = prev;
-                    RenderTexture.ReleaseTemporary(tmp);
-                    pixels = readable.GetPixels32();
-                    UnityEngine.Object.Destroy(readable);
-                }
-                
-                // Tint each pixel by the normalized emission color direction
-                byte tR = (byte)(tintR * 255f);
-                byte tG = (byte)(tintG * 255f);
-                byte tB = (byte)(tintB * 255f);
-                
-                byte[] pixelData = new byte[pixels.Length * 4];
-                for (int i = 0; i < pixels.Length; i++)
-                {
-                    pixelData[i * 4 + 0] = (byte)((pixels[i].r * tR) / 255);
-                    pixelData[i * 4 + 1] = (byte)((pixels[i].g * tG) / 255);
-                    pixelData[i * 4 + 2] = (byte)((pixels[i].b * tB) / 255);
-                    pixelData[i * 4 + 3] = pixels[i].a;
-                }
-                
-                ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);
-                if (hash == 0) hash = 1;
-                
-                if (verboseTextureLogging.Value)
-                    logger.LogInfo($"Computed tinted emissive hash for '{tex.name}' tint=({tintR:F2},{tintG:F2},{tintB:F2}): 0x{hash:X16}");
-                
-                // Queue for deferred upload on the render thread
-                lock (pendingTextureLock)
-                {
-                    pendingTextureUploads.Enqueue(new PendingTextureUpload
-                    {
-                        texId = -1,
-                        tintedCacheKey = cacheKey,
-                        pixelData = pixelData,
-                        hash = hash,
-                        width = (uint)tex.width,
-                        height = (uint)tex.height,
-                        mipLevels = 1,
-                        format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
-                    });
-                    pendingTintedKeys.Add(cacheKey);
-                    pendingTintedHashes[cacheKey] = hash;
-                }
-                
-                return (new IntPtr((long)hash), hash);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError($"Exception uploading tinted emissive '{tex.name}': {ex.Message}");
-                return (IntPtr.Zero, 0);
-            }
+            var handle = UploadUnityTexture(tex);
+            textureHashCache.TryGetValue(tex.GetInstanceID(), out ulong hash);
+            return (handle, hash);
         }
 
         /// <summary>
@@ -1734,13 +1630,6 @@ namespace UnityRemix
         {
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
-
-            bool applyCpuTint = !RemixAPI.IsOpenRemix && (albedoColor.r < 0.98f || albedoColor.g < 0.98f || albedoColor.b < 0.98f);
-            Color gammaColor = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? albedoColor.gamma : albedoColor;
-            float tintR = applyCpuTint ? Mathf.Clamp01(gammaColor.r) : 1f;
-            float tintG = applyCpuTint ? Mathf.Clamp01(gammaColor.g) : 1f;
-            float tintB = applyCpuTint ? Mathf.Clamp01(gammaColor.b) : 1f;
-            int tintKey = applyCpuTint ? (((int)(tintR * 255f) << 16) | ((int)(tintG * 255f) << 8) | (int)(tintB * 255f)) : 0;
 
             bool isAdditiveShader = false;
             if (mat != null)
@@ -1755,7 +1644,7 @@ namespace UnityRemix
                 }
             }
 
-            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((isAdditiveShader ? 1L : 0L) << 24) ^ (uint)tintKey);
+            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((isAdditiveShader ? 1L : 0L) << 24));
 
             lock (pendingTextureLock)
             {
@@ -1892,13 +1781,6 @@ namespace UnityRemix
                             g = avgG;
                             b = avgB;
                         }
-                    }
-
-                    if (applyCpuTint)
-                    {
-                        r = (byte)Mathf.Clamp(Mathf.RoundToInt(r * tintR), 0, 255);
-                        g = (byte)Mathf.Clamp(Mathf.RoundToInt(g * tintG), 0, 255);
-                        b = (byte)Mathf.Clamp(Mathf.RoundToInt(b * tintB), 0, 255);
                     }
 
                     pixelData[i * 4 + 0] = r;
@@ -3332,7 +3214,7 @@ namespace UnityRemix
                 RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw transExt = default;
                 RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw opaqueExt = default;
 
-                if (RemixAPI.IsOpenRemix && matData.suppressLightGeneration)
+                if (matData.suppressLightGeneration)
                 {
                     var emissionExt = new RemixAPI.remixapi_MaterialInfoEmissionEXT
                     {
@@ -3424,12 +3306,12 @@ namespace UnityRemix
                                 : (byte)127;
                             break;
                         case AlphaMode.Blend:
-                            // DXVK-Remix compatibility
+                            // Alpha-blended (kept in USD captures; native rendering uses the alpha test below)
                             opaqueExt.blendType_hasvalue = 1; // remixapi_Bool.True
                             opaqueExt.blendType_value = 1;
                             // OpenRemix: enable alpha testing (GREATER_OR_EQUAL) so near-zero alpha texels are discarded in acceptCandidate
                             opaqueExt.alphaTestType = 6;
-                            if (matData.suppressLightGeneration && RemixAPI.IsOpenRemix)
+                            if (matData.suppressLightGeneration)
                             {
                                 // Particle/trail instances carry remixapi_InstanceInfoBlendEXT (alphaBlendEnabled = 1 -> hit.blended = true).
                                 // Keep opacityConstant = 1.0f so OpenRemix does NOT set material->translucent = true (hit.tinted = true),

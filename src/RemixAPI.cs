@@ -6,14 +6,14 @@ namespace UnityRemix
 {
     /// <summary>
     /// P/Invoke bindings for Remix C API.
-    /// Supports openremix 0.1003, Remix Plus 0.1000, and UnityRTX v0.2's 0.6.1 runtime.
+    /// Targets openremix's API 0.1003.
     /// </summary>
     public static partial class RemixAPI
     {
         #region Version Constants
         
         public const uint REMIXAPI_VERSION_MAJOR = 0;
-        public const uint REMIXAPI_VERSION_MINOR = 1000;
+        public const uint REMIXAPI_VERSION_MINOR = 1003;
         public const uint REMIXAPI_VERSION_PATCH = 0;
 
         private const uint LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR = 0x00000100;
@@ -1056,9 +1056,8 @@ namespace UnityRemix
         private static IntPtr _remixDll = IntPtr.Zero;
 
         public static string LoadedApiVersion { get; private set; }
-        public static bool IsOpenRemix => LoadedApiVersion == "0.1003.0 (openremix)";
 
-        /// <summary>Handle to the loaded d3d9.dll (Remix runtime). Used by RemixImGui for GetProcAddress.</summary>
+        /// <summary>Handle to the loaded remix.dll. Used by RemixImGui for GetProcAddress.</summary>
         public static IntPtr RemixDllHandle => _remixDll;
 
         /// <summary>Resolve a native export from the Remix DLL by name.</summary>
@@ -1095,8 +1094,7 @@ namespace UnityRemix
             // Convert to delegate
             var initFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_InitializeLibrary>(initFuncPtr);
 
-            var result = InitializeRemixInterface(initFunc,
-                name => GetProcAddress(hModule, name), out remixInterface, out string apiVersion);
+            var result = InitializeRemixInterface(initFunc, out remixInterface, out string apiVersion);
             
             if (result != remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
             {
@@ -1131,48 +1129,49 @@ namespace UnityRemix
             }
 
             LoadedApiVersion = apiVersion;
-            if (IsOpenRemix)
-            {
-                IntPtr pumpPtr = GetProcAddress(hModule, "remixapi_PumpEvents");
-                if (pumpPtr != IntPtr.Zero)
-                    NativePumpEvents = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_PumpEvents>(pumpPtr);
+            IntPtr pumpPtr = GetProcAddress(hModule, "remixapi_PumpEvents");
+            if (pumpPtr != IntPtr.Zero)
+                NativePumpEvents = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_PumpEvents>(pumpPtr);
 
-                IntPtr perfPtr = GetProcAddress(hModule, "remixapi_GetFramePerformanceEXT");
-                if (perfPtr != IntPtr.Zero)
-                    GetFramePerformanceEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFramePerformanceEXT>(perfPtr);
+            IntPtr perfPtr = GetProcAddress(hModule, "remixapi_GetFramePerformanceEXT");
+            if (perfPtr != IntPtr.Zero)
+                GetFramePerformanceEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFramePerformanceEXT>(perfPtr);
 
-                IntPtr breakdownPtr = GetProcAddress(hModule, "remixapi_GetFrameBreakdownEXT");
-                if (breakdownPtr != IntPtr.Zero)
-                    GetFrameBreakdownEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFrameBreakdownEXT>(breakdownPtr);
+            IntPtr breakdownPtr = GetProcAddress(hModule, "remixapi_GetFrameBreakdownEXT");
+            if (breakdownPtr != IntPtr.Zero)
+                GetFrameBreakdownEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetFrameBreakdownEXT>(breakdownPtr);
 
-                IntPtr scenePrepPtr = GetProcAddress(hModule, "remixapi_GetScenePreparationEXT");
-                if (scenePrepPtr != IntPtr.Zero)
-                    GetScenePreparationEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetScenePreparationEXT>(scenePrepPtr);
+            IntPtr scenePrepPtr = GetProcAddress(hModule, "remixapi_GetScenePreparationEXT");
+            if (scenePrepPtr != IntPtr.Zero)
+                GetScenePreparationEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetScenePreparationEXT>(scenePrepPtr);
 
-                IntPtr tracingPtr = GetProcAddress(hModule, "remixapi_GetTracingStatisticsEXT");
-                if (tracingPtr != IntPtr.Zero)
-                    GetTracingStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTracingStatisticsEXT>(tracingPtr);
+            IntPtr tracingPtr = GetProcAddress(hModule, "remixapi_GetTracingStatisticsEXT");
+            if (tracingPtr != IntPtr.Zero)
+                GetTracingStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTracingStatisticsEXT>(tracingPtr);
 
-                IntPtr texStatsPtr = GetProcAddress(hModule, "remixapi_GetTextureStatisticsEXT");
-                if (texStatsPtr != IntPtr.Zero)
-                    GetTextureStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTextureStatisticsEXT>(texStatsPtr);
+            IntPtr texStatsPtr = GetProcAddress(hModule, "remixapi_GetTextureStatisticsEXT");
+            if (texStatsPtr != IntPtr.Zero)
+                GetTextureStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetTextureStatisticsEXT>(texStatsPtr);
 
-                IntPtr addSceneInstPtr = GetProcAddress(hModule, "remixapi_AddSceneInstancesEXT");
-                if (addSceneInstPtr != IntPtr.Zero)
-                    AddSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_AddSceneInstancesEXT>(addSceneInstPtr);
+            IntPtr addSceneInstPtr = GetProcAddress(hModule, "remixapi_AddSceneInstancesEXT");
+            if (addSceneInstPtr != IntPtr.Zero)
+                AddSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_AddSceneInstancesEXT>(addSceneInstPtr);
 
-                IntPtr changeSceneInstPtr = GetProcAddress(hModule, "remixapi_ChangeSceneInstancesEXT");
-                if (changeSceneInstPtr != IntPtr.Zero)
-                    ChangeSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_ChangeSceneInstancesEXT>(changeSceneInstPtr);
+            IntPtr changeSceneInstPtr = GetProcAddress(hModule, "remixapi_ChangeSceneInstancesEXT");
+            if (changeSceneInstPtr != IntPtr.Zero)
+                ChangeSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_ChangeSceneInstancesEXT>(changeSceneInstPtr);
 
-                IntPtr removeSceneInstPtr = GetProcAddress(hModule, "remixapi_RemoveSceneInstancesEXT");
-                if (removeSceneInstPtr != IntPtr.Zero)
-                    RemoveSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_RemoveSceneInstancesEXT>(removeSceneInstPtr);
+            IntPtr removeSceneInstPtr = GetProcAddress(hModule, "remixapi_RemoveSceneInstancesEXT");
+            if (removeSceneInstPtr != IntPtr.Zero)
+                RemoveSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_RemoveSceneInstancesEXT>(removeSceneInstPtr);
 
-                IntPtr drawSceneInstPtr = GetProcAddress(hModule, "remixapi_DrawSceneInstancesEXT");
-                if (drawSceneInstPtr != IntPtr.Zero)
-                    DrawSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_DrawSceneInstancesEXT>(drawSceneInstPtr);
-            }
+            IntPtr drawSceneInstPtr = GetProcAddress(hModule, "remixapi_DrawSceneInstancesEXT");
+            if (drawSceneInstPtr != IntPtr.Zero)
+                DrawSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_DrawSceneInstancesEXT>(drawSceneInstPtr);
+
+            // Scene geometry is submitted only as retained instances.
+            if (!HasRetainedSceneInstancesEXT)
+                return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE;
             return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS;
         }
 

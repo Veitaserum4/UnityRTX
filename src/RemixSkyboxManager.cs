@@ -101,13 +101,13 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// The dome light's colorTexture for these pixels (rows top = zenith). OpenRemix: uploaded
-        /// from memory with CreateTexture and named by hash ("0x..."), which its dome light resolves
-        /// like a material texture. Otherwise, or if the upload fails: written to the DDS file.
+        /// The dome light's colorTexture for these pixels (rows top = zenith): uploaded from memory
+        /// with CreateTexture and named by hash ("0x..."), which OpenRemix's dome light resolves like
+        /// a material texture. If the upload fails, written to the DDS file instead.
         /// </summary>
         private string DomeTexture(string ddsFullPath, int width, int height, Color32[] pixels)
         {
-            if (RemixAPI.IsOpenRemix && createTextureFunc != null)
+            if (createTextureFunc != null)
             {
                 ulong hash = 0x534B595445580000UL | (ulong)(uint)(skyboxVersion & 0xFFFF);
                 GCHandle pinned = GCHandle.Alloc(pixels, GCHandleType.Pinned);
@@ -828,25 +828,13 @@ namespace UnityRemix
             float sinR = Mathf.Sin(rad);
 
             RemixAPI.remixapi_Transform xform;
-            if (RemixAPI.IsOpenRemix)
-            {
-                // OpenRemix: d.y is Zenith (+Remix Z), d.x is Forward (+Remix Y), d.z is -Right (-Remix X)
-                // The inverse of worldToLocal rotation matrix is its transpose:
-                xform = RemixAPI.remixapi_Transform.FromMatrix(
-                     sinR, 0f, -cosR, 0f,
-                     cosR, 0f,  sinR, 0f,
-                     0f,   1f,    0f, 0f
-                );
-            }
-            else
-            {
-                // Standard DXVK-Remix: Z is Zenith
-                xform = RemixAPI.remixapi_Transform.FromMatrix(
-                    cosR, -sinR, 0f, 0f,
-                    sinR,  cosR, 0f, 0f,
-                    0f,    0f,   1f, 0f
-                );
-            }
+            // OpenRemix: d.y is Zenith (+Remix Z), d.x is Forward (+Remix Y), d.z is -Right (-Remix X)
+            // The inverse of worldToLocal rotation matrix is its transpose:
+            xform = RemixAPI.remixapi_Transform.FromMatrix(
+                 sinR, 0f, -cosR, 0f,
+                 cosR, 0f,  sinR, 0f,
+                 0f,   1f,    0f, 0f
+            );
 
             IntPtr pathPtr = Marshal.StringToHGlobalUni(texturePath);
 

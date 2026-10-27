@@ -1010,44 +1010,35 @@ namespace UnityRemix
                 ulong dynamicMeshHash = meshHash;
                 IntPtr pNext = IntPtr.Zero;
 
-                if (RemixAPI.IsOpenRemix)
+                bool isParticleBatch = (meshHash & 0x4000000000000000UL) != 0;
+                if (!isParticleBatch)
                 {
-                    bool isParticleBatch = (meshHash & 0x4000000000000000UL) != 0;
-                    if (!isParticleBatch)
+                    // OpenRemix: Attach DeformEXT, MotionEXT, and UpdateEXT for real geometric meshes
+                    // (BakeMesh character skinning, scrolling UV meshes, deforming meshes).
+                    // Excludes transient particle billboard batches where topology changes every frame.
+                    var deformExt = new RemixAPI.remixapi_MeshInfoDeformEXT
                     {
-                        // OpenRemix: Attach DeformEXT, MotionEXT, and UpdateEXT for real geometric meshes
-                        // (BakeMesh character skinning, scrolling UV meshes, deforming meshes).
-                        // Excludes transient particle billboard batches where topology changes every frame.
-                        var deformExt = new RemixAPI.remixapi_MeshInfoDeformEXT
-                        {
-                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT,
-                            pNext = IntPtr.Zero
-                        };
-                        deformHandle = GCHandle.Alloc(deformExt, GCHandleType.Pinned);
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT,
+                        pNext = IntPtr.Zero
+                    };
+                    deformHandle = GCHandle.Alloc(deformExt, GCHandleType.Pinned);
 
-                        var motionExt = new RemixAPI.remixapi_MeshInfoMotionEXT
-                        {
-                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT,
-                            pNext = deformHandle.AddrOfPinnedObject(),
-                            enabled = 1
-                        };
-                        motionHandle = GCHandle.Alloc(motionExt, GCHandleType.Pinned);
+                    var motionExt = new RemixAPI.remixapi_MeshInfoMotionEXT
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT,
+                        pNext = deformHandle.AddrOfPinnedObject(),
+                        enabled = 1
+                    };
+                    motionHandle = GCHandle.Alloc(motionExt, GCHandleType.Pinned);
 
-                        var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
-                        {
-                            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
-                            pNext = motionHandle.AddrOfPinnedObject(),
-                            enabled = 1
-                        };
-                        updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
-                        pNext = updateHandle.AddrOfPinnedObject();
-                    }
-                }
-                else
-                {
-                    // Legacy DXVK-Remix: Generate frame-unique hash to force mesh recreation
-                    dynamicMeshHash = meshHash ^ ((ulong)(uint)frameHash * 1099511628211UL);
-                    if (dynamicMeshHash == 0) dynamicMeshHash = 1;
+                    var updateExt = new RemixAPI.remixapi_MeshInfoUpdateEXT
+                    {
+                        sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MESH_UPDATE_EXT,
+                        pNext = motionHandle.AddrOfPinnedObject(),
+                        enabled = 1
+                    };
+                    updateHandle = GCHandle.Alloc(updateExt, GCHandleType.Pinned);
+                    pNext = updateHandle.AddrOfPinnedObject();
                 }
 
                 var meshInfo = new RemixAPI.remixapi_MeshInfo
@@ -1115,7 +1106,7 @@ namespace UnityRemix
             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
             bool hasIdentity = false;
             ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
-            if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
+            if (targetInstanceId != 0)
             {
                 uint classification = (isDynamic || isParticleInstance) ? 1u : 0u;
                 identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
@@ -1130,7 +1121,7 @@ namespace UnityRemix
             }
 
             RemixAPI.remixapi_InstanceInfoBlendEXT blendExt = default;
-            bool hasBlend = RemixAPI.IsOpenRemix && isParticleInstance;
+            bool hasBlend = isParticleInstance;
             if (hasBlend)
             {
                 // Enable coverageBlended layer traversal in OpenRemix without setting hit.tinted (which causes
@@ -1400,7 +1391,7 @@ namespace UnityRemix
                 
                 RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
                 ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
-                if (RemixAPI.IsOpenRemix && targetInstanceId != 0)
+                if (targetInstanceId != 0)
                 {
                     identityExt = new RemixAPI.remixapi_InstanceIdentityEXT
                     {
@@ -1468,7 +1459,7 @@ namespace UnityRemix
         /// </summary>
         public bool TryGetUpToDateSkinnedMesh(ulong meshHash, int bakeFrame, out IntPtr handle)
         {
-            if (RemixAPI.IsOpenRemix && bakeFrame > 0 &&
+            if (bakeFrame > 0 &&
                 skinnedMeshHandles.TryGetValue(meshHash, out handle) && handle != IntPtr.Zero &&
                 skinnedMeshBakeFrames.TryGetValue(meshHash, out int lastBakeFrame) && lastBakeFrame == bakeFrame)
             {

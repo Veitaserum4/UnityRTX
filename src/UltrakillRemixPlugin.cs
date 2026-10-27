@@ -416,20 +416,15 @@ namespace UnityRemix
         {
             LogSource.LogInfo("Loading Remix API interface...");
             
-            // Find remix.dll or d3d9.dll
             string gameDir = System.IO.Path.GetDirectoryName(Application.dataPath);
             string dllPath = System.IO.Path.Combine(gameDir, "remix.dll");
-            if (!System.IO.File.Exists(dllPath))
-            {
-                dllPath = System.IO.Path.Combine(gameDir, "d3d9.dll");
-            }
             
             LogSource.LogInfo($"Looking for Remix DLL at: {dllPath}");
             
             if (!System.IO.File.Exists(dllPath))
             {
                 LogSource.LogError($"Remix DLL not found at {dllPath}");
-                LogSource.LogInfo("Please place remix.dll (OpenRemix) or d3d9.dll (RTX Remix) in the game root folder.");
+                LogSource.LogInfo("Please place OpenRemix's remix.dll in the game root folder.");
                 return;
             }
             
@@ -439,7 +434,9 @@ namespace UnityRemix
             {
                 LogSource.LogError($"Failed to load Remix API: {result}");
                 if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_INCOMPATIBLE_VERSION)
-                    LogSource.LogError("Use openremix API 0.1003.0, Remix Plus API 0.1000.0, or UnityRTX v0.2's 0.6.1 runtime. Other layouts are not supported.");
+                    LogSource.LogError("UnityRTX needs OpenRemix (API 0.1003.0).");
+                else if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE)
+                    LogSource.LogError("This remix.dll lacks exports UnityRTX needs (retained scene instances); update OpenRemix.");
                 return;
             }
             
