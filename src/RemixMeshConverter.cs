@@ -80,6 +80,103 @@ namespace UnityRemix
             other = otherList.ToArray();
         }
 
+        /// <summary>
+        /// Cuts triangles that cross a top threshold along the line where their interpolated vertex
+        /// normal meets it (Unity's shader decides per pixel), so SplitByUp's top surfaces end on that
+        /// smooth contour instead of whole-triangle steps. Cut points become new vertices after the
+        /// existing ones (Apply); each piece lies wholly on one side, which SplitByUp then sorts.
+        /// </summary>
+        internal sealed class TopContourClipper
+        {
+            private readonly Vector3[] vertices, normals;
+            private readonly Vector2[] uvs;
+            private readonly Color32[] colors;
+            private readonly List<(uint a, uint b, float t)> added = new List<(uint, uint, float)>();
+            private readonly Dictionary<ulong, uint> edgeVertex = new Dictionary<ulong, uint>();
+            private float[] side;
+
+            public TopContourClipper(Vector3[] vertices, Vector3[] normals, Vector2[] uvs, Color32[] colors)
+            {
+                this.vertices = vertices;
+                this.normals = normals;
+                this.uvs = uvs;
+                this.colors = colors != null && colors.Length == vertices.Length ? colors : null;
+            }
+
+            public bool AddedVertices => added.Count > 0;
+
+            public uint[] Clip(IList<uint> indices, Vector3 objectUp, float threshold)
+            {
+                objectUp = objectUp.sqrMagnitude > 1e-8f ? objectUp.normalized : Vector3.up;
+                // Side of each vertex, as SplitByUp measures it (un-normalized normal along up).
+                side = new float[vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                    side[i] = Vector3.Dot(normals[i], objectUp) - threshold;
+                edgeVertex.Clear();
+
+                var result = new List<uint>(indices.Count + indices.Count / 4);
+                uint n = (uint)vertices.Length;
+                for (int i = 0; i + 2 < indices.Count; i += 3)
+                {
+                    uint a = indices[i], b = indices[i + 1], c = indices[i + 2];
+                    if (a >= n || b >= n || c >= n)
+                        continue;
+                    bool ua = side[a] > 0f, ub = side[b] > 0f, uc = side[c] > 0f;
+                    if (ua == ub && ub == uc)
+                    {
+                        result.Add(a); result.Add(b); result.Add(c);
+                        continue;
+                    }
+                    // Rotate (keeping winding) so the vertex alone on its side comes first.
+                    if (ub != ua && ub != uc) { uint t = a; a = b; b = c; c = t; }
+                    else if (uc != ua && uc != ub) { uint t = c; c = b; b = a; a = t; }
+                    uint ab = Cut(a, b), ac = Cut(a, c);
+                    result.Add(a); result.Add(ab); result.Add(ac);
+                    result.Add(ab); result.Add(b); result.Add(c);
+                    result.Add(ab); result.Add(c); result.Add(ac);
+                }
+                return result.ToArray();
+            }
+
+            // The vertex on edge a-b where the side value is 0 (one per edge, shared by both triangles).
+            private uint Cut(uint a, uint b)
+            {
+                ulong key = a < b ? ((ulong)a << 32) | b : ((ulong)b << 32) | a;
+                if (edgeVertex.TryGetValue(key, out uint index))
+                    return index;
+                float t = side[a] / (side[a] - side[b]);
+                index = (uint)(vertices.Length + added.Count);
+                added.Add((a, b, t));
+                edgeVertex[key] = index;
+                return index;
+            }
+
+            /// <summary>The vertex arrays with the cut vertices appended (unchanged if none).</summary>
+            public void Apply(out Vector3[] outVertices, out Vector3[] outNormals, out Vector2[] outUvs, out Color32[] outColors)
+            {
+                outVertices = vertices; outNormals = normals; outUvs = uvs; outColors = colors;
+                if (added.Count == 0)
+                    return;
+                int n = vertices.Length, total = n + added.Count;
+                outVertices = new Vector3[total];
+                outNormals = new Vector3[total];
+                outUvs = new Vector2[total];
+                outColors = colors != null ? new Color32[total] : null;
+                Array.Copy(vertices, outVertices, n);
+                Array.Copy(normals, outNormals, n);
+                Array.Copy(uvs, outUvs, n);
+                if (colors != null) Array.Copy(colors, outColors, n);
+                for (int i = 0; i < added.Count; i++)
+                {
+                    var (a, b, t) = added[i];
+                    outVertices[n + i] = Vector3.LerpUnclamped(vertices[a], vertices[b], t);
+                    outNormals[n + i] = Vector3.LerpUnclamped(normals[a], normals[b], t);
+                    outUvs[n + i] = Vector2.LerpUnclamped(uvs[a], uvs[b], t);
+                    if (colors != null) outColors[n + i] = Color32.Lerp(colors[a], colors[b], t);
+                }
+            }
+        }
+
         /// <summary>White blended toward the vertex color by weight (1: the color itself).</summary>
         internal static Color32 WeightVertexColor(Color32 c, float weight)
         {
@@ -417,6 +514,26 @@ namespace UnityRemix
             {
                 uvs = new Vector2[vertices.Length];
             }
+
+            // Top-colored surfaces: cut their triangles along the top contour before splitting.
+            TopContourClipper clipper = null;
+            for (int s = 0; s < submeshIndices.Count; s++)
+            {
+                Material mat = s < submeshMaterials.Count ? submeshMaterials[s] : null;
+                int matId = (data.SubmeshMaterialIds != null && s < data.SubmeshMaterialIds.Count && data.SubmeshMaterialIds[s] != 0)
+                    ? data.SubmeshMaterialIds[s]
+                    : (mat != null ? mat.GetInstanceID() : 0);
+                if (submeshIndices[s] == null || matId == 0 || !materialManager.TryGetTopVariant(matId, out _, out float threshold))
+                    continue;
+                if (clipper == null)
+                {
+                    clipper = new TopContourClipper(vertices, normals, uvs, colors);
+                    submeshIndices = new List<uint[]>(submeshIndices);
+                }
+                submeshIndices[s] = clipper.Clip(submeshIndices[s], data.ObjectUp, threshold);
+            }
+            if (clipper != null)
+                clipper.Apply(out vertices, out normals, out uvs, out colors);
 
             bool hasColors = colors != null && colors.Length == vertices.Length;
             // Vertex colors a layered material uses as masks are not color (LayeredMaterialCompositor).

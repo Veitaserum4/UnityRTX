@@ -1288,6 +1288,29 @@ int queued = 0;
             if (uvs == null || uvs.Length != verts.Length)
                 uvs = new Vector2[verts.Length];
 
+            // Top-colored surfaces: cut their triangles along the top contour before splitting
+            // (into copies; the shared mesh's index arrays stay as read).
+            var surfaceList = data.Surfaces;
+            RemixMeshConverter.TopContourClipper clipper = null;
+            for (int s = 0; s < surfaceList.Length; s++)
+            {
+                var surf = surfaceList[s];
+                if (surf.Indices == null || surf.MaterialId == 0 || !materialManager.TryGetTopVariant(surf.MaterialId, out _, out float threshold))
+                    continue;
+                if (clipper == null)
+                {
+                    clipper = new RemixMeshConverter.TopContourClipper(verts, norms, uvs, cols);
+                    surfaceList = (SubMeshSurface[])surfaceList.Clone();
+                }
+                uint[] clipped = clipper.Clip(Array.ConvertAll(surf.Indices, i => (uint)i), data.ObjectUp, threshold);
+                surfaceList[s].Indices = Array.ConvertAll(clipped, i => (int)i);
+            }
+            if (clipper != null)
+            {
+                clipper.Apply(out verts, out norms, out uvs, out cols);
+                hasColors = hasColors && cols != null && cols.Length == verts.Length;
+            }
+
             // Check if any surface needs UV tiling/offset applied
             bool anyNonIdentityST = false;
             for (int s = 0; s < data.Surfaces.Length; s++)
@@ -1329,7 +1352,7 @@ int queued = 0;
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 for (int s = 0; s < data.Surfaces.Length; s++)
                 {
-                    var surf = data.Surfaces[s];
+                    var surf = surfaceList[s];
                     if (surf.Indices == null || surf.Indices.Length < 3 || (surf.Indices.Length % 3) != 0)
                         continue;
 
