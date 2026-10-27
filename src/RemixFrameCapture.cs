@@ -1048,11 +1048,13 @@ namespace UnityRemix
             RemixScrollingTextureDetector.ClearCache();
             skinnedRoundRobinIndex = 0;
             
+            // Lower-detail LOD levels are not captured: the detailed level is (LodFilter).
+            var lowerLodRenderers = LodFilter.CollectLowerLevelRenderers(out _);
             var allStatic = UnityCompat.FindSceneComponentsIncludingInactive<MeshRenderer>();
             for (int i = 0; i < allStatic.Length; i++)
             {
                 var r = allStatic[i];
-                if (r != null && cachedRendererIds.Add(r.GetInstanceID()))
+                if (r != null && !lowerLodRenderers.Contains(r.GetInstanceID()) && cachedRendererIds.Add(r.GetInstanceID()))
                 {
                     if (RemixScrollingTextureDetector.IsScrollingRenderer(r))
                     {
@@ -1068,7 +1070,7 @@ namespace UnityRemix
             for (int i = 0; i < allSkinned.Length; i++)
             {
                 var sr = allSkinned[i];
-                if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
+                if (sr != null && !lowerLodRenderers.Contains(sr.GetInstanceID()) && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                 {
                     cachedSkinnedRenderers.Add(sr);
                     if (!sr.updateWhenOffscreen)
@@ -1127,7 +1129,7 @@ namespace UnityRemix
             
             rendererCacheFrame = frameCount;
             
-            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static ({cachedScrollingRenderers.Count} scrolling UV), {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles");
+            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static ({cachedScrollingRenderers.Count} scrolling UV), {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles, {lowerLodRenderers.Count} lower LOD levels skipped");
             
             if (configDebugLogInterval.Value > 0)
             {
@@ -1669,7 +1671,8 @@ namespace UnityRemix
                         SubmeshIndices = submeshIndices,
                         SubmeshMaterials = submeshMaterials,
                         SubmeshMaterialIds = submeshMaterialIds,
-                        ObjectUp = renderer.transform.InverseTransformDirection(Vector3.up)
+                        ObjectUp = renderer.transform.InverseTransformDirection(Vector3.up),
+                        ObjectScale = renderer.transform.lossyScale
                     };
 
                     lock (meshQueueLock)

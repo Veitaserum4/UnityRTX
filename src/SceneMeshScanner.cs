@@ -65,6 +65,8 @@ namespace UnityRemix
             public InstanceFlags Flags;
             // World up in the mesh's space: which faces take a top-colored material's top variant.
             public Vector3 ObjectUp;
+            // Its object's scale (quantized as in the shared hash): projected UVs repeat per world unit.
+            public Vector3 ObjectScale;
         }
 
         public struct InstanceData
@@ -871,6 +873,8 @@ int queued = 0;
             int skippedNoMesh = 0, skippedNoVerts = 0, skippedNoTris = 0, skippedReadError = 0;
             int gpuReadbackCount = 0;
             int vertexColorCount = 0;
+            var lowerLodRenderers = LodFilter.CollectLowerLevelRenderers(out int lodGroups);
+            int skippedLowerLod = 0;
 
             foreach (var filter in filters)
             {
@@ -908,6 +912,14 @@ int queued = 0;
                 if (renderer == null)
                 {
                     skippedNoRenderer++;
+                    scannedFilterIds.Add(filterId);
+                    continue;
+                }
+
+                // A lower-detail level of an LOD group: the detailed level is drawn instead.
+                if (lowerLodRenderers.Contains(renderer.GetInstanceID()))
+                {
+                    skippedLowerLod++;
                     scannedFilterIds.Add(filterId);
                     continue;
                 }
@@ -1120,12 +1132,14 @@ int queued = 0;
 
                 // Combined static-batch vertices are already in world space.
                 Vector3 objectUp = isCombinedMesh ? Vector3.up : filter.transform.InverseTransformDirection(Vector3.up);
+                bool projected = !isCombinedMesh && AnyProjection(surfaces);
+                Vector3 objectScale = projected ? QuantizeScale(filter.transform.lossyScale) : Vector3.one;
                 // Objects with the same mesh and materials share one Remix mesh (a level places the
                 // same rock thousands of times); each keeps its own instance. Combined static-batch
                 // meshes hold per-renderer world-space slices: one mesh per object.
                 ulong meshHash = isCombinedMesh
                     ? GenerateInstanceMeshHash(mesh, filter.transform)
-                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials, objectUp, AnyTopVariant(surfaces));
+                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials, objectUp, AnyTopVariant(surfaces), objectScale);
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
 
                 if (colors != null && colors.Length > 0)
@@ -1150,6 +1164,7 @@ int queued = 0;
                         SourceTransform = filter.transform,
                         Flags = DetermineInstanceFlags(filter, renderer, isCombinedMesh),
                         ObjectUp = objectUp,
+                        ObjectScale = objectScale,
                     });
                 }
                 queued++;
@@ -1157,7 +1172,7 @@ int queued = 0;
 
             if (logDiagnostics || queued > 0)
             {
-                logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({sharedMeshData.Count} distinct meshes read, {sharedMeshReuses} reused; {gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
+                logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({sharedMeshData.Count} distinct meshes read, {sharedMeshReuses} reused, {skippedLowerLod} lower LOD levels of {lodGroups} groups skipped; {gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
                     $" | skipped: {skippedWrongScene} wrong scene, {skippedAlreadyScanned} already scanned," +
                     $" {skippedInactive} inactive, {skippedLayer} layer excluded, {skippedDynamic} dynamic/ignored, {skippedNoRenderer} no renderer, {skippedNoMesh} no mesh," +
                     $" {skippedReadError} read error, {skippedNoVerts} no verts, {skippedNoTris} no tris");
@@ -1371,7 +1386,7 @@ int queued = 0;
                             var surfVerts = new RemixAPI.remixapi_HardcodedVertex[verts.Length];
                             for (int i = 0; i < verts.Length; i++)
                             {
-                                Vector2 uv = projected ? RemixMeshConverter.ProjectUV(verts[i], norms[i], projection) : uvs[i];
+                                Vector2 uv = projected ? RemixMeshConverter.ProjectUV(Vector3.Scale(verts[i], data.ObjectScale), norms[i], projection) : uvs[i];
                                 float u = uv.x * st.x + st.z;
                                 float v = uv.y * st.y + st.w;
                                 uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(WeightVertexColor(cols[i], vertexColorWeight)) : 0xFFFFFFFF;
@@ -1452,6 +1467,28 @@ int queued = 0;
         // Persistent across sessions (no instance IDs): the mesh's name, size and a sample of its
         // vertices, and per surface its index count and its material's name, shader, main
         // texture and colors.
+        private bool AnyProjection(List<SubMeshSurface> surfaces)
+        {
+            foreach (var surface in surfaces)
+            {
+                if (materialManager.TryGetProjection(surface.MaterialId, out _))
+                    return true;
+            }
+            return false;
+        }
+
+        // Per axis to steps of about 10%, so copies at nearly the same scale share a mesh.
+        private static Vector3 QuantizeScale(Vector3 scale)
+        {
+            float Step(float v)
+            {
+                float a = Mathf.Abs(v);
+                if (a < 1e-4f) return 1f;
+                return Mathf.Pow(1.1f, Mathf.Round(Mathf.Log(a, 1.1f)));
+            }
+            return new Vector3(Step(scale.x), Step(scale.y), Step(scale.z));
+        }
+
         private bool AnyTopVariant(List<SubMeshSurface> surfaces)
         {
             foreach (var surface in surfaces)
@@ -1465,7 +1502,7 @@ int queued = 0;
         // orientationMatters: a top-colored material splits faces by world up, so differently
         // turned copies (up quantized) are different meshes.
         private static ulong GenerateSharedMeshHash(Mesh mesh, Vector3[] vertices, List<SubMeshSurface> surfaces, List<Material> surfaceMaterials,
-                                                   Vector3 objectUp, bool orientationMatters)
+                                                   Vector3 objectUp, bool orientationMatters, Vector3 objectScale)
         {
             ulong hash = 14695981039346656037UL;
             void Mix(ulong value) { hash = (hash ^ value) * 1099511628211UL; }
@@ -1478,6 +1515,12 @@ int queued = 0;
             void MixFloat(float value) { Mix((ulong)BitConverter.ToInt32(BitConverter.GetBytes(value), 0)); }
 
             Mix(0x5348415245444D53UL); // distinct from the per-object hashes
+            if (objectScale != Vector3.one)
+            {
+                MixFloat(objectScale.x);
+                MixFloat(objectScale.y);
+                MixFloat(objectScale.z);
+            }
             if (orientationMatters)
             {
                 var up = objectUp.normalized;

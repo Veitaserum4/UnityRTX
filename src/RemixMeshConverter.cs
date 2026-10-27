@@ -28,6 +28,8 @@ namespace UnityRemix
         public List<int> SubmeshMaterialIds;
         // World up in the mesh's space (of the object it was prepared for): which faces are "top".
         public Vector3 ObjectUp = Vector3.up;
+        // Its object's scale: box-projected UVs repeat per world unit, not per mesh unit.
+        public Vector3 ObjectScale = Vector3.one;
     }
 
     /// <summary>
@@ -46,7 +48,8 @@ namespace UnityRemix
 
         /// <summary>
         /// Box-projected UV standing in for a triplanar (world-projected) texture: the position on
-        /// the plane facing the normal's dominant axis, times scale (object space).
+        /// the plane facing the normal's dominant axis, times scale. Callers pass the position
+        /// scaled by the object's scale, so the pattern repeats per world unit.
         /// </summary>
         internal static Vector2 ProjectUV(Vector3 position, Vector3 normal, float scale)
         {
@@ -557,7 +560,7 @@ namespace UnityRemix
                             var surfVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
                             for (int i = 0; i < vertices.Length; i++)
                             {
-                                Vector2 uv = projected ? ProjectUV(vertices[i], normals[i], projection) : uvs[i];
+                                Vector2 uv = projected ? ProjectUV(Vector3.Scale(vertices[i], data.ObjectScale), normals[i], projection) : uvs[i];
                                 float u = uv.x * st.x + st.z;
                                 float v = uv.y * st.y + st.w;
                                 uint col = hasColors ? Color32ToBGRA(WeightVertexColor(colors[i], vertexColorWeight)) : 0xFFFFFFFF;
