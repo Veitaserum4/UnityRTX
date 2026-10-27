@@ -174,7 +174,16 @@ namespace UnityRemix
             // channel remapped to bias + scale * x (remixapi_MaterialPbrRemapEXT).
             public bool hasRoughnessDetail;
             public float roughnessDetailBias, roughnessDetailScale;
-        }
+            // Unity's own PBR maps (DetectUnityPbrMaps): a texture whose red channel is metallic
+            // and/or alpha smoothness, or smoothness in the albedo's alpha. Values are
+            // bias + scale * x, with x the texel (metallic) or 1 - texel (roughness).
+            public IntPtr pbrMapHandle;
+            public bool pbrMapMetallic, pbrMapSmoothness, smoothnessInAlbedoAlpha;
+            public float pbrMetalBias, pbrMetalScale, pbrRoughBias, pbrRoughScale;
+            // Generated normal maps: strength factor of the material's AutoPBR category (1 when
+            // unmatched), 0 for surfaces that get none (particles, translucent, blended).
+            public float autoNormalScale;
+}
         private System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData> materialTextureData = new System.Collections.Concurrent.ConcurrentDictionary<int, MaterialTextureData>();
         private RemixWaterManager waterManager;
         public void SetWaterManager(RemixWaterManager manager) => this.waterManager = manager;
@@ -762,18 +771,31 @@ namespace UnityRemix
             else if (hasSmoothness) { roughness = 1.0f - Mathf.Clamp01(smoothness); hasExplicitRoughness = true; }
             else roughness = 0.7f;
 
+            DetectUnityPbrMaps(material, shaderName, ref matData);
+            if (matData.pbrMapHandle != IntPtr.Zero || matData.smoothnessInAlbedoAlpha)
+            {
+                // The maps' values replace the sliders; the constants stay as their typical value.
+                if (matData.pbrMapMetallic) { metallic = matData.pbrMetalBias + matData.pbrMetalScale * 0.5f; hasExplicitMetallic = true; }
+                if (matData.pbrMapSmoothness || matData.smoothnessInAlbedoAlpha) { roughness = matData.pbrRoughBias + matData.pbrRoughScale * 0.5f; hasExplicitRoughness = true; }
+                if (verboseTextureLogging.Value)
+                    logger.LogInfo($"[PbrMaps] '{material.name}': map={(matData.pbrMapHandle != IntPtr.Zero)} metallic={matData.pbrMapMetallic} ({matData.pbrMetalBias:F2}+{matData.pbrMetalScale:F2}x) " +
+                                   $"smoothness={(matData.pbrMapSmoothness ? "map alpha" : matData.smoothnessInAlbedoAlpha ? "albedo alpha" : "none")} (rough {matData.pbrRoughBias:F2}+{matData.pbrRoughScale:F2}(1-a))");
+            }
+
             matData.baseMetallic = Mathf.Clamp01(metallic);
             matData.baseRoughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
             matData.hasInferredPbr = false;
+            matData.autoNormalScale = 1f;
             matData.inferredMetallic = matData.baseMetallic;
             matData.inferredRoughness = matData.baseRoughness;
 
             // Auto PBR Heuristics (Experimental): infer physical metallic & roughness for non-PBR surfaces
             if (!hasExplicitMetallic || !hasExplicitRoughness)
             {
-                if (InferPbrProperties(material, tex, renderer, shaderName, out float infMetal, out float infRough, out string matchedCat))
+                if (InferPbrProperties(material, tex, renderer, shaderName, out float infMetal, out float infRough, out string matchedCat, out float normalScale))
                 {
                     matData.hasInferredPbr = true;
+                    matData.autoNormalScale = normalScale;
                     matData.inferMetallic = !hasExplicitMetallic;
                     matData.inferRoughness = !hasExplicitRoughness;
                     matData.categoryMetallic = infMetal;
@@ -796,6 +818,11 @@ namespace UnityRemix
             matData.metallic = Mathf.Clamp01(metallic);
             matData.roughness = Mathf.Clamp(roughness, 0.04f, 1.0f);
             
+            // Explicit maps: the category's normal strength still applies to generated normals.
+            if (!(!hasExplicitMetallic || !hasExplicitRoughness) &&
+                InferPbrProperties(material, tex, renderer, shaderName, out _, out _, out _, out float explicitNormalScale))
+                matData.autoNormalScale = explicitNormalScale;
+
             // Detect alpha mode from shader keywords, _Mode property, and render queue
             var (detectedMode, detectionReason) = DetectAlphaModeWithReason(material);
             matData.alphaMode = detectedMode;
@@ -1280,11 +1307,14 @@ namespace UnityRemix
                 matData.originalNormalTextureHash = matData.normalTextureHash;
                 matData.albedoTex = albedoTex;
 
+                if (matData.suppressLightGeneration || matData.translucentKind != TranslucentKind.None || matData.alphaMode == AlphaMode.Blend)
+                    matData.autoNormalScale = 0f;
+
                 // Auto Normal Map Generation (Experimental): Sobel height filter on albedo texture
-                if (matData.normalHandle == IntPtr.Zero && albedoTex != null
+                if (matData.normalHandle == IntPtr.Zero && albedoTex != null && matData.autoNormalScale > 0f
                     && ConfigAutoNormalMaps != null && ConfigAutoNormalMaps.Value)
                 {
-                    float strength = ConfigAutoNormalStrength != null ? ConfigAutoNormalStrength.Value : 1.0f;
+                    float strength = (ConfigAutoNormalStrength != null ? ConfigAutoNormalStrength.Value : 1.0f) * matData.autoNormalScale;
                     var (genHandle, genHash) = GetOrCreateAutoNormalMap(albedoTex, strength);
                     if (genHandle != IntPtr.Zero)
                     {
@@ -1390,7 +1420,9 @@ namespace UnityRemix
         /// but the actual Remix API call is deferred to the render thread via ProcessPendingTextureUploads().
         /// Returns a provisional handle (the texture hash cast to IntPtr).
         /// </summary>
-        public IntPtr UploadUnityTexture(Texture2D unityTexture, bool isNormalMap = false)
+        /// <param name="linearData">The texture holds data (metallic, smoothness): GPU readbacks
+        /// keep its values instead of encoding them as sRGB.</param>
+        public IntPtr UploadUnityTexture(Texture2D unityTexture, bool isNormalMap = false, bool linearData = false)
         {
             if (unityTexture == null || createTextureFunc == null)
                 return IntPtr.Zero;
@@ -1450,13 +1482,13 @@ namespace UnityRemix
                     
                     RenderTexture tmp = RenderTexture.GetTemporary(
                         unityTexture.width, unityTexture.height, 0,
-                        RenderTextureFormat.ARGB32, isNormalMap ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
+                        RenderTextureFormat.ARGB32, isNormalMap || linearData ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
                     
                     RenderTexture previous = RenderTexture.active;
                     Graphics.Blit(unityTexture, tmp);
                     RenderTexture.active = tmp;
                     
-                    Texture2D readableTexture = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, isNormalMap);
+                    Texture2D readableTexture = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, isNormalMap || linearData);
                     readableTexture.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
                     readableTexture.Apply();
                     
@@ -1536,11 +1568,11 @@ namespace UnityRemix
                             
                             RenderTexture tmpGpu = RenderTexture.GetTemporary(
                                 unityTexture.width, unityTexture.height, 0,
-                                RenderTextureFormat.ARGB32, isNormalMap ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
+                                RenderTextureFormat.ARGB32, isNormalMap || linearData ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
                             RenderTexture prevActive = RenderTexture.active;
                             Graphics.Blit(unityTexture, tmpGpu);
                             RenderTexture.active = tmpGpu;
-                            Texture2D convTex = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, isNormalMap);
+                            Texture2D convTex = new Texture2D(unityTexture.width, unityTexture.height, TextureFormat.RGBA32, false, isNormalMap || linearData);
                             convTex.ReadPixels(new Rect(0, 0, tmpGpu.width, tmpGpu.height), 0, 0);
                             convTex.Apply();
                             RenderTexture.active = prevActive;
@@ -2829,13 +2861,15 @@ namespace UnityRemix
             public string categoryName;
             public float metallic;
             public float roughness;
+            public float normalStrength; // scales generated normal maps (polished: weak, masonry: strong)
             public string[] keywords;
 
-            public PbrTaxonomyEntry(string categoryName, float metallic, float roughness, params string[] keywords)
+            public PbrTaxonomyEntry(string categoryName, float metallic, float roughness, float normalStrength, params string[] keywords)
             {
                 this.categoryName = categoryName;
                 this.metallic = metallic;
                 this.roughness = roughness;
+                this.normalStrength = normalStrength;
                 this.keywords = keywords;
             }
         }
@@ -2843,83 +2877,238 @@ namespace UnityRemix
         private static readonly PbrTaxonomyEntry[] PbrTaxonomy = new PbrTaxonomyEntry[]
         {
             // 1. Precious & Polished Metals
-            new PbrTaxonomyEntry("Chrome/Mirror", 1.0f, 0.05f,
+            new PbrTaxonomyEntry("Chrome/Mirror", 1.0f, 0.05f, 0.25f,
                 "chrome", "mirror", "silver", "polished_metal", "specular_metal"),
-            new PbrTaxonomyEntry("Gold", 1.0f, 0.15f,
+            new PbrTaxonomyEntry("Gold", 1.0f, 0.15f, 0.4f,
                 "gold", "golden", "gilded", "brass", "bronze", "copper"),
 
             // 2. Structural & Industrial Metals
-            new PbrTaxonomyEntry("Smooth Metal/Steel", 1.0f, 0.25f,
+            new PbrTaxonomyEntry("Smooth Metal/Steel", 1.0f, 0.25f, 0.5f,
                 "steel", "iron", "aluminum", "metal_smooth", "metallic", "metal_trim", "gunmetal"),
-            new PbrTaxonomyEntry("Standard Metal/Machinery", 1.0f, 0.38f,
+            new PbrTaxonomyEntry("Standard Metal/Machinery", 1.0f, 0.38f, 0.7f,
                 "metal", "machinery", "machine", "armor", "armour", "chassis", "engine", "hull",
                 "pipe", "pipeline", "barrel", "rebar", "grate", "grating", "girder", "beam",
                 "scaffold", "vent", "panel_metal", "sheet_metal", "weapon", "sword", "blade", "bullet"),
-            new PbrTaxonomyEntry("Rusted/Oxidized Metal", 0.35f, 0.75f,
+            new PbrTaxonomyEntry("Rusted/Oxidized Metal", 0.35f, 0.75f, 1.2f,
                 "rust", "rusted", "rusty", "corrosion", "corroded", "oxidized"),
 
             // 3. High-Gloss Dielectrics
-            new PbrTaxonomyEntry("Marble/Polished Stone", 0.0f, 0.12f,
+            new PbrTaxonomyEntry("Marble/Polished Stone", 0.0f, 0.12f, 0.3f,
                 "marble", "porcelain", "polished_stone", "polished_rock", "granite_polished"),
-            new PbrTaxonomyEntry("Ceramic/Tile", 0.0f, 0.18f,
+            new PbrTaxonomyEntry("Ceramic/Tile", 0.0f, 0.18f, 0.5f,
                 "ceramic", "tile", "tiles", "tiling", "mosaic", "glazed"),
-            new PbrTaxonomyEntry("Glossy Plastic/Car Paint/Glassy", 0.0f, 0.22f,
+            new PbrTaxonomyEntry("Glossy Plastic/Car Paint/Glassy", 0.0f, 0.22f, 0.3f,
                 "plastic", "shiny", "glossy", "varnish", "acrylic", "lacquer", "enamel", "polymer"),
-            new PbrTaxonomyEntry("Crystal/Gemstone", 0.0f, 0.10f,
+            new PbrTaxonomyEntry("Crystal/Gemstone", 0.0f, 0.10f, 0.2f,
                 "crystal", "gem", "gemstone", "diamond", "ruby", "emerald", "sapphire", "amethyst", "obsidian"),
 
             // 4. Semi-Gloss & Organic Surfaces
-            new PbrTaxonomyEntry("Polished Wood", 0.0f, 0.28f,
+            new PbrTaxonomyEntry("Polished Wood", 0.0f, 0.28f, 0.5f,
                 "wood_polished", "parquet", "varnished_wood", "lacquered_wood", "wood_shiny"),
-            new PbrTaxonomyEntry("Leather/Rubber", 0.0f, 0.55f,
+            new PbrTaxonomyEntry("Leather/Rubber", 0.0f, 0.55f, 0.8f,
                 "leather", "rubber", "tire", "vinyl", "tarp", "latex"),
-            new PbrTaxonomyEntry("Flesh/Skin", 0.0f, 0.42f,
+            new PbrTaxonomyEntry("Flesh/Skin", 0.0f, 0.42f, 0.7f,
                 "skin", "flesh", "meat", "organ", "muscle", "guts", "viscera", "tongue"),
 
             // 5. Standard Matte & Rough Surfaces
-            new PbrTaxonomyEntry("Rough Wood/Bark", 0.0f, 0.65f,
+            new PbrTaxonomyEntry("Rough Wood/Bark", 0.0f, 0.65f, 1.1f,
                 "wood", "plank", "planks", "timber", "bark", "log", "branch", "lumber", "fence", "crate", "barrel_wood"),
-            new PbrTaxonomyEntry("Cardboard/Paper", 0.0f, 0.82f,
+            new PbrTaxonomyEntry("Cardboard/Paper", 0.0f, 0.82f, 0.5f,
                 "paper", "cardboard", "carton", "book", "scroll", "poster", "document"),
-            new PbrTaxonomyEntry("Foliage/Vegetation", 0.0f, 0.60f,
+            new PbrTaxonomyEntry("Foliage/Vegetation", 0.0f, 0.60f, 0.8f,
                 "grass", "leaf", "leaves", "foliage", "moss", "plant", "bush", "vine", "tree", "flora"),
-            new PbrTaxonomyEntry("Stone/Rock/Masonry", 0.0f, 0.85f,
+            new PbrTaxonomyEntry("Stone/Rock/Masonry", 0.0f, 0.85f, 1.4f,
                 "stone", "rock", "boulder", "cliff", "cobble", "cobblestone", "masonry", "slate", "granite", "monument"),
-            new PbrTaxonomyEntry("Concrete/Brick/Asphalt", 0.0f, 0.88f,
+            new PbrTaxonomyEntry("Concrete/Brick/Asphalt", 0.0f, 0.88f, 1.3f,
                 "concrete", "brick", "bricks", "asphalt", "cement", "pavement", "sidewalk", "plaster", "stucco"),
-            new PbrTaxonomyEntry("Fabric/Cloth/Carpet", 0.0f, 0.92f,
+            new PbrTaxonomyEntry("Fabric/Cloth/Carpet", 0.0f, 0.92f, 0.9f,
                 "fabric", "cloth", "carpet", "rug", "canvas", "curtain", "flag", "banner", "linen", "wool",
                 "cotton", "towel", "blanket", "cushion", "upholstery", "velvet", "silk"),
-            new PbrTaxonomyEntry("Dirt/Mud/Sand/Ground", 0.0f, 0.95f,
+            new PbrTaxonomyEntry("Dirt/Mud/Sand/Ground", 0.0f, 0.95f, 1.2f,
                 "dirt", "soil", "mud", "sand", "ground", "earth", "gravel", "dust", "terrain", "clay")
         };
 
-        private bool InferPbrProperties(Material material, Texture2D albedoTex, Renderer renderer, string shaderName, out float inferredMetallic, out float inferredRoughness, out string matchedCategory)
+        private bool InferPbrProperties(Material material, Texture2D albedoTex, Renderer renderer, string shaderName, out float inferredMetallic, out float inferredRoughness, out string matchedCategory, out float normalStrength)
         {
             inferredMetallic = 0.0f;
             inferredRoughness = 0.7f;
             matchedCategory = null;
+            normalStrength = 1f;
 
-            string matName = material != null ? material.name : null;
-            string texName = albedoTex != null ? albedoTex.name : null;
-            string goName = renderer != null ? renderer.gameObject.name : null;
+            var names = new[]
+            {
+                NameTokens(material != null ? material.name : null),
+                NameTokens(albedoTex != null ? albedoTex.name : null),
+                NameTokens(renderer != null ? renderer.gameObject.name : null),
+                NameTokens(shaderName)
+            };
 
             for (int i = 0; i < PbrTaxonomy.Length; i++)
             {
                 var entry = PbrTaxonomy[i];
-                if (MatchesAnyKeyword(matName, entry.keywords) ||
-                    MatchesAnyKeyword(texName, entry.keywords) ||
-                    MatchesAnyKeyword(goName, entry.keywords) ||
-                    MatchesAnyKeyword(shaderName, entry.keywords))
+                foreach (var tokens in names)
                 {
+                    if (!MatchesPbrKeyword(tokens, entry.keywords))
+                        continue;
                     inferredMetallic = entry.metallic;
                     inferredRoughness = entry.roughness;
                     matchedCategory = entry.categoryName;
+                    normalStrength = entry.normalStrength;
                     return true;
                 }
             }
 
             return false;
+        }
+
+        // Every taxonomy keyword, and words that commonly follow one in a compound name
+        // (METALFLOOR, woodplank): a keyword prefix followed by one of these still matches.
+        private static readonly HashSet<string> PbrCompoundTails = BuildPbrCompoundTails();
+
+        private static HashSet<string> BuildPbrCompoundTails()
+        {
+            var tails = new HashSet<string> { "floor", "wall", "plate", "panel", "trim", "door", "roof", "ceiling",
+                "pillar", "block", "base", "top", "side", "dark", "light", "old", "new", "detail", "mat", "material", "tex", "texture" };
+            foreach (var entry in PbrTaxonomy)
+                foreach (var keyword in entry.keywords)
+                    if (keyword.IndexOf('_') < 0)
+                        tails.Add(keyword);
+            return tails;
+        }
+
+        /// <summary>
+        /// A name's lower-case words: split at separators, digits and camelCase humps
+        /// ("M_MetalFloor02" -> m, metal, floor).
+        /// </summary>
+        private static List<string> NameTokens(string name)
+        {
+            var tokens = new List<string>();
+            if (string.IsNullOrEmpty(name))
+                return tokens;
+            var current = new System.Text.StringBuilder();
+            for (int i = 0; i < name.Length; i++)
+            {
+                char c = name[i];
+                bool boundary = !char.IsLetter(c) ||
+                                (current.Length > 0 && char.IsUpper(c) && char.IsLower(name[i - 1])) ||
+                                (current.Length > 0 && char.IsUpper(c) && i + 1 < name.Length && char.IsLower(name[i + 1]) && char.IsUpper(name[i - 1]));
+                if (boundary && current.Length > 0)
+                {
+                    tokens.Add(current.ToString().ToLowerInvariant());
+                    current.Clear();
+                }
+                if (char.IsLetter(c))
+                    current.Append(c);
+            }
+            if (current.Length > 0)
+                tokens.Add(current.ToString().ToLowerInvariant());
+            return tokens;
+        }
+
+        /// <summary>
+        /// Whole-word keyword match, so "projectile" is no tile and "street" no tree. A word
+        /// matches a keyword it equals, its plural, a keyword of five or more letters it starts
+        /// with ("metallic"), or a keyword followed by another material word ("metalfloor").
+        /// Keywords with underscores match consecutive words.
+        /// </summary>
+        private static bool MatchesPbrKeyword(List<string> tokens, string[] keywords)
+        {
+            if (tokens.Count == 0)
+                return false;
+            foreach (var keyword in keywords)
+            {
+                if (keyword.IndexOf('_') >= 0)
+                {
+                    var parts = keyword.Split('_');
+                    for (int i = 0; i + parts.Length <= tokens.Count; i++)
+                    {
+                        int k = 0;
+                        while (k < parts.Length && tokens[i + k] == parts[k]) k++;
+                        if (k == parts.Length)
+                            return true;
+                    }
+                    continue;
+                }
+                foreach (var token in tokens)
+                {
+                    if (!token.StartsWith(keyword, StringComparison.Ordinal))
+                        continue;
+                    string rest = token.Substring(keyword.Length);
+                    if (rest.Length == 0 || rest == "s" || rest == "es" || keyword.Length >= 5 || PbrCompoundTails.Contains(rest))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Unity's own metallic and smoothness maps, honoured per texel through OpenRemix's PBR
+        /// remap: Standard and URP _MetallicGlossMap (red metallic, alpha smoothness x
+        /// _GlossMapScale / URP _Smoothness), specular setup _SpecGlossMap (alpha smoothness),
+        /// smoothness in the albedo's alpha (_SmoothnessTextureChannel 1), and HDRP _MaskMap (red
+        /// metallic, alpha smoothness, within their remap ranges).
+        /// </summary>
+        private void DetectUnityPbrMaps(Material material, string shaderName, ref MaterialTextureData d)
+        {
+            d.pbrMapHandle = IntPtr.Zero;
+            d.pbrMapMetallic = d.pbrMapSmoothness = d.smoothnessInAlbedoAlpha = false;
+            d.pbrMetalBias = 0f; d.pbrMetalScale = 1f;
+            d.pbrRoughBias = 0f; d.pbrRoughScale = 1f;
+            try
+            {
+                float Get(string name, float fallback) => material.HasProperty(name) ? material.GetFloat(name) : fallback;
+                Texture2D Tex(string name) => material.HasProperty(name) ? material.GetTexture(name) as Texture2D : null;
+                float smoothMin = 0f, smoothMax;
+                Texture2D map = null;
+
+                var mask = Tex("_MaskMap");
+                if (mask != null)
+                {
+                    map = mask;
+                    d.pbrMapMetallic = d.pbrMapSmoothness = true;
+                    float metalMin = Get("_MetallicRemapMin", 0f), metalMax = Get("_MetallicRemapMax", 1f);
+                    d.pbrMetalBias = metalMin;
+                    d.pbrMetalScale = metalMax - metalMin;
+                    smoothMin = Get("_SmoothnessRemapMin", 0f);
+                    smoothMax = Get("_SmoothnessRemapMax", 1f);
+                }
+                else
+                {
+                    bool urp = shaderName.IndexOf("Universal Render Pipeline", StringComparison.OrdinalIgnoreCase) >= 0;
+                    smoothMax = urp && material.HasProperty("_Smoothness") ? material.GetFloat("_Smoothness") : Get("_GlossMapScale", 1f);
+                    bool specularSetup = material.IsKeywordEnabled("_SPECULAR_SETUP") ||
+                                         shaderName.IndexOf("Specular", StringComparison.OrdinalIgnoreCase) >= 0;
+                    var metallicMap = specularSetup ? null : Tex("_MetallicGlossMap");
+                    var specMap = specularSetup ? Tex("_SpecGlossMap") : null;
+                    if (metallicMap != null)
+                    {
+                        map = metallicMap;
+                        d.pbrMapMetallic = true;
+                    }
+                    else if (specMap != null)
+                    {
+                        map = specMap;
+                    }
+                    if (material.HasProperty("_SmoothnessTextureChannel") && material.GetFloat("_SmoothnessTextureChannel") > 0.5f)
+                        d.smoothnessInAlbedoAlpha = true;
+                    else if (map != null)
+                        d.pbrMapSmoothness = true;
+                }
+
+                // roughness = 1 - smoothness = 1 - (min + (max - min) * a) = (1 - max) + (max - min) * (1 - a)
+                d.pbrRoughBias = 1f - smoothMax;
+                d.pbrRoughScale = smoothMax - smoothMin;
+                if (map != null)
+                    d.pbrMapHandle = UploadUnityTexture(map, linearData: true);
+                if (d.pbrMapHandle == IntPtr.Zero)
+                    d.pbrMapMetallic = d.pbrMapSmoothness = false;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"[PbrMaps] '{material.name}': {ex.Message}");
+                d.pbrMapHandle = IntPtr.Zero;
+                d.pbrMapMetallic = d.pbrMapSmoothness = d.smoothnessInAlbedoAlpha = false;
+            }
         }
 
         /// <summary>Albedo statistics from a 64x64 downsample (sRGB bytes / 255 unless noted).</summary>
@@ -3250,9 +3439,9 @@ namespace UnityRemix
                 IntPtr targetNormalHandle = matData.originalNormalHandle;
                 ulong targetNormalHash = matData.originalNormalTextureHash;
 
-                if (normalEnabled && matData.originalNormalHandle == IntPtr.Zero && matData.albedoTex != null)
+                if (normalEnabled && matData.originalNormalHandle == IntPtr.Zero && matData.albedoTex != null && matData.autoNormalScale > 0f)
                 {
-                    var (genHandle, genHash) = GetOrCreateAutoNormalMap(matData.albedoTex, normalStrength);
+                    var (genHandle, genHash) = GetOrCreateAutoNormalMap(matData.albedoTex, normalStrength * matData.autoNormalScale);
                     if (genHandle != IntPtr.Zero)
                     {
                         targetNormalHandle = genHandle;
@@ -3373,7 +3562,7 @@ namespace UnityRemix
                 GCHandle extHandle;
                 GCHandle emissionExtHandle = default;
                 GCHandle remapExtHandle = default;
-                IntPtr roughnessPathPtr = IntPtr.Zero;
+                IntPtr roughnessPathPtr = IntPtr.Zero, metallicPathPtr = IntPtr.Zero;
                 IntPtr extPtr;
                 IntPtr emissionExtPtr = IntPtr.Zero;
                 RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw transExt = default;
@@ -3510,29 +3699,73 @@ namespace UnityRemix
                         $"invertedBlend={opaqueExt.invertedBlend} useDrawCallAlpha={opaqueExt.useDrawCallAlphaState} " +
                         $"structSize={System.Runtime.InteropServices.Marshal.SizeOf<RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw>()}");
                     
-                    // AutoPBR roughness detail: the albedo, remapped, is the roughness map (RefineInferredPbr).
-                    if (matData.hasRoughnessDetail && matData.hasInferredPbr && ConfigAutoPBR != null && ConfigAutoPBR.Value &&
-                        albedoPath != null && albedoPath != DebugTextureHashPath)
+                    // Per-texel roughness and metallic (remixapi_MaterialPbrRemapEXT): Unity's own maps
+                    // (DetectUnityPbrMaps), else AutoPBR's roughness detail from the albedo (RefineInferredPbr).
+                    string roughnessPath = null, metallicPath = null;
+                    var roughnessChannel = new RemixAPI.remixapi_MaterialPbrChannelEXT { exponent = 1f, scale = 1f };
+                    var metallicChannel = new RemixAPI.remixapi_MaterialPbrChannelEXT { exponent = 1f, scale = 1f };
+                    bool realAlbedo = albedoPath != null && albedoPath != DebugTextureHashPath;
+                    string mapPath = GetTexturePathFromHandle(matData.pbrMapHandle);
+                    if (mapPath != null)
                     {
-                        var identity = new RemixAPI.remixapi_MaterialPbrChannelEXT { exponent = 1f, scale = 1f };
+                        bool uploaded;
+                        lock (uploadedTextureHashes) { uploaded = uploadedTextureHashes.Contains((ulong)matData.pbrMapHandle.ToInt64()); }
+                        if (!uploaded) mapPath = null;
+                    }
+                    if (mapPath != null && matData.pbrMapMetallic)
+                    {
+                        metallicPath = mapPath;
+                        metallicChannel = new RemixAPI.remixapi_MaterialPbrChannelEXT
+                        {
+                            channel = 0, exponent = 1f, bias = matData.pbrMetalBias, scale = matData.pbrMetalScale
+                        };
+                    }
+                    // The albedo's alpha is smoothness only in the texture as Unity has it, not a tinted or composited copy.
+                    bool plainAlbedo = realAlbedo && matData.albedoTex != null &&
+                                       textureHashCache.TryGetValue(matData.albedoTex.GetInstanceID(), out ulong plainHash) &&
+                                       plainHash == (ulong)matData.albedoHandle.ToInt64();
+                    string smoothnessPath = mapPath != null && matData.pbrMapSmoothness ? mapPath
+                                          : matData.smoothnessInAlbedoAlpha && plainAlbedo ? albedoPath : null;
+                    if (smoothnessPath != null)
+                    {
+                        roughnessPath = smoothnessPath;
+                        roughnessChannel = new RemixAPI.remixapi_MaterialPbrChannelEXT
+                        {
+                            channel = 3, invert = 1, exponent = 1f, bias = matData.pbrRoughBias, scale = matData.pbrRoughScale
+                        };
+                    }
+                    else if (matData.hasRoughnessDetail && matData.hasInferredPbr && ConfigAutoPBR != null && ConfigAutoPBR.Value && realAlbedo)
+                    {
+                        roughnessPath = albedoPath;
+                        roughnessChannel = new RemixAPI.remixapi_MaterialPbrChannelEXT
+                        {
+                            channel = 1, // green
+                            invert = 1,  // brighter texels smoother
+                            exponent = 1f,
+                            bias = matData.roughnessDetailBias,
+                            scale = matData.roughnessDetailScale
+                        };
+                    }
+                    if (roughnessPath != null || metallicPath != null)
+                    {
                         var remapExt = new RemixAPI.remixapi_MaterialPbrRemapEXT
                         {
                             sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT,
                             pNext = opaqueExt.pNext,
-                            roughness = new RemixAPI.remixapi_MaterialPbrChannelEXT
-                            {
-                                channel = 1, // green
-                                invert = 1,  // brighter texels smoother
-                                curve = 0,
-                                exponent = 1f,
-                                bias = matData.roughnessDetailBias,
-                                scale = matData.roughnessDetailScale
-                            },
-                            metallic = identity
+                            roughness = roughnessChannel,
+                            metallic = metallicChannel
                         };
                         remapExtHandle = GCHandle.Alloc(remapExt, GCHandleType.Pinned);
-                        roughnessPathPtr = Marshal.StringToHGlobalUni(albedoPath);
-                        opaqueExt.roughnessTexture = roughnessPathPtr;
+                        if (roughnessPath != null)
+                        {
+                            roughnessPathPtr = Marshal.StringToHGlobalUni(roughnessPath);
+                            opaqueExt.roughnessTexture = roughnessPathPtr;
+                        }
+                        if (metallicPath != null)
+                        {
+                            metallicPathPtr = Marshal.StringToHGlobalUni(metallicPath);
+                            opaqueExt.metallicTexture = metallicPathPtr;
+                        }
                         opaqueExt.pNext = remapExtHandle.AddrOfPinnedObject();
                     }
 
@@ -3602,6 +3835,7 @@ namespace UnityRemix
                     if (emissionExtHandle.IsAllocated) emissionExtHandle.Free();
                     if (remapExtHandle.IsAllocated) remapExtHandle.Free();
                     if (roughnessPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(roughnessPathPtr);
+                    if (metallicPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(metallicPathPtr);
                     extHandle.Free();
                 }
             }
