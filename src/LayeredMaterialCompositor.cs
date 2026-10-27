@@ -41,20 +41,113 @@ namespace UnityRemix
             return IsLayered(material) ? 0f : 1f;
         }
 
-        public static Texture2D Compose(Material material, int size, out string description)
+        /// <summary>
+        /// Whether upward-facing surfaces take a separate top color (_USETOPCOLOR_ON), and the
+        /// threshold on a face's up component above which they do.
+        /// </summary>
+        public static bool UsesTopColor(Material material, out float threshold)
+        {
+            threshold = 0.5f;
+            if (!IsLayered(material) || !material.IsKeywordEnabled("_USETOPCOLOR_ON") || !material.HasProperty("_TopColor"))
+                return false;
+            if (material.HasProperty("_TopColorAmount") && material.GetFloat("_TopColorAmount") <= 0.01f)
+                return false;
+            if (material.HasProperty("_TopColorRemap"))
+            {
+                var remap = material.GetVector("_TopColorRemap");
+                if (remap.y > remap.x)
+                    threshold = Mathf.Clamp((remap.x + remap.y) * 0.5f, 0.05f, 0.95f);
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The material's albedo, or with top the color of its upward-facing surfaces: the top
+        /// layers (_TopColor, _TopTex/_TopTex2 masks) blended over the albedo by _TopColorAmount.
+        /// </summary>
+        public static Texture2D Compose(Material material, int size, bool top, out string description)
         {
             var layers = new List<Layer>();
             AddLayer(material, layers, "_Color1", "_Texture1", "_Remap1", "_Triplanar1On", "_Triplanar1", "_UV1");
             AddLayer(material, layers, material.HasProperty("_Color21") ? "_Color21" : "_Color2", "_Texture2", "_Remap2", "_Triplanar2On", "_Triplanar2", "_UV2");
             AddLayer(material, layers, "_Color3", "_Texture3", "_Remap3", "_Triplanar3On", "_Triplanar3", "_UV3");
+            var topLayers = new List<Layer>();
+            if (top)
+            {
+                AddLayer(material, topLayers, "_TopColor1", "_TopTex", "_TopRemap1", "_TopTriplanar1On", "_TopTriplanar1", "_TopUV1");
+                AddLayer(material, topLayers, "_TopColor2", "_TopTex2", "_TopRemap2", "_TopTriplanar2On", "_TopTriplanar2", "_TopUV2");
+            }
 
-            Color baseColor = material.GetColor("_BaseColor");
-            Color tint = material.HasProperty("_Tint") ? material.GetColor("_Tint") : Color.white;
+            // Material colors are sRGB; textures read back linear: compose in linear.
+            bool linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
+            Color Lin(Color c) => linear ? c.linear : c;
+            for (int l = 0; l < layers.Count; l++) { var layer = layers[l]; layer.color = Lin(layer.color); layers[l] = layer; }
+            for (int l = 0; l < topLayers.Count; l++) { var layer = topLayers[l]; layer.color = Lin(layer.color); topLayers[l] = layer; }
+            Color baseColor = Lin(material.GetColor("_BaseColor"));
+            Color tint = material.HasProperty("_Tint") ? Lin(material.GetColor("_Tint")) : Color.white;
+            Color topColor = top ? Lin(material.GetColor("_TopColor")) : Color.white;
+            float topAmount = top && material.HasProperty("_TopColorAmount") ? Mathf.Clamp01(material.GetFloat("_TopColorAmount")) : 1f;
             Texture shape = material.HasProperty("_Shape") ? material.GetTexture("_Shape") : null;
+            // The UV-mapped base texture (props), scaled by its own tiling.
+            Texture baseTexture = material.HasProperty("_BaseTexture") ? material.GetTexture("_BaseTexture") : null;
+            float baseAmount = material.HasProperty("_BaseTexAmount") ? Mathf.Clamp01(material.GetFloat("_BaseTexAmount")) : 1f;
+            Color[] basePixels = baseTexture != null ? ParticleMaterialSnapshot.Read(baseTexture, size) : null;
 
             // Each layer's mask over the texture, and its mean (what a triplanar layer contributes).
-            var masks = new float[layers.Count][];
-            var means = new float[layers.Count];
+            ReadMasks(layers, size, out var masks, out var means);
+            ReadMasks(topLayers, size, out var topMasks, out var topMeans);
+            var alpha = shape != null ? ParticleMaterialSnapshot.Read(shape, size) : null;
+
+            var output = new Color32[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    int i = y * size + x;
+                    Color c = baseColor;
+                    if (basePixels != null)
+                        c *= Color.Lerp(Color.white, basePixels[i], baseAmount);
+                    c = ApplyLayers(c, layers, masks, means, x, y, size);
+                    if (top)
+                        c = Color.Lerp(c, ApplyLayers(topColor, topLayers, topMasks, topMeans, x, y, size), topAmount);
+                    c *= tint;
+                    float a = alpha != null ? alpha[i].a : 1f;
+                    if (linear)
+                        c = new Color(Mathf.LinearToGammaSpace(Mathf.Clamp01(c.r)), Mathf.LinearToGammaSpace(Mathf.Clamp01(c.g)), Mathf.LinearToGammaSpace(Mathf.Clamp01(c.b)));
+                    output[i] = new Color32((byte)(Mathf.Clamp01(c.r) * 255f + 0.5f), (byte)(Mathf.Clamp01(c.g) * 255f + 0.5f),
+                                            (byte)(Mathf.Clamp01(c.b) * 255f + 0.5f), (byte)(Mathf.Clamp01(a) * 255f + 0.5f));
+                }
+            }
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
+            {
+                name = "Layered_" + material.name,
+                wrapMode = TextureWrapMode.Repeat,
+                filterMode = FilterMode.Bilinear
+            };
+            texture.SetPixels32(output);
+            texture.Apply(true, false);
+
+            description = $"base ({baseColor.r:F2},{baseColor.g:F2},{baseColor.b:F2}){(baseTexture != null ? $" x '{baseTexture.name}' ({baseAmount:F2})" : "")} tint ({tint.r:F2},{tint.g:F2},{tint.b:F2}), " +
+                          $"layers [{DescribeLayers(layers, means)}]{(shape != null ? $", alpha from '{shape.name}'" : "")}" +
+                          (top ? $"; top ({topColor.r:F2},{topColor.g:F2},{topColor.b:F2}) x{topAmount:F2} layers [{DescribeLayers(topLayers, topMeans)}]" : "") +
+                          " (linear)";
+            return texture;
+        }
+
+        private static string DescribeLayers(List<Layer> layers, float[] means)
+        {
+            var parts = new List<string>();
+            for (int l = 0; l < layers.Count; l++)
+                parts.Add($"({layers[l].color.r:F2},{layers[l].color.g:F2},{layers[l].color.b:F2},{layers[l].color.a:F2}) {(layers[l].texture != null ? layers[l].texture.name : "none")} " +
+                          $"{(layers[l].triplanar ? "triplanar" : "uv x" + layers[l].scale.ToString("G3"))} mean {means[l]:F2}");
+            return string.Join("; ", parts);
+        }
+
+        // Each layer's mask over the texture, and its mean (what a triplanar layer contributes).
+        private static void ReadMasks(List<Layer> layers, int size, out float[][] masks, out float[] means)
+        {
+            masks = new float[layers.Count][];
+            means = new float[layers.Count];
             for (int l = 0; l < layers.Count; l++)
             {
                 var layer = layers[l];
@@ -75,52 +168,25 @@ namespace UnityRemix
                 means[l] = (float)(sum / pixels.Length);
                 masks[l] = mask;
             }
-            var alpha = shape != null ? ParticleMaterialSnapshot.Read(shape, size) : null;
+        }
 
-            var output = new Color32[size * size];
-            bool linear = QualitySettings.activeColorSpace == ColorSpace.Linear;
-            for (int y = 0; y < size; y++)
-            {
-                for (int x = 0; x < size; x++)
-                {
-                    int i = y * size + x;
-                    Color c = baseColor;
-                    for (int l = 0; l < layers.Count; l++)
-                    {
-                        var layer = layers[l];
-                        float m;
-                        if (masks[l] == null || layer.triplanar)
-                            m = means[l];
-                        else
-                        {
-                            // the layer tiles _UVn times across the texture's 0..1
-                            int sx = (int)((x * layer.scale) % size), sy = (int)((y * layer.scale) % size);
-                            m = masks[l][Mathf.Clamp(sy, 0, size - 1) * size + Mathf.Clamp(sx, 0, size - 1)];
-                        }
-                        c = Color.Lerp(c, layer.color, Mathf.Clamp01(m * layer.color.a));
-                    }
-                    c *= tint;
-                    float a = alpha != null ? alpha[i].a : 1f;
-                    if (linear)
-                        c = new Color(Mathf.LinearToGammaSpace(Mathf.Clamp01(c.r)), Mathf.LinearToGammaSpace(Mathf.Clamp01(c.g)), Mathf.LinearToGammaSpace(Mathf.Clamp01(c.b)));
-                    output[i] = new Color32((byte)(Mathf.Clamp01(c.r) * 255f + 0.5f), (byte)(Mathf.Clamp01(c.g) * 255f + 0.5f),
-                                            (byte)(Mathf.Clamp01(c.b) * 255f + 0.5f), (byte)(Mathf.Clamp01(a) * 255f + 0.5f));
-                }
-            }
-            var texture = new Texture2D(size, size, TextureFormat.RGBA32, true, false)
-            {
-                name = "Layered_" + material.name,
-                wrapMode = TextureWrapMode.Repeat,
-                filterMode = FilterMode.Bilinear
-            };
-            texture.SetPixels32(output);
-            texture.Apply(true, false);
-
-            var parts = new List<string>();
+        private static Color ApplyLayers(Color c, List<Layer> layers, float[][] masks, float[] means, int x, int y, int size)
+        {
             for (int l = 0; l < layers.Count; l++)
-                parts.Add($"{(layers[l].texture != null ? layers[l].texture.name : "none")} {(layers[l].triplanar ? "triplanar" : "uv x" + layers[l].scale.ToString("G3"))} mean {means[l]:F2}");
-            description = $"base ({baseColor.r:F2},{baseColor.g:F2},{baseColor.b:F2}) tint ({tint.r:F2},{tint.g:F2},{tint.b:F2}), layers [{string.Join("; ", parts)}]{(shape != null ? $", alpha from '{shape.name}'" : "")}";
-            return texture;
+            {
+                var layer = layers[l];
+                float m;
+                if (masks[l] == null || layer.triplanar)
+                    m = means[l];
+                else
+                {
+                    // the layer tiles _UVn times across the texture's 0..1
+                    int sx = (int)((x * layer.scale) % size), sy = (int)((y * layer.scale) % size);
+                    m = masks[l][Mathf.Clamp(sy, 0, size - 1) * size + Mathf.Clamp(sx, 0, size - 1)];
+                }
+                c = Color.Lerp(c, layer.color, Mathf.Clamp01(m * layer.color.a));
+            }
+            return c;
         }
 
         private static void AddLayer(Material material, List<Layer> layers, string colorProp, string textureProp, string remapProp,

@@ -932,6 +932,20 @@ namespace UnityRemix
             {
                 // a particle snapshot covers the quad exactly
             }
+            else if (layeredComposite)
+            {
+                // the composite is laid out in the UV-mapped base texture's space
+                if (material.HasProperty("_BaseTexture") && material.GetTexture("_BaseTexture") != null)
+                {
+                    Vector2 scale = material.GetTextureScale("_BaseTexture");
+                    Vector2 offset = material.GetTextureOffset("_BaseTexture");
+                    matData.mainTexST = new Vector4(scale.x, scale.y, offset.x, offset.y);
+                }
+                else
+                {
+                    matData.mainTexST = new Vector4(1f, 1f, 0f, 0f);
+                }
+            }
             else if (matchedTexProp != null)
             {
                 try
@@ -1269,6 +1283,10 @@ namespace UnityRemix
             
             // Store for later use
             materialTextureData[materialId] = matData;
+
+            // Upward-facing surfaces of a top-colored layered material: a variant with the top albedo.
+            if (layeredComposite && LayeredMaterialCompositor.UsesTopColor(material, out float topThreshold))
+                RegisterTopVariant(material, materialId, matData, topThreshold);
 
             // The first materials of each shader, described once: what the shader offers and what Remix got.
             if (material.shader != null)
@@ -3753,6 +3771,52 @@ namespace UnityRemix
         private readonly System.Collections.Concurrent.ConcurrentDictionary<int, float> vertexColorWeights = new System.Collections.Concurrent.ConcurrentDictionary<int, float>();
         private readonly Dictionary<int, Texture2D> layeredComposites = new Dictionary<int, Texture2D>();
 
+        // Material id -> its top-color variant (registered as its own material) and the up threshold.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, (int id, float threshold)> topVariants =
+            new System.Collections.Concurrent.ConcurrentDictionary<int, (int id, float threshold)>();
+
+        /// <summary>
+        /// For a layered material that colors upward-facing surfaces differently: the variant
+        /// material id for faces whose up component exceeds the threshold.
+        /// </summary>
+        public bool TryGetTopVariant(int materialId, out int topMaterialId, out float threshold)
+        {
+            if (topVariants.TryGetValue(materialId, out var variant))
+            {
+                topMaterialId = variant.id;
+                threshold = variant.threshold;
+                return true;
+            }
+            topMaterialId = 0;
+            threshold = 0f;
+            return false;
+        }
+
+        private void RegisterTopVariant(Material material, int materialId, MaterialTextureData baseData, float threshold)
+        {
+            try
+            {
+                var top = LayeredMaterialCompositor.Compose(material, 256, true, out string description);
+                if (top == null)
+                    return;
+                var data = baseData;
+                data.materialName = baseData.materialName + " (top)";
+                data.remixMaterialHandle = IntPtr.Zero;
+                data.albedoHandle = UploadUnityTexture(top);
+                data.albedoTextureHash = textureHashCache.TryGetValue(top.GetInstanceID(), out ulong hash) ? hash : 0;
+                data.albedoTex = top;
+                int topId = unchecked(materialId * 486187739 + 0x70C010);
+                materialTextureData[topId] = data;
+                vertexColorWeights[topId] = vertexColorWeights.TryGetValue(materialId, out float w) ? w : 1f;
+                topVariants[materialId] = (topId, threshold);
+                logger.LogInfo($"[LayeredMaterial] '{material.name}' top surfaces (up > {threshold:F2}): {description}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"[LayeredMaterial] '{material.name}' top: {ex.Message}");
+            }
+        }
+
         public float GetVertexColorWeight(int materialId)
         {
             return vertexColorWeights.TryGetValue(materialId, out float weight) ? weight : 1f;
@@ -3766,7 +3830,7 @@ namespace UnityRemix
             Texture2D composite = null;
             try
             {
-                composite = LayeredMaterialCompositor.Compose(material, 256, out string description);
+                composite = LayeredMaterialCompositor.Compose(material, 256, false, out string description);
                 logger.LogInfo($"[LayeredMaterial] '{material.name}' shader '{(material.shader != null ? material.shader.name : "-")}': {description}");
             }
             catch (Exception ex)

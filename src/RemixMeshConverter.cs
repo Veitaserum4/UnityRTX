@@ -42,6 +42,33 @@ namespace UnityRemix
             return (*(uint*)&x & 0x7F800000u) != 0x7F800000u;
         }
 
+        /// <summary>
+        /// Splits triangles by the up component of their averaged vertex normals (object space).
+        /// </summary>
+        internal static void SplitByUp(IList<uint> indices, Vector3[] normals, float threshold, out uint[] up, out uint[] other)
+        {
+            var upList = new List<uint>();
+            var otherList = new List<uint>(indices.Count);
+            for (int i = 0; i + 2 < indices.Count; i += 3)
+            {
+                uint a = indices[i], b = indices[i + 1], c = indices[i + 2];
+                float y = (normals[a].y + normals[b].y + normals[c].y) / 3f;
+                var target = y > threshold ? upList : otherList;
+                target.Add(a); target.Add(b); target.Add(c);
+            }
+            up = upList.ToArray();
+            other = otherList.ToArray();
+        }
+
+        /// <summary>White blended toward the vertex color by weight (1: the color itself).</summary>
+        internal static Color32 WeightVertexColor(Color32 c, float weight)
+        {
+            if (weight >= 1f)
+                return c;
+            return new Color32((byte)(255 + (c.r - 255) * weight), (byte)(255 + (c.g - 255) * weight),
+                               (byte)(255 + (c.b - 255) * weight), c.a);
+        }
+
         public static uint Color32ToBGRA(Color32 c)
         {
             return (uint)(c.b | (c.g << 8) | (c.r << 16) | (c.a << 24));
@@ -370,6 +397,18 @@ namespace UnityRemix
             }
 
             bool hasColors = colors != null && colors.Length == vertices.Length;
+            // Vertex colors a layered material uses as masks are not color (LayeredMaterialCompositor).
+            float vertexColorWeight = 1f;
+            for (int s = 0; s < submeshMaterials.Count; s++)
+            {
+                if (submeshMaterials[s] != null)
+                {
+                    vertexColorWeight = LayeredMaterialCompositor.VertexColorWeight(submeshMaterials[s]);
+                    break;
+                }
+            }
+            if (vertexColorWeight <= 0f)
+                hasColors = false;
 
             // Check if any surface needs UV tiling/offset applied
             bool anyNonIdentityST = false;
@@ -400,7 +439,7 @@ namespace UnityRemix
                     sharedRemixVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
                     for (int i = 0; i < vertices.Length; i++)
                     {
-                        uint col = hasColors ? Color32ToBGRA(colors[i]) : 0xFFFFFFFF;
+                        uint col = hasColors ? Color32ToBGRA(WeightVertexColor(colors[i], vertexColorWeight)) : 0xFFFFFFFF;
                         sharedRemixVerts[i] = RemixAPI.MakeVertex(
                             vertices[i].x, vertices[i].z, vertices[i].y,
                             normals[i].x, normals[i].z, normals[i].y,
@@ -446,68 +485,85 @@ namespace UnityRemix
                     if (validIndices.Count < 3)
                         continue;
 
-                    uint[] validatedIndices = validIndices.ToArray();
-                    GCHandle idxHandle = GCHandle.Alloc(validatedIndices, GCHandleType.Pinned);
-                    indexHandles.Add(idxHandle);
-
                     Material mat = (s < submeshMaterials.Count) ? submeshMaterials[s] : null;
-                    int targetMatId = (data.SubmeshMaterialIds != null && s < data.SubmeshMaterialIds.Count && data.SubmeshMaterialIds[s] != 0)
+                    int baseMatId = (data.SubmeshMaterialIds != null && s < data.SubmeshMaterialIds.Count && data.SubmeshMaterialIds[s] != 0)
                         ? data.SubmeshMaterialIds[s]
                         : (mat != null ? mat.GetInstanceID() : 0);
 
-                    IntPtr materialHandle = IntPtr.Zero;
-                    if (targetMatId != 0)
+                    // Upward-facing triangles of a top-colored material get its top variant.
+                    var parts = new List<(uint[] indices, int matId)>(2);
+                    if (baseMatId != 0 && materialManager.TryGetTopVariant(baseMatId, out int topMatId, out float topThreshold))
                     {
-                        materialHandle = materialManager.GetOrCreateMaterial(targetMatId);
-                    }
-                    if (materialHandle == IntPtr.Zero && primaryMatId != 0)
-                    {
-                        materialHandle = materialManager.GetOrCreateMaterial(primaryMatId);
-                    }
-
-                    IntPtr vertsPtr;
-                    ulong vertsCount;
-
-                    if (anyNonIdentityST)
-                    {
-                        Vector4 st = new Vector4(1, 1, 0, 0);
-                        if (targetMatId != 0)
-                            st = materialManager.GetMainTexST(targetMatId);
-
-                        var surfVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
-                        for (int i = 0; i < vertices.Length; i++)
-                        {
-                            float u = uvs[i].x * st.x + st.z;
-                            float v = uvs[i].y * st.y + st.w;
-                            uint col = hasColors ? Color32ToBGRA(colors[i]) : 0xFFFFFFFF;
-                            surfVerts[i] = RemixAPI.MakeVertex(
-                                vertices[i].x, vertices[i].z, vertices[i].y,
-                                normals[i].x, normals[i].z, normals[i].y,
-                                u, v,
-                                col
-                            );
-                        }
-                        var vHandle = GCHandle.Alloc(surfVerts, GCHandleType.Pinned);
-                        vertexHandles.Add(vHandle);
-                        vertsPtr = vHandle.AddrOfPinnedObject();
-                        vertsCount = (ulong)surfVerts.Length;
+                        SplitByUp(validIndices, normals, topThreshold, out var topIndices, out var otherIndices);
+                        if (otherIndices.Length >= 3) parts.Add((otherIndices, baseMatId));
+                        if (topIndices.Length >= 3) parts.Add((topIndices, topMatId));
                     }
                     else
                     {
-                        vertsPtr = sharedVertexHandle.AddrOfPinnedObject();
-                        vertsCount = (ulong)sharedRemixVerts.Length;
+                        parts.Add((validIndices.ToArray(), baseMatId));
                     }
 
-                    surfaces.Add(new RemixAPI.remixapi_MeshInfoSurfaceTriangles
+                    foreach (var part in parts)
                     {
-                        vertices_values = vertsPtr,
-                        vertices_count = vertsCount,
-                        indices_values = idxHandle.AddrOfPinnedObject(),
-                        indices_count = (ulong)validatedIndices.Length,
-                        skinning_hasvalue = 0,
-                        skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
-                        material = materialHandle
-                    });
+                        uint[] validatedIndices = part.indices;
+                        int targetMatId = part.matId;
+                        GCHandle idxHandle = GCHandle.Alloc(validatedIndices, GCHandleType.Pinned);
+                        indexHandles.Add(idxHandle);
+
+                        IntPtr materialHandle = IntPtr.Zero;
+                        if (targetMatId != 0)
+                        {
+                            materialHandle = materialManager.GetOrCreateMaterial(targetMatId);
+                        }
+                        if (materialHandle == IntPtr.Zero && primaryMatId != 0)
+                        {
+                            materialHandle = materialManager.GetOrCreateMaterial(primaryMatId);
+                        }
+
+                        IntPtr vertsPtr;
+                        ulong vertsCount;
+
+                        if (anyNonIdentityST)
+                        {
+                            Vector4 st = new Vector4(1, 1, 0, 0);
+                            if (targetMatId != 0)
+                                st = materialManager.GetMainTexST(targetMatId);
+
+                            var surfVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
+                            for (int i = 0; i < vertices.Length; i++)
+                            {
+                                float u = uvs[i].x * st.x + st.z;
+                                float v = uvs[i].y * st.y + st.w;
+                                uint col = hasColors ? Color32ToBGRA(WeightVertexColor(colors[i], vertexColorWeight)) : 0xFFFFFFFF;
+                                surfVerts[i] = RemixAPI.MakeVertex(
+                                    vertices[i].x, vertices[i].z, vertices[i].y,
+                                    normals[i].x, normals[i].z, normals[i].y,
+                                    u, v,
+                                    col
+                                );
+                            }
+                            var vHandle = GCHandle.Alloc(surfVerts, GCHandleType.Pinned);
+                            vertexHandles.Add(vHandle);
+                            vertsPtr = vHandle.AddrOfPinnedObject();
+                            vertsCount = (ulong)surfVerts.Length;
+                        }
+                        else
+                        {
+                            vertsPtr = sharedVertexHandle.AddrOfPinnedObject();
+                            vertsCount = (ulong)sharedRemixVerts.Length;
+                        }
+
+                        surfaces.Add(new RemixAPI.remixapi_MeshInfoSurfaceTriangles
+                        {
+                            vertices_values = vertsPtr,
+                            vertices_count = vertsCount,
+                            indices_values = idxHandle.AddrOfPinnedObject(),
+                            indices_count = (ulong)validatedIndices.Length,
+                            skinning_hasvalue = 0,
+                            skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
+                            material = materialHandle
+                        });
+                    }
                 }
 
                 if (surfaces.Count == 0)
@@ -657,6 +713,9 @@ namespace UnityRemix
             if (st.x == 0f) st.x = 1f;
             if (st.y == 0f) st.y = 1f;
             bool hasColors = colors != null && colors.Length >= sourceVertexCount;
+            float vertexColorWeight = materialManager.GetVertexColorWeight(materialId);
+            if (vertexColorWeight <= 0f)
+                hasColors = false;
             if (vertexMap != null)
             {
                 for (int i = 0; i < vertexMap.Length; i++)
@@ -697,7 +756,7 @@ namespace UnityRemix
                         d->texcoord_y = Finite(v) ? v : 0f;
                         if (hasColors)
                         {
-                            Color32 c = pCol[src];
+                            Color32 c = vertexColorWeight < 1f ? WeightVertexColor(pCol[src], vertexColorWeight) : pCol[src];
                             d->color = (uint)(c.b | (c.g << 8) | (c.r << 16) | (c.a << 24));
                         }
                         else
@@ -983,12 +1042,15 @@ namespace UnityRemix
             // Build vertex array (Y-up to Z-up), applying _MainTex_ST tiling/offset
             Vector4 stSkin = materialManager.GetMainTexST(materialId);
             bool hasColors = colors != null && colors.Length == vertices.Length;
+            float vertexColorWeight = materialManager.GetVertexColorWeight(materialId);
+            if (vertexColorWeight <= 0f)
+                hasColors = false;
             var remixVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
             for (int i = 0; i < vertices.Length; i++)
             {
                 float u = uvs[i].x * stSkin.x + stSkin.z;
                 float v = uvs[i].y * stSkin.y + stSkin.w;
-                uint col = hasColors ? Color32ToBGRA(colors[i]) : 0xFFFFFFFF;
+                uint col = hasColors ? Color32ToBGRA(WeightVertexColor(colors[i], vertexColorWeight)) : 0xFFFFFFFF;
                 remixVerts[i] = RemixAPI.MakeVertex(
                     vertices[i].x, vertices[i].z, vertices[i].y,
                     normals[i].x, normals[i].z, normals[i].y,

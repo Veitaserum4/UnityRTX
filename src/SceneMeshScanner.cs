@@ -1326,58 +1326,72 @@ int queued = 0;
                     if (validIndices.Count < 3)
                         continue;
 
-                    uint[] surfIndices = validIndices.ToArray();
-
-                    GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
-                    indexHandles.Add(idxHandle);
-
-                    IntPtr materialHandle = IntPtr.Zero;
-                    if (surf.MaterialId != 0)
-                        materialHandle = materialManager.GetOrCreateMaterial(surf.MaterialId);
-                    if (materialHandle == IntPtr.Zero && data.Surfaces.Length > 0 && data.Surfaces[0].MaterialId != 0)
-                        materialHandle = materialManager.GetOrCreateMaterial(data.Surfaces[0].MaterialId);
-
-                    IntPtr vertsPtr;
-                    ulong vertsCount;
-
-                    if (anyNonIdentityST)
+                    // Upward-facing triangles of a top-colored material get its top variant.
+                    var parts = new List<(uint[] indices, int materialId)>(2);
+                    if (surf.MaterialId != 0 && materialManager.TryGetTopVariant(surf.MaterialId, out int topMaterialId, out float topThreshold))
                     {
-                        // Per-surface vertex buffer with _MainTex_ST applied
-                        var st = materialManager.GetMainTexST(surf.MaterialId);
-                        var surfVerts = new RemixAPI.remixapi_HardcodedVertex[verts.Length];
-                        for (int i = 0; i < verts.Length; i++)
-                        {
-                            float u = uvs[i].x * st.x + st.z;
-                            float v = uvs[i].y * st.y + st.w;
-                            uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(WeightVertexColor(cols[i], vertexColorWeight)) : 0xFFFFFFFF;
-                            surfVerts[i] = RemixAPI.MakeVertex(
-                                verts[i].x, verts[i].z, verts[i].y,
-                                norms[i].x, norms[i].z, norms[i].y,
-                                u, v,
-                                col
-                            );
-                        }
-                        var vHandle = GCHandle.Alloc(surfVerts, GCHandleType.Pinned);
-                        vertexHandles.Add(vHandle);
-                        vertsPtr = vHandle.AddrOfPinnedObject();
-                        vertsCount = (ulong)surfVerts.Length;
+                        RemixMeshConverter.SplitByUp(validIndices, norms, topThreshold, out var topIndices, out var otherIndices);
+                        if (otherIndices.Length >= 3) parts.Add((otherIndices, surf.MaterialId));
+                        if (topIndices.Length >= 3) parts.Add((topIndices, topMaterialId));
                     }
                     else
                     {
-                        vertsPtr = sharedVertexHandle.AddrOfPinnedObject();
-                        vertsCount = (ulong)sharedRemixVerts.Length;
+                        parts.Add((validIndices.ToArray(), surf.MaterialId));
                     }
 
-                    surfaces.Add(new RemixAPI.remixapi_MeshInfoSurfaceTriangles
+                    foreach (var (surfIndices, partMaterialId) in parts)
                     {
-                        vertices_values = vertsPtr,
-                        vertices_count = vertsCount,
-                        indices_values = idxHandle.AddrOfPinnedObject(),
-                        indices_count = (ulong)surfIndices.Length,
-                        skinning_hasvalue = 0,
-                        skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
-                        material = materialHandle
-                    });
+                        GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
+                        indexHandles.Add(idxHandle);
+
+                        IntPtr materialHandle = IntPtr.Zero;
+                        if (partMaterialId != 0)
+                            materialHandle = materialManager.GetOrCreateMaterial(partMaterialId);
+                        if (materialHandle == IntPtr.Zero && data.Surfaces.Length > 0 && data.Surfaces[0].MaterialId != 0)
+                            materialHandle = materialManager.GetOrCreateMaterial(data.Surfaces[0].MaterialId);
+
+                        IntPtr vertsPtr;
+                        ulong vertsCount;
+
+                        if (anyNonIdentityST)
+                        {
+                            // Per-surface vertex buffer with _MainTex_ST applied
+                            var st = materialManager.GetMainTexST(partMaterialId);
+                            var surfVerts = new RemixAPI.remixapi_HardcodedVertex[verts.Length];
+                            for (int i = 0; i < verts.Length; i++)
+                            {
+                                float u = uvs[i].x * st.x + st.z;
+                                float v = uvs[i].y * st.y + st.w;
+                                uint col = hasColors ? RemixMeshConverter.Color32ToBGRA(WeightVertexColor(cols[i], vertexColorWeight)) : 0xFFFFFFFF;
+                                surfVerts[i] = RemixAPI.MakeVertex(
+                                    verts[i].x, verts[i].z, verts[i].y,
+                                    norms[i].x, norms[i].z, norms[i].y,
+                                    u, v,
+                                    col
+                                );
+                            }
+                            var vHandle = GCHandle.Alloc(surfVerts, GCHandleType.Pinned);
+                            vertexHandles.Add(vHandle);
+                            vertsPtr = vHandle.AddrOfPinnedObject();
+                            vertsCount = (ulong)surfVerts.Length;
+                        }
+                        else
+                        {
+                            vertsPtr = sharedVertexHandle.AddrOfPinnedObject();
+                            vertsCount = (ulong)sharedRemixVerts.Length;
+                        }
+
+                        surfaces.Add(new RemixAPI.remixapi_MeshInfoSurfaceTriangles
+                        {
+                            vertices_values = vertsPtr,
+                            vertices_count = vertsCount,
+                            indices_values = idxHandle.AddrOfPinnedObject(),
+                            indices_count = (ulong)surfIndices.Length,
+                            skinning_hasvalue = 0,
+                            skinning_value = new RemixAPI.remixapi_MeshInfoSkinning(),
+                            material = materialHandle
+                        });
+                    }
                 }
 
                 if (surfaces.Count == 0)
