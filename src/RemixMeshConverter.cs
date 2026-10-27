@@ -26,6 +26,8 @@ namespace UnityRemix
         public List<uint[]> SubmeshIndices;
         public List<Material> SubmeshMaterials;
         public List<int> SubmeshMaterialIds;
+        // World up in the mesh's space (of the object it was prepared for): which faces are "top".
+        public Vector3 ObjectUp = Vector3.up;
     }
 
     /// <summary>
@@ -56,16 +58,18 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// Splits triangles by the up component of their averaged vertex normals (object space).
+        /// Splits triangles by how far their averaged vertex normal points along objectUp (world
+        /// up in the mesh's space: InverseTransformDirection(Vector3.up) of its object).
         /// </summary>
-        internal static void SplitByUp(IList<uint> indices, Vector3[] normals, float threshold, out uint[] up, out uint[] other)
+        internal static void SplitByUp(IList<uint> indices, Vector3[] normals, Vector3 objectUp, float threshold, out uint[] up, out uint[] other)
         {
             var upList = new List<uint>();
             var otherList = new List<uint>(indices.Count);
+            objectUp = objectUp.sqrMagnitude > 1e-8f ? objectUp.normalized : Vector3.up;
             for (int i = 0; i + 2 < indices.Count; i += 3)
             {
                 uint a = indices[i], b = indices[i + 1], c = indices[i + 2];
-                float y = (normals[a].y + normals[b].y + normals[c].y) / 3f;
+                float y = Vector3.Dot((normals[a] + normals[b] + normals[c]) / 3f, objectUp);
                 var target = y > threshold ? upList : otherList;
                 target.Add(a); target.Add(b); target.Add(c);
             }
@@ -329,6 +333,8 @@ namespace UnityRemix
                 {
                     if (NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out int[][] subTris))
                     {
+                        if (LayeredMaterialCompositor.UsesVertexColorAsColor(materials))
+                            colors = SkinnedMeshGpuReader.TryReadColors(mesh);
                         submeshIndices.Clear();
                         submeshMaterials.Clear();
                         for (int i = 0; i < subTris.Length; i++)
@@ -512,7 +518,7 @@ namespace UnityRemix
                     var parts = new List<(uint[] indices, int matId)>(2);
                     if (baseMatId != 0 && materialManager.TryGetTopVariant(baseMatId, out int topMatId, out float topThreshold))
                     {
-                        SplitByUp(validIndices, normals, topThreshold, out var topIndices, out var otherIndices);
+                        SplitByUp(validIndices, normals, data.ObjectUp, topThreshold, out var topIndices, out var otherIndices);
                         if (otherIndices.Length >= 3) parts.Add((otherIndices, baseMatId));
                         if (topIndices.Length >= 3) parts.Add((topIndices, topMatId));
                     }

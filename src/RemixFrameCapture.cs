@@ -1554,6 +1554,8 @@ namespace UnityRemix
                         {
                             if (NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out int[][] subTris))
                             {
+                                if (LayeredMaterialCompositor.UsesVertexColorAsColor(materials))
+                                    colors = SkinnedMeshGpuReader.TryReadColors(mesh);
                                 submeshIndices.Clear();
                                 submeshMaterials.Clear();
                                 for (int s = 0; s < subTris.Length; s++)
@@ -1666,7 +1668,8 @@ namespace UnityRemix
                         Colors = colors,
                         SubmeshIndices = submeshIndices,
                         SubmeshMaterials = submeshMaterials,
-                        SubmeshMaterialIds = submeshMaterialIds
+                        SubmeshMaterialIds = submeshMaterialIds,
+                        ObjectUp = renderer.transform.InverseTransformDirection(Vector3.up)
                     };
 
                     lock (meshQueueLock)

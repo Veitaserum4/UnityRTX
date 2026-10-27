@@ -46,6 +46,9 @@ namespace UnityRemix
                 return 0f;
             if (material.HasProperty("_BaseTexture") && material.GetTexture("_BaseTexture") != null)
                 return 0f;
+            // A _Shape cutout (leaves) is in mesh UVs.
+            if (material.HasProperty("_Shape") && material.GetTexture("_Shape") != null)
+                return 0f;
             var layers = new List<Layer>();
             AddLayer(material, layers, "_Color1", "_Texture1", "_Remap1", "_Triplanar1On", "_Triplanar1", "_UV1");
             AddLayer(material, layers, material.HasProperty("_Color21") ? "_Color21" : "_Color2", "_Texture2", "_Remap2", "_Triplanar2On", "_Triplanar2", "_UV2");
@@ -70,14 +73,36 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// How much of the mesh's vertex colors is color: _VertexColorAmount when the shader has it,
-        /// nothing for a layered material without it (there they are masks), else all of them.
+        /// How much of the mesh's vertex colors is color: all of them, except on a layered
+        /// material that does not say it uses them as color.
         /// </summary>
+        /// <summary>
+        /// Whether a layered material of these says its vertex colors are color: only then are a
+        /// non-readable mesh's colors read back from the GPU (elsewhere they never were).
+        /// </summary>
+        public static bool UsesVertexColorAsColor(Material[] materials)
+        {
+            if (materials == null)
+                return false;
+            foreach (var material in materials)
+            {
+                if (material != null && IsLayered(material) && VertexColorWeight(material) > 0f)
+                    return true;
+            }
+            return false;
+        }
+
         public static float VertexColorWeight(Material material)
         {
-            if (material.HasProperty("_VertexColorAmount"))
-                return Mathf.Clamp01(material.GetFloat("_VertexColorAmount"));
-            return IsLayered(material) ? 0f : 1f;
+            if (!IsLayered(material))
+                return 1f;
+            // A layered shader takes them as color only when told to (PEAK's W/Character:
+            // _UseRawVertexColor, _VertexColor); otherwise they are masks, whatever
+            // _VertexColorAmount says (PEAK's rocks: 1 with magenta masks).
+            if ((material.HasProperty("_UseRawVertexColor") && material.GetFloat("_UseRawVertexColor") > 0.5f) ||
+                (material.HasProperty("_VertexColor") && material.GetFloat("_VertexColor") > 0.5f))
+                return 1f;
+            return 0f;
         }
 
         /// <summary>
@@ -150,10 +175,10 @@ namespace UnityRemix
                     Color c = baseColor;
                     if (basePixels != null)
                         c *= Color.Lerp(Color.white, basePixels[i], baseAmount);
-                    c = ApplyLayers(c, layers, masks, means, x, y, size, reference);
+                    c = ApplyLayers(c, layers, masks, means, x, y, size, reference) * tint;
+                    // the top color is not tinted (PEAK's sand over blue-tinted rock stays sand)
                     if (top)
                         c = Color.Lerp(c, ApplyLayers(topColor, topLayers, topMasks, topMeans, x, y, size, reference), topAmount);
-                    c *= tint;
                     float a = alpha != null ? alpha[i].a : 1f;
                     if (linear)
                         c = new Color(Mathf.LinearToGammaSpace(Mathf.Clamp01(c.r)), Mathf.LinearToGammaSpace(Mathf.Clamp01(c.g)), Mathf.LinearToGammaSpace(Mathf.Clamp01(c.b)));
@@ -200,11 +225,15 @@ namespace UnityRemix
                     continue;
                 }
                 var pixels = ParticleMaterialSnapshot.Read(layer.texture, size);
+                // Grayscale masks: red; a mask kept in alpha over black (red empty): alpha.
+                double red = 0, alphaSum = 0;
+                for (int i = 0; i < pixels.Length; i++) { red += pixels[i].r; alphaSum += pixels[i].a; }
+                bool useAlpha = red / pixels.Length < 0.01 && alphaSum / pixels.Length > 0.01;
                 var mask = new float[pixels.Length];
                 double sum = 0;
                 for (int i = 0; i < pixels.Length; i++)
                 {
-                    float v = Remap(pixels[i].r, layer.remap);
+                    float v = Remap(useAlpha ? pixels[i].a : pixels[i].r, layer.remap);
                     mask[i] = v;
                     sum += v;
                 }

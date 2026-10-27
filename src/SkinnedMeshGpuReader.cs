@@ -148,6 +148,42 @@ namespace UnityRemix
             return true;
         }
 
+        /// <summary>
+        /// A non-readable mesh's vertex colors read back from its GPU vertex buffer (any format),
+        /// or null when it has none or they cannot be read.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static Color32[] TryReadColors(Mesh mesh)
+        {
+            try
+            {
+                var color = Find(mesh, VertexAttribute.Color);
+                int vertexCount = mesh.vertexCount;
+                if (!color.present || color.dimension < 3 || vertexCount == 0)
+                    return null;
+                if (!NativeMeshReader.ReadVertexBuffer(mesh, color.stream, out byte[] bytes))
+                    return null;
+                int stride = mesh.GetVertexBufferStride(color.stream);
+                if (stride <= 0 || bytes.Length < stride * vertexCount)
+                    return null;
+                var streams = new Dictionary<int, byte[]> { [color.stream] = bytes };
+                var strides = new Dictionary<int, int> { [color.stream] = stride };
+                var colors = new Color32[vertexCount];
+                for (int v = 0; v < vertexCount; v++)
+                {
+                    float r = Component(streams, strides, color, v, 0), g = Component(streams, strides, color, v, 1);
+                    float b = Component(streams, strides, color, v, 2);
+                    float a = color.dimension >= 4 ? Component(streams, strides, color, v, 3) : 1f;
+                    colors[v] = new Color(r, g, b, a);
+                }
+                return colors;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static Attribute Find(Mesh mesh, VertexAttribute attribute)
         {
             if (!mesh.HasVertexAttribute(attribute))

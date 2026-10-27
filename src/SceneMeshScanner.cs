@@ -63,6 +63,8 @@ namespace UnityRemix
             public GameObject SourceGameObject;
             public Transform SourceTransform;
             public InstanceFlags Flags;
+            // World up in the mesh's space: which faces take a top-colored material's top variant.
+            public Vector3 ObjectUp;
         }
 
         public struct InstanceData
@@ -998,7 +1000,11 @@ int queued = 0;
                         try
                         {
                             if (ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out subMeshIndices))
+                            {
                                 gpuReadbackCount++;
+                                if (LayeredMaterialCompositor.UsesVertexColorAsColor(renderer.sharedMaterials))
+                                    colors = SkinnedMeshGpuReader.TryReadColors(mesh);
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -1112,12 +1118,14 @@ int queued = 0;
                 if (!valid)
                     continue;
 
+                // Combined static-batch vertices are already in world space.
+                Vector3 objectUp = isCombinedMesh ? Vector3.up : filter.transform.InverseTransformDirection(Vector3.up);
                 // Objects with the same mesh and materials share one Remix mesh (a level places the
                 // same rock thousands of times); each keeps its own instance. Combined static-batch
                 // meshes hold per-renderer world-space slices: one mesh per object.
                 ulong meshHash = isCombinedMesh
                     ? GenerateInstanceMeshHash(mesh, filter.transform)
-                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials);
+                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials, objectUp, AnyTopVariant(surfaces));
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
 
                 if (colors != null && colors.Length > 0)
@@ -1141,6 +1149,7 @@ int queued = 0;
                         SourceGameObject = filter.gameObject,
                         SourceTransform = filter.transform,
                         Flags = DetermineInstanceFlags(filter, renderer, isCombinedMesh),
+                        ObjectUp = objectUp,
                     });
                 }
                 queued++;
@@ -1331,7 +1340,7 @@ int queued = 0;
                     var parts = new List<(uint[] indices, int materialId)>(2);
                     if (surf.MaterialId != 0 && materialManager.TryGetTopVariant(surf.MaterialId, out int topMaterialId, out float topThreshold))
                     {
-                        RemixMeshConverter.SplitByUp(validIndices, norms, topThreshold, out var topIndices, out var otherIndices);
+                        RemixMeshConverter.SplitByUp(validIndices, norms, data.ObjectUp, topThreshold, out var topIndices, out var otherIndices);
                         if (otherIndices.Length >= 3) parts.Add((otherIndices, surf.MaterialId));
                         if (topIndices.Length >= 3) parts.Add((topIndices, topMaterialId));
                     }
@@ -1443,7 +1452,20 @@ int queued = 0;
         // Persistent across sessions (no instance IDs): the mesh's name, size and a sample of its
         // vertices, and per surface its index count and its material's name, shader, main
         // texture and colors.
-        private static ulong GenerateSharedMeshHash(Mesh mesh, Vector3[] vertices, List<SubMeshSurface> surfaces, List<Material> surfaceMaterials)
+        private bool AnyTopVariant(List<SubMeshSurface> surfaces)
+        {
+            foreach (var surface in surfaces)
+            {
+                if (materialManager.TryGetTopVariant(surface.MaterialId, out _, out _))
+                    return true;
+            }
+            return false;
+        }
+
+        // orientationMatters: a top-colored material splits faces by world up, so differently
+        // turned copies (up quantized) are different meshes.
+        private static ulong GenerateSharedMeshHash(Mesh mesh, Vector3[] vertices, List<SubMeshSurface> surfaces, List<Material> surfaceMaterials,
+                                                   Vector3 objectUp, bool orientationMatters)
         {
             ulong hash = 14695981039346656037UL;
             void Mix(ulong value) { hash = (hash ^ value) * 1099511628211UL; }
@@ -1456,6 +1478,13 @@ int queued = 0;
             void MixFloat(float value) { Mix((ulong)BitConverter.ToInt32(BitConverter.GetBytes(value), 0)); }
 
             Mix(0x5348415245444D53UL); // distinct from the per-object hashes
+            if (orientationMatters)
+            {
+                var up = objectUp.normalized;
+                Mix((ulong)(long)Mathf.Round(up.x * 4f));
+                Mix((ulong)(long)Mathf.Round(up.y * 4f));
+                Mix((ulong)(long)Mathf.Round(up.z * 4f));
+            }
             MixString(mesh.name);
             Mix((ulong)vertices.Length);
             int step = Math.Max(1, vertices.Length / 16);
