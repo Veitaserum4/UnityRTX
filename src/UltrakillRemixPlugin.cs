@@ -1190,19 +1190,8 @@ namespace UnityRemix
         {
             if (System.Threading.Interlocked.Exchange(ref autoPbrChangeRequested, 0) == 0)
                 return;
+            // Materials are replaced in place (UpdateAllAutoPbrMaterials); meshes keep their handles.
             materialManager?.UpdateAllAutoPbrMaterials();
-            meshConverter?.ClearMeshCache();
-            frameCapture?.InvalidateCaches();
-            if (sceneMeshScanner != null)
-            {
-                sceneMeshScanner.ClearData();
-                renderThread?.RequestClearRetainedSceneInstances();
-                var activeScene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
-                if (activeScene.IsValid())
-                {
-                    sceneMeshScanner.OnSceneLoaded(activeScene);
-                }
-            }
         }
 
         public RemixCameraHandler CameraHandler => cameraHandler;

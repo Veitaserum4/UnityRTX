@@ -2204,10 +2204,12 @@ namespace UnityRemix
                 hash *= 1099511628211UL;
             }
 
-            // Factor in normal texture hash so variants with/without normal maps never collide
-            if (matData.normalHandle != IntPtr.Zero)
+            // Factor in the material's own normal map so variants with/without one never collide.
+            // A generated normal map (AutoNormalMaps) is left out: toggling it replaces the
+            // material under the same hash, which its meshes then pick up.
+            if (matData.originalNormalHandle != IntPtr.Zero)
             {
-                hash ^= (ulong)matData.normalHandle.ToInt64();
+                hash ^= (ulong)matData.originalNormalHandle.ToInt64();
                 hash *= 1099511628211UL;
             }
 
@@ -3401,6 +3403,7 @@ namespace UnityRemix
 
             int newPbrCount = 0;
             int newNormalCount = 0;
+            var changedIds = new List<int>();
 
             foreach (var kvp in materialTextureData.ToArray())
             {
@@ -3459,9 +3462,22 @@ namespace UnityRemix
 
                 if (changed)
                 {
-                    matData.remixMaterialHandle = IntPtr.Zero;
                     materialTextureData[kvp.Key] = matData;
+                    changedIds.Add(kvp.Key);
                 }
+            }
+
+            // Recreate the changed materials now, under their hashes: OpenRemix replaces each in
+            // place and the meshes and retained instances using it pick it up, so no mesh is
+            // rebuilt. Newly generated normal maps are uploaded first.
+            ProcessPendingTextureUploads();
+            foreach (int id in changedIds)
+            {
+                if (!materialTextureData.TryGetValue(id, out var matData))
+                    continue;
+                IntPtr handle = CreateRemixMaterialSimple(ref matData, id);
+                matData.remixMaterialHandle = handle;
+                materialTextureData[id] = matData;
             }
 
             autoPbrMaterialCount = newPbrCount;
