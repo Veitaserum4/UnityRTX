@@ -2005,7 +2005,8 @@ namespace UnityRemix
                     skinningData = null,
                     categoryFlags = catFlags,
                     uvST = uvST,
-                    bakeFrame = frameCount
+                    // The geometry is the mesh's own: uploaded once, scrolled by the draw (uvST).
+                    bakeFrame = 1
                 });
             }
         }

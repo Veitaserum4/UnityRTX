@@ -1087,7 +1087,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -1174,10 +1174,21 @@ namespace UnityRemix
                     objectPickingExt.pNext = (IntPtr)(&blendExt);
                 }
 
+                // Scrolling UVs: the mesh keeps its own, the runtime moves them (scale, offset).
+                var texcoordExt = new RemixAPI.remixapi_InstanceInfoTexcoordTransformEXT
+                {
+                    sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_TEXCOORD_TRANSFORM_EXT,
+                    pNext = (IntPtr)(&objectPickingExt),
+                    scaleX = uvTransform.HasValue ? uvTransform.Value.x : 1f,
+                    scaleY = uvTransform.HasValue ? uvTransform.Value.y : 1f,
+                    offsetX = uvTransform.HasValue ? uvTransform.Value.z : 0f,
+                    offsetY = uvTransform.HasValue ? uvTransform.Value.w : 0f
+                };
+
                 var instanceInfo = new RemixAPI.remixapi_InstanceInfo
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                    pNext = (IntPtr)(&objectPickingExt),
+                    pNext = uvTransform.HasValue ? (IntPtr)(&texcoordExt) : (IntPtr)(&objectPickingExt),
                     categoryFlags = categoryFlags,
                     mesh = meshHandle,
                     transform = transform,

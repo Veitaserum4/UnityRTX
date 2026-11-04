@@ -105,6 +105,7 @@ namespace UnityRemix
             REMIXAPI_STRUCT_TYPE_MESH_MOTION_EXT = 0x7fff1009,
             REMIXAPI_STRUCT_TYPE_MATERIAL_EMISSION_EXT = 0x7fff100a,
             REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT = 0x7fff101a,
+            REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_TEXCOORD_TRANSFORM_EXT = 0x7fff1028,
             REMIXAPI_STRUCT_TYPE_MESH_DEFORM_EXT = 0x7fff1018,
             REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT = unchecked((int)0x7fff101c),
         }
@@ -582,6 +583,18 @@ namespace UnityRemix
             public float exponent; // 0 to 15
             public float bias;
             public float scale;
+        }
+
+        /// <summary>
+        /// Optional InstanceInfo pNext: the instance's UVs become uv * scale + offset + velocity * t
+        /// (t the runtime's clock), so a scrolling texture moves without new vertices.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_InstanceInfoTexcoordTransformEXT
+        {
+            public int sType;      // REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_TEXCOORD_TRANSFORM_EXT
+            public IntPtr pNext;
+            public float scaleX, scaleY, offsetX, offsetY, velocityX, velocityY;
         }
 
         /// <summary>Optional pNext on opaque MaterialInfo: remaps its roughness and metallic maps.</summary>

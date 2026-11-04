@@ -883,6 +883,8 @@ namespace UnityRemix
         /// <summary>
         /// Render skinned meshes from frame state
         /// </summary>
+        private static readonly UnityEngine.Vector4 IdentityUvST = new UnityEngine.Vector4(1f, 1f, 0f, 0f);
+
         private uint RenderSkinnedMeshes(RemixFrameCapture.FrameState state, uint startObjectPickingValue)
         {
             if (state.skinned == null || state.skinned.Count == 0)
@@ -937,7 +939,9 @@ namespace UnityRemix
                     }
                     else
                     {
-                        // BakeMesh / dynamic mesh path: only upload vertex data when bakeFrame has advanced
+                        // BakeMesh / dynamic mesh path: only upload vertex data when bakeFrame has advanced.
+                        // Scrolling UV meshes keep their UVs; the draw's texcoord transform moves them.
+                        bool scrolling = skinned.source == RemixFrameCapture.DynamicSource.Scrolling;
                         if (!meshConverter.TryGetUpToDateSkinnedMesh(skinned.remixMeshHash, skinned.bakeFrame, out IntPtr meshHandle))
                         {
                             meshHandle = meshConverter.CreateRemixMeshFromData(
@@ -949,7 +953,7 @@ namespace UnityRemix
                                 state.frameCount,
                                 skinned.materialId,
                                 skinned.colors,
-                                skinned.uvST,
+                                scrolling ? IdentityUvST : skinned.uvST,
                                 skinned.vertexMap,
                                 skinned.usedVertexCount,
                                 skinned.usedIndexCount
@@ -981,7 +985,8 @@ namespace UnityRemix
 
                         dynUploadMs += RemixProfiler.ElapsedMs(phaseStart);
                         long drawStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId, isDynamic: true);
+                        meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId, isDynamic: true,
+                            uvTransform: scrolling ? skinned.uvST : (UnityEngine.Vector4?)null);
                         objectPickingValue++;
                         dynDrawMs += RemixProfiler.ElapsedMs(drawStart);
                         dynDraws++;

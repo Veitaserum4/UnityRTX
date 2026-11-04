@@ -75,6 +75,8 @@ Check(Marshal.OffsetOf<remixapi_CameraMediumEXT>("transmittanceMeasurementDistan
 
 Check(Marshal.SizeOf<remixapi_MaterialPbrChannelEXT>() == 24, "remixapi_MaterialPbrChannelEXT size must be 24 bytes");
 Check(Marshal.SizeOf<remixapi_MaterialPbrRemapEXT>() == 64, "remixapi_MaterialPbrRemapEXT size must be 64 bytes");
+Check(Marshal.SizeOf<remixapi_InstanceInfoTexcoordTransformEXT>() == 40, "remixapi_InstanceInfoTexcoordTransformEXT size must be 40 bytes");
+Check(Marshal.OffsetOf<remixapi_InstanceInfoTexcoordTransformEXT>("scaleX") == (IntPtr)16, "texcoord scale offset");
 Check(Marshal.OffsetOf<remixapi_MaterialPbrRemapEXT>("roughness") == (IntPtr)16, "roughness offset");
 Check(Marshal.OffsetOf<remixapi_MaterialPbrRemapEXT>("metallic") == (IntPtr)40, "metallic offset");
 
