@@ -90,7 +90,9 @@ namespace UnityRemix
                 Vertices = vertices,
                 Normals = normals,
                 UVs = uvs,
-                SubmeshIndices = new List<uint[]> { new uint[] { 0, 1, 2, 0, 2, 3 } },
+                // Wound to face +X in Remix's space (the axes swap reverses Unity's winding): a
+                // single-sided opening is seen from its front, where it opens.
+                SubmeshIndices = new List<uint[]> { new uint[] { 0, 2, 1, 0, 3, 2 } },
                 SubmeshMaterials = new List<Material> { material },
                 SubmeshMaterialIds = new List<int> { materialId }
             });
