@@ -37,11 +37,13 @@ namespace UnityRemix.Games.Ultrakill
 
         public override void OnSceneLoaded() => bloodStains.Reset();
 
-        public override bool OverrideAlphaMode(Material material, out RemixMaterialManager.AlphaMode mode, out float cutoff)
+        public override void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
         {
-            mode = RemixMaterialManager.AlphaMode.Blend;
-            cutoff = 0.05f;
-            return bloodStains.IsStainMaterial(material);
+            if (!bloodStains.IsStainMaterial(material))
+                return;
+            alphaMode = RemixMaterialManager.AlphaMode.Blend;
+            alphaCutoff = 0.05f;
+            albedoColor = UltrakillBloodStains.Tint;
         }
 
         public override bool IsDynamicObject(MeshFilter filter, Renderer renderer)

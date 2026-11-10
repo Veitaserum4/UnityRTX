@@ -34,13 +34,9 @@ namespace UnityRemix.Games
         // A single (non-additive) scene load: drop per-scene state.
         public virtual void OnSceneLoaded() { }
 
-        // Alpha mode for a material the generic detection gets wrong; false keeps it.
-        public virtual bool OverrideAlphaMode(Material material, out RemixMaterialManager.AlphaMode mode, out float cutoff)
-        {
-            mode = RemixMaterialManager.AlphaMode.Opaque;
-            cutoff = 0f;
-            return false;
-        }
+        // Corrects what the generic material capture resolved for a material (applied
+        // however the material is first captured).
+        public virtual void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor) { }
 
         // The Remix menu opened or closed (Single Window). On close, returns whether the
         // cursor locks again; null restores the lock it had when the menu opened.

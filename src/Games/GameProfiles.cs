@@ -71,15 +71,15 @@ namespace UnityRemix.Games
             return dynamic;
         }
 
-        public static bool OverrideAlphaMode(Material material, out RemixMaterialManager.AlphaMode mode, out float cutoff)
+        public static void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
         {
-            var m = RemixMaterialManager.AlphaMode.Opaque;
-            float c = 0f;
-            bool overridden = false;
-            Run(nameof(OverrideAlphaMode), p => overridden = p.OverrideAlphaMode(material, out m, out c));
-            mode = m;
-            cutoff = c;
-            return overridden;
+            var mode = alphaMode;
+            float cutoff = alphaCutoff;
+            var color = albedoColor;
+            Run(nameof(OverrideMaterial), p => p.OverrideMaterial(material, ref mode, ref cutoff, ref color));
+            alphaMode = mode;
+            alphaCutoff = cutoff;
+            albedoColor = color;
         }
 
         public static bool? OnRemixMenu(bool open)

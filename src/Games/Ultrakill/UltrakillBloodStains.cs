@@ -17,6 +17,10 @@ namespace UnityRemix.Games.Ultrakill
         private const int MeshId = 0x7B100D01;
         private const ulong MeshHash = 0x7B100D0000000001UL;
 
+        // Albedo color of the stain material: ULTRAKILL's stain shader colors the splatter
+        // atlas itself, which Remix doesn't run.
+        public static readonly Color Tint = new Color(0.70f, 0.02f, 0.02f, 0.75f);
+
         private bool reflected;
         private Type managerType;
         private FieldInfo countField, meshField, materialField, usedComputeField, meshDirtyField;
@@ -84,19 +88,11 @@ namespace UnityRemix.Games.Ultrakill
                 version++;
             }
 
+            // The scene scan may capture this material first (its fallback quad): the tint and
+            // blending come from UltrakillProfile.OverrideMaterial either way.
             int materialId = stainMaterial != null ? stainMaterial.GetInstanceID() : MeshId;
             if (stainMaterial != null)
-            {
-                Texture2D texture = null;
-                if (stainMaterial.HasProperty("_SplatterAtlas"))
-                    texture = stainMaterial.GetTexture("_SplatterAtlas") as Texture2D;
-                else if (stainMaterial.HasProperty("_MainTex"))
-                    texture = stainMaterial.GetTexture("_MainTex") as Texture2D;
-
-                materials.CaptureMaterialTextures(stainMaterial, materialId,
-                    mpbMainTex: texture,
-                    mpbColor: new Color(0.70f, 0.02f, 0.02f, 0.75f));
-            }
+                materials.CaptureMaterialTextures(stainMaterial, materialId);
 
             state.skinned.Add(new RemixFrameCapture.SkinnedMeshData
             {
