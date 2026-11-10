@@ -52,7 +52,8 @@ namespace UnityRemix
             var shader = Shader.Find("Unlit/Color") ?? Shader.Find("UI/Default") ?? Shader.Find("Standard");
             for (int index = 0; index < SlotPairs * 2; index++)
             {
-                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.black };
+                // Magenta: seen only where a portal is drawn but does not open (diagnostic).
+                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.magenta };
                 int materialId = MaterialIdBase - index;
                 materials.SetRayPortalIndex(materialId, index);
                 materials.CaptureMaterialTextures(material, materialId);
@@ -96,6 +97,42 @@ namespace UnityRemix
             {
                 if (DrawPortal(meshes, camera, portals[i], pair, ref objectPickingValue))
                     pair++;
+            }
+            ReportOnce(pair);
+        }
+
+        // Diagnostic: once portals have been drawn for a while, OpenRemix's timings report
+        // (openremix/timings.request -> timings.txt) gives its "# ray portals" line: surfaces,
+        // open pairs, whether camera rays are traced through them. Logged.
+        private int drawnFrames, reportFrame = -1;
+
+        private void ReportOnce(int pairs)
+        {
+            if (pairs == 0 || reportFrame == int.MaxValue)
+                return;
+            ++drawnFrames;
+            string dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "openremix");
+            try
+            {
+                if (reportFrame < 0 && drawnFrames >= 300)
+                {
+                    System.IO.Directory.CreateDirectory(dir);
+                    System.IO.File.WriteAllText(System.IO.Path.Combine(dir, "timings.request"), "");
+                    reportFrame = drawnFrames;
+                }
+                else if (reportFrame >= 0 && drawnFrames >= reportFrame + 120)
+                {
+                    reportFrame = int.MaxValue;
+                    string path = System.IO.Path.Combine(dir, "timings.txt");
+                    foreach (var line in System.IO.File.ReadAllLines(path))
+                        if (line.StartsWith("# ray portals") || line.StartsWith("render "))
+                            logger.LogInfo($"[Portal] OpenRemix: {line} ({System.IO.File.GetLastWriteTime(path):HH:mm:ss})");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                reportFrame = int.MaxValue;
+                logger.LogInfo($"[Portal] OpenRemix report: {ex.Message}");
             }
         }
 
@@ -147,6 +184,10 @@ namespace UnityRemix
             var t1 = portal.exit * face * size;
             meshes.DrawMeshInstance(entrance, t0, objectPickingValue++, 0, OpeningMeshKey(entranceIndex), isDynamic: true);
             meshes.DrawMeshInstance(exit, t1, objectPickingValue++, 0, OpeningMeshKey(exitIndex), isDynamic: true);
+            if (drawnFrames % 600 == 1)
+                logger.LogInfo($"[Portal] pair {pair} = portal {portal.id}: camera {Mathf.Sqrt((camera.position - nearPos).sqrMagnitude):F1} m from its {(nearEntry ? "entry" : "exit")} " +
+                               $"(facing {(face == FacePlusZ ? "+Z" : "-Z")}), entry opening centre {t0.MultiplyPoint3x4(Vector3.zero)} normal {t0.MultiplyVector(Vector3.right).normalized}, " +
+                               $"exit opening centre {t1.MultiplyPoint3x4(Vector3.zero)} normal {t1.MultiplyVector(Vector3.right).normalized}");
             if (loggedPortals.Add(portal.id))
                 logger.LogInfo($"[Portal] portal {portal.id} as pair {pair}: entry {entryPos}, exit {exitPos}, {portal.width:F2} x {portal.height:F2}");
             return true;
