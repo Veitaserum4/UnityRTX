@@ -935,7 +935,7 @@ namespace UnityRemix
             mainPhaseSw.Restart();
             debugHUD?.UpdateSnapshot();
             if (lookAt == null) lookAt = new LookAtDiagnostics(LogSource);
-            lookAt.Update(cameraHandler != null ? cameraHandler.GetPreferredCamera() : Camera.main, frameCapture, sceneMeshScanner, frameCount);
+            lookAt.Update(cameraHandler != null ? cameraHandler.GetPreferredCamera() : Camera.main, frameCapture, sceneMeshScanner, materialManager, frameCount);
             hudMs = mainPhaseSw.Elapsed.TotalMilliseconds;
 
             double totalMs = mainTotalSw.Elapsed.TotalMilliseconds;

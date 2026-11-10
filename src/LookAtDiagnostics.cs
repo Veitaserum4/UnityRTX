@@ -22,15 +22,17 @@ namespace UnityRemix
         private bool unavailable;
         private int lastTarget, lastDrawn;
         private SceneMeshScanner scanner;
+        private RemixMaterialManager materials;
 
         public LookAtDiagnostics(ManualLogSource logger)
         {
             this.logger = logger;
         }
 
-        public void Update(Camera camera, RemixFrameCapture capture, SceneMeshScanner scanner, int frameCount)
+        public void Update(Camera camera, RemixFrameCapture capture, SceneMeshScanner scanner, RemixMaterialManager materials, int frameCount)
         {
             this.scanner = scanner;
+            this.materials = materials;
             if (camera == null || frameCount % 120 != 0)
                 return;
             var ray = new Ray(camera.transform.position, camera.transform.forward);
@@ -114,7 +116,7 @@ namespace UnityRemix
             return scanned != null ? $"{text} ||| scanned as {scanned}" : text;
         }
 
-        private static string DescribeLive(Renderer renderer)
+        private string DescribeLive(Renderer renderer)
         {
             if (renderer == null)
                 return "no renderer";
@@ -133,9 +135,17 @@ namespace UnityRemix
             for (int i = 0; mats != null && i < mats.Length; i++)
             {
                 var m = mats[i];
-                text += m != null ? $" | material {i} '{m.name}' shader '{(m.shader != null ? m.shader.name : "-")}' id {StaticGeometryDedupe.GetCanonicalMaterialId(m)}" : $" | material {i} none";
+                text += m != null ? $" | material {i} '{m.name}' shader '{(m.shader != null ? m.shader.name : "-")}' id {StaticGeometryDedupe.GetCanonicalMaterialId(m)} queue {m.renderQueue}{Properties(m)}" : $" | material {i} none";
             }
             return text;
+        }
+
+        // Keywords and properties of a live material (when the material manager is known).
+        private string Properties(Material m)
+        {
+            if (materials == null) return "";
+            try { return $" keywords [{string.Join(" ", m.shaderKeywords)}] {{{materials.DescribeMaterialProperties(m)}}}"; }
+            catch { return ""; }
         }
 
         private static string Path(Transform t)
