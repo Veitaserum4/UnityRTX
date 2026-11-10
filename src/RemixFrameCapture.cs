@@ -2717,7 +2717,7 @@ namespace UnityRemix
         private readonly List<Canvas> worldCanvases = new List<Canvas>();
         private readonly List<Graphic> worldCanvasGraphics = new List<Graphic>();
         private readonly HashSet<int> loggedWorldCanvases = new HashSet<int>();
-        private int worldCanvasRefreshFrame = int.MinValue;
+        private int worldCanvasRefreshFrame = -1000000;
         private const float WorldScreenMaxDistance = 80f;
 
         private void UncullWeaponScreens()
