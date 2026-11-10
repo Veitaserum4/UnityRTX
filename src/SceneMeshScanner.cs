@@ -136,11 +136,18 @@ namespace UnityRemix
             set => scanActiveOnly = value;
         }
 
+        // Per frame: also the layers no game camera draws and the user's disabled layers,
+        // which can change while the instance stays scanned.
         public bool IsLayerExcluded(int layer)
         {
             if (isLayerDisabled != null && isLayerDisabled(layer))
                 return true;
+            return IsLayerNeverRendered(layer);
+        }
 
+        // Scan time: layers never worth reading (a skipped filter is not rescanned).
+        private static bool IsLayerNeverRendered(int layer)
+        {
             // Safety fallback exclusions for standard non-rendered geometry in ULTRAKILL / Unity:
             // Layer 5: UI
             // Layer 16: Invisible (triggers, blockers, collision brushes)
@@ -880,7 +887,7 @@ int queued = 0;
                 }
 
                 // Skip non-rendered layers (Invisible collision brushes, PlayerOnly, GroundCheck, Portal, UI, etc.)
-                if (IsLayerExcluded(filter.gameObject.layer))
+                if (IsLayerNeverRendered(filter.gameObject.layer))
                 {
                     skippedLayer++;
                     scannedFilterIds.Add(filterId);

@@ -811,6 +811,8 @@ namespace UnityRemix
                 
                 // Capture static meshes and camera
                 mainPhaseSw.Restart();
+                if (frameCount % 30 == 1 && framebufferPresenter != null)
+                    frameCapture.SetGameLayerMask(framebufferPresenter.GameLayerMask());
                 try
                 {
                     frameCapture.CaptureStaticMeshes(nextState, frameCount);

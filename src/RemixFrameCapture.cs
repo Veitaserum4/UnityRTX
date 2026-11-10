@@ -221,8 +221,29 @@ namespace UnityRemix
         /// <summary>
         /// Check if a layer is user-disabled.
         /// </summary>
+        // Layers some game camera draws (SetGameLayerMask); others hold trigger volumes and
+        // helper geometry the game never shows. -1 until known.
+        private volatile int gameLayerMask = -1;
+
+        public void SetGameLayerMask(int mask)
+        {
+            if (mask == 0) mask = -1;
+            if (mask == gameLayerMask) return;
+            gameLayerMask = mask;
+            var hidden = new List<string>();
+            for (int layer = 0; layer < 32; layer++)
+            {
+                string name = LayerMask.LayerToName(layer);
+                if ((mask & (1 << layer)) == 0 && !string.IsNullOrEmpty(name))
+                    hidden.Add($"{name}({layer})");
+            }
+            logger.LogInfo($"[Layers] Game cameras draw 0x{mask:X8}; not captured: {(hidden.Count > 0 ? string.Join(", ", hidden) : "none")}");
+        }
+
         public bool IsLayerDisabled(int layerIndex)
         {
+            if ((uint)layerIndex < 32 && (gameLayerMask & (1 << layerIndex)) == 0)
+                return true;
             lock (_disabledLock)
             {
                 return _disabledLayers.Contains(layerIndex);
