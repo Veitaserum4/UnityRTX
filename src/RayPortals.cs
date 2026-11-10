@@ -23,7 +23,7 @@ namespace UnityRemix
     ///   XY plane, normal +Z, travel exit diag(-1, 1, -1) entry^-1): a quarter turn about y puts
     ///   Remix's +X on the game's +Z (it commutes with the flip, as does the opening's scale).
     ///   Remix opens a portal from its front only: both ends face the side of the nearer end
-    ///   the camera is on, and are single-sided (seen from behind, what is behind them).
+    ///   the camera is on.
     /// </summary>
     internal sealed class RayPortals
     {
@@ -209,10 +209,10 @@ namespace UnityRemix
             var size = Matrix4x4.Scale(new Vector3(1f, portal.height, portal.width));
             var t0 = portal.entry * face * size;
             var t1 = portal.exit * face * size;
-            // Single-sided: from behind, an opening shows what is behind it (as the game's do),
-            // not its own surface.
-            meshes.DrawMeshInstance(entrance, t0, objectPickingValue++, 0, OpeningMeshKey(entranceIndex), isDynamic: true, doubleSided: false);
-            meshes.DrawMeshInstance(exit, t1, objectPickingValue++, 0, OpeningMeshKey(exitIndex), isDynamic: true, doubleSided: false);
+            // Double-sided: one-sided openings were not drawn by the raster G-buffer from the
+            // side they open on (its winding convention against the tracer's is untested).
+            meshes.DrawMeshInstance(entrance, t0, objectPickingValue++, 0, OpeningMeshKey(entranceIndex), isDynamic: true);
+            meshes.DrawMeshInstance(exit, t1, objectPickingValue++, 0, OpeningMeshKey(exitIndex), isDynamic: true);
             if (drawnFrames % 600 == 1)
                 logger.LogInfo($"[Portal] pair {pair} = portal {portal.id}: camera {Mathf.Sqrt((camera.position - nearPos).sqrMagnitude):F1} m from its {(nearEntry ? "entry" : "exit")} " +
                                $"(facing {(face == FacePlusZ ? "+Z" : "-Z")}), entry opening centre {t0.MultiplyPoint3x4(Vector3.zero)} normal {t0.MultiplyVector(Vector3.right).normalized}, " +
