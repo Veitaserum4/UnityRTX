@@ -963,6 +963,54 @@ namespace UnityRemix
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         public delegate remixapi_ErrorCode PFN_remixapi_DrawSceneInstancesEXT(IntPtr origin);
 
+        // remix_bake_ext.h: the static scene Forward+ bakes its lightmaps and probes from.
+        public const uint REMIXAPI_BAKE_SCENE_VERSION_EXT = 1;
+        public const uint REMIXAPI_BAKE_SCENE_LOADING_EXT = 0;
+        public const uint REMIXAPI_BAKE_SCENE_READY_EXT = 1;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_BakeSceneInfoEXT
+        {
+            public uint structSize, version;
+            public ulong sceneId, revision; // nonzero map identity, host input revision
+            public float sceneScale;        // metres per world unit
+            public uint state;
+            public uint instanceCount, lightCount;
+            public IntPtr instances;        // const uint64_t* (AddSceneInstancesEXT handles)
+            public IntPtr lights;           // const remixapi_LightHandle*
+        }
+
+        public const uint REMIXAPI_BAKE_WAITING_EXT = 0, REMIXAPI_BAKE_PREPARING_EXT = 1, REMIXAPI_BAKE_TRACING_EXT = 2,
+            REMIXAPI_BAKE_READY_EXT = 3, REMIXAPI_BAKE_FAILED_EXT = 4, REMIXAPI_BAKE_UNSUPPORTED_EXT = 5, REMIXAPI_BAKE_DISABLED_EXT = 6;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public unsafe struct remixapi_BakeStatisticsEXT
+        {
+            public uint structSize, state, supported, active;
+            public ulong requestedScene, requestedHash, activeHash;
+            public uint probes, completed, samples, bounces;
+            public ulong memoryBytes;
+            public fixed byte status[192];
+            public uint reflectionRequested, reflectionPending, reflectionActive, reflectionFailed;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public unsafe struct remixapi_BackendCapabilitiesEXT
+        {
+            public uint structSize, supportedBackends, activeBackend, requestedBackend;
+            public fixed byte unavailableReason[256];
+        }
+        public const uint REMIXAPI_BACKEND_FORWARD_PLUS = 2;
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_SetBakeSceneEXT(IntPtr info);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetBakeStatisticsEXT(ref remixapi_BakeStatisticsEXT statistics);
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_GetBackendCapabilitiesEXT(ref remixapi_BackendCapabilitiesEXT capabilities);
+
         #endregion
 
         #region Interface Struct
@@ -1088,6 +1136,9 @@ namespace UnityRemix
         public static PFN_remixapi_ChangeSceneInstancesEXT ChangeSceneInstancesEXTFunc { get; private set; }
         public static PFN_remixapi_RemoveSceneInstancesEXT RemoveSceneInstancesEXTFunc { get; private set; }
         public static PFN_remixapi_DrawSceneInstancesEXT DrawSceneInstancesEXTFunc { get; private set; }
+        public static PFN_remixapi_SetBakeSceneEXT SetBakeSceneEXTFunc { get; private set; }
+        public static PFN_remixapi_GetBakeStatisticsEXT GetBakeStatisticsEXTFunc { get; private set; }
+        public static PFN_remixapi_GetBackendCapabilitiesEXT GetBackendCapabilitiesEXTFunc { get; private set; }
 
         public static bool HasRetainedSceneInstancesEXT => 
             AddSceneInstancesEXTFunc != null && 
@@ -1206,6 +1257,16 @@ namespace UnityRemix
             IntPtr removeSceneInstPtr = GetProcAddress(hModule, "remixapi_RemoveSceneInstancesEXT");
             if (removeSceneInstPtr != IntPtr.Zero)
                 RemoveSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_RemoveSceneInstancesEXT>(removeSceneInstPtr);
+
+            IntPtr setBakeScenePtr = GetProcAddress(hModule, "remixapi_SetBakeSceneEXT");
+            if (setBakeScenePtr != IntPtr.Zero)
+                SetBakeSceneEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_SetBakeSceneEXT>(setBakeScenePtr);
+            IntPtr bakeStatsPtr = GetProcAddress(hModule, "remixapi_GetBakeStatisticsEXT");
+            if (bakeStatsPtr != IntPtr.Zero)
+                GetBakeStatisticsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetBakeStatisticsEXT>(bakeStatsPtr);
+            IntPtr backendCapsPtr = GetProcAddress(hModule, "remixapi_GetBackendCapabilitiesEXT");
+            if (backendCapsPtr != IntPtr.Zero)
+                GetBackendCapabilitiesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_GetBackendCapabilitiesEXT>(backendCapsPtr);
 
             IntPtr drawSceneInstPtr = GetProcAddress(hModule, "remixapi_DrawSceneInstancesEXT");
             if (drawSceneInstPtr != IntPtr.Zero)
@@ -1344,6 +1405,9 @@ namespace UnityRemix
             ChangeSceneInstancesEXTFunc = null;
             RemoveSceneInstancesEXTFunc = null;
             DrawSceneInstancesEXTFunc = null;
+            SetBakeSceneEXTFunc = null;
+            GetBakeStatisticsEXTFunc = null;
+            GetBackendCapabilitiesEXTFunc = null;
             SetFogStateFunc = null;
             GetUIStateFunc = null;
             SetUIStateFunc = null;

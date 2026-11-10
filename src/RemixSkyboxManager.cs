@@ -292,6 +292,10 @@ namespace UnityRemix
         /// <summary>
         /// Called per-frame on the render thread to draw the native Remix Dome Light.
         /// </summary>
+        /// <summary>The dome light drawn this frame, or zero (render thread).</summary>
+        public IntPtr DrawnDomeLight =>
+            configEnableSkybox != null && !configEnableSkybox.Value ? IntPtr.Zero : currentDomeLightHandle;
+
         public void DrawSkyLight(int frameCount)
         {
             if (configEnableSkybox != null && !configEnableSkybox.Value)
@@ -856,7 +860,8 @@ namespace UnityRemix
                     pNext = domeHandle.AddrOfPinnedObject(),
                     hash = 0x534B59444F4D4500UL | (ulong)(uint)(skyboxVersion & 0xFF),
                     radiance = new RemixAPI.remixapi_Float3D(1.0f, 1.0f, 1.0f),
-                    isDynamic = 1,
+                    // A new sky makes a new light: static, so a Forward+ bake can include it.
+                    isDynamic = 0,
                     ignoreViewModel = 1,
                     ignoreFirstPersonPlayerShadow = 1
                 };

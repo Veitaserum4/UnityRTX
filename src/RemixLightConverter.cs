@@ -22,6 +22,8 @@ namespace UnityRemix
         public Vector3 forward;
         public float spotAngle;
         public string name;
+        // Part of the level (not a spawned clone): may become a static, bakeable light once settled.
+        public bool bakeable;
     }
 
     /// <summary>
@@ -45,6 +47,19 @@ namespace UnityRemix
         private readonly Dictionary<int, IntPtr> lightCache = new Dictionary<int, IntPtr>();
         private readonly Dictionary<int, UnityLightData> lastSubmittedLightData = new Dictionary<int, UnityLightData>();
         private float lastSubmittedIntensityMultiplier = -1f;
+
+        // Static lights: a level light unchanged for LightSettleFrames is recreated with
+        // isDynamic = 0, so Forward+ can bake it and the path tracer keeps it in its static
+        // light tree. One that changes after that (a lamp on something that moved) stays
+        // dynamic for the rest of the scene, so it cannot invalidate the bake over and over.
+        private const int LightSettleFrames = 120;
+        private struct LightState
+        {
+            public int changedFrame;
+            public bool isStatic, demoted;
+            public LightType type;
+        }
+        private readonly Dictionary<int, LightState> lightStates = new Dictionary<int, LightState>();
         private readonly HashSet<int> reusableActiveLightIds = new HashSet<int>();
         private readonly List<int> reusableLightsToRemove = new List<int>();
 
@@ -56,6 +71,7 @@ namespace UnityRemix
             public int instanceId;
             public ulong hash;
             public string name;
+            public bool bakeable;
         }
         private readonly List<CachedSceneLight> cachedSceneLights = new List<CachedSceneLight>(64);
         private readonly HashSet<int> cachedSceneLightIds = new HashSet<int>();
@@ -155,7 +171,8 @@ namespace UnityRemix
                     position = t.position,
                     forward = t.forward,
                     spotAngle = l.spotAngle,
-                    name = entry.name
+                    name = entry.name,
+                    bakeable = entry.bakeable
                 });
             }
 
@@ -193,7 +210,8 @@ namespace UnityRemix
                     transform = t,
                     instanceId = id,
                     hash = hash,
-                    name = l.name
+                    name = l.name,
+                    bakeable = !path.Contains("(Clone)")
                 });
             }
         }
@@ -221,6 +239,7 @@ namespace UnityRemix
                 }
                 lightCache.Clear();
                 lastSubmittedLightData.Clear();
+                lightStates.Clear();
                 lastSubmittedIntensityMultiplier = -1f;
             }
 
@@ -267,6 +286,7 @@ namespace UnityRemix
                         }
                         lightCache.Clear();
                         lastSubmittedLightData.Clear();
+                        lightStates.Clear();
                     }
                 }
                 return;
@@ -299,19 +319,48 @@ namespace UnityRemix
 
                     IntPtr lightHandle;
                     bool hasExisting = lightCache.TryGetValue(lightData.instanceId, out lightHandle) && lightHandle != IntPtr.Zero;
-                    bool needsRecreate = !hasExisting || multiplierChanged ||
-                                         !lastSubmittedLightData.TryGetValue(lightData.instanceId, out var prevData) ||
-                                         !LightDataEquals(in lightData, in prevData);
+                    bool dataChanged = !hasExisting ||
+                                       !lastSubmittedLightData.TryGetValue(lightData.instanceId, out var prevData) ||
+                                       !LightDataEquals(in lightData, in prevData);
 
-                    if (needsRecreate)
+                    lightStates.TryGetValue(lightData.instanceId, out var state);
+                    bool makeStatic = false;
+                    if (dataChanged)
                     {
-                        lightHandle = CreateRemixLightFromData(ref lightData, frameCount);
-                        if (lightHandle != IntPtr.Zero)
+                        // A static light that changes in place is not a fixed level light after all.
+                        if (state.isStatic && hasExisting)
+                            state.demoted = true;
+                        state.isStatic = false;
+                        state.changedFrame = frameCount;
+                    }
+                    else if (!state.isStatic && !state.demoted && lightData.bakeable &&
+                             frameCount - state.changedFrame >= LightSettleFrames)
+                    {
+                        makeStatic = true;
+                    }
+
+                    if (dataChanged || makeStatic || multiplierChanged)
+                    {
+                        // Recreated: the old handle is destroyed once the new one exists.
+                        bool isStatic = makeStatic || state.isStatic;
+                        IntPtr created = CreateRemixLightFromData(ref lightData, frameCount, isStatic);
+                        if (created != IntPtr.Zero)
                         {
+                            if (hasExisting && destroyLightFunc != null)
+                            {
+                                lock (apiLock)
+                                {
+                                    try { destroyLightFunc(lightHandle); } catch { }
+                                }
+                            }
+                            lightHandle = created;
                             lightCache[lightData.instanceId] = lightHandle;
                             lastSubmittedLightData[lightData.instanceId] = lightData;
+                            state.isStatic = isStatic;
                         }
                     }
+                    state.type = lightData.type;
+                    lightStates[lightData.instanceId] = state;
 
                     if (lightHandle != IntPtr.Zero)
                     {
@@ -345,6 +394,12 @@ namespace UnityRemix
                     int remId = reusableLightsToRemove[i];
                     lightCache.Remove(remId);
                     lastSubmittedLightData.Remove(remId);
+                    // Keeps its demotion; settles again when it comes back.
+                    if (lightStates.TryGetValue(remId, out var removed))
+                    {
+                        removed.isStatic = false;
+                        lightStates[remId] = removed;
+                    }
                 }
             }
         }
@@ -352,7 +407,30 @@ namespace UnityRemix
         /// <summary>
         /// Create Remix light from Unity light snapshot
         /// </summary>
-        private IntPtr CreateRemixLightFromData(ref UnityLightData light, int frameCount)
+        /// <summary>
+        /// The static lights drawn this frame (render thread): local lights, and at most one
+        /// directional light (a bake scene holds one sun).
+        /// </summary>
+        public void GetStaticLights(List<IntPtr> output)
+        {
+            lock (cacheLock)
+            {
+                bool sun = false;
+                foreach (var kvp in lightCache)
+                {
+                    if (kvp.Value == IntPtr.Zero || !lightStates.TryGetValue(kvp.Key, out var state) || !state.isStatic)
+                        continue;
+                    if (state.type == LightType.Directional)
+                    {
+                        if (sun) continue;
+                        sun = true;
+                    }
+                    output.Add(kvp.Value);
+                }
+            }
+        }
+
+        private IntPtr CreateRemixLightFromData(ref UnityLightData light, int frameCount, bool isStatic)
         {
             if (createLightFunc == null)
                 return IntPtr.Zero;
@@ -370,7 +448,7 @@ namespace UnityRemix
                     pNext = IntPtr.Zero,
                     hash = light.hash,
                     radiance = radiance,
-                    isDynamic = 1,
+                    isDynamic = isStatic ? 0u : 1u,
                     ignoreViewModel = 0
                 };
                 

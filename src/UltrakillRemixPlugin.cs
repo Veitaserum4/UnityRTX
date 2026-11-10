@@ -42,6 +42,7 @@ namespace UnityRemix
         private ConfigEntry<int> configTargetFPS;
         private ConfigEntry<string> configNativeBackend;
         private ConfigEntry<bool> configOpenRemixAsyncPresent;
+        private ConfigEntry<bool> configBakeLighting;
         private ConfigEntry<bool> configOpenRemixShadowEarlyOut;
         private ConfigEntry<bool> configOpenRemixKeepCompressed;
         private ConfigEntry<bool> configOpenRemixRefreshInPlace;
@@ -182,7 +183,10 @@ namespace UnityRemix
 
             configNativeBackend = Config.Bind("Native", "Backend", "raster",
                 new ConfigDescription("openremix rendering backend. Restart the game after changing this setting.",
-                    new AcceptableValueList<string>("raster", "pathtrace")));
+                    new AcceptableValueList<string>("raster", "pathtrace", "forwardplus")));
+
+            configBakeLighting = Config.Bind("Native", "BakeLighting", true,
+                "Forward+ only: publish the level's static geometry, settled lights and sky so Forward+ bakes lightmaps, probes and reflection captures. Off: live lighting only.");
 
             configOpenRemixAsyncPresent = Config.Bind("Native", "AsyncPresent", true,
                 "Decouple frame recording from GPU presentation (massive frame rate and pacing improvement).");
@@ -397,6 +401,7 @@ namespace UnityRemix
                 frameCapture?.InvalidateCaches();
                 lightConverter?.ClearCache();
                 sceneMeshScanner?.ClearData();
+                renderThread?.SetBakeSceneName(scene.name);
                 renderThread?.RequestClearRetainedSceneInstances();
                 Games.GameProfiles.OnSceneLoaded();
                 PrimitiveDiagnostics.Clear();
@@ -597,6 +602,8 @@ namespace UnityRemix
             // Give render thread access to scene mesh scanner and skybox manager
             renderThread.SetSceneMeshScanner(sceneMeshScanner);
             renderThread.SetSkyboxManager(skyboxManager);
+            renderThread.SetBakeLighting(configBakeLighting);
+            renderThread.SetBakeSceneName(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
 
             terrainManager = new RemixTerrainManager(
                 LogSource,

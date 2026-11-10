@@ -72,7 +72,37 @@ namespace UnityRemix
             public IntPtr MeshHandle;
             public RemixAPI.remixapi_Transform Transform;
             public bool Visible;
+            public bool Moved;
             public uint LastSeenFrame;
+        }
+
+        // Forward+ bake scene (static instances and lights), checked every few frames.
+        private RemixBakeScene bakeScene;
+        private BepInEx.Configuration.ConfigEntry<bool> configBakeLighting;
+        private readonly List<ulong> bakeInstances = new List<ulong>(4096);
+        private readonly List<IntPtr> bakeLights = new List<IntPtr>(128);
+
+        public void SetBakeLighting(BepInEx.Configuration.ConfigEntry<bool> enabled) => configBakeLighting = enabled;
+
+        /// <summary>Main thread, on a single scene load.</summary>
+        public void SetBakeSceneName(string name) => bakeScene?.SetSceneName(name);
+
+        private void CheckBakeScene(int frameNum)
+        {
+            if (bakeScene == null || !bakeScene.ShouldCheck(frameNum))
+                return;
+            if (configBakeLighting != null && !configBakeLighting.Value)
+            {
+                bakeScene.Reset();
+                return;
+            }
+            bakeInstances.Clear();
+            bakeLights.Clear();
+            foreach (var record in retainedSceneInstances.Values)
+                if (record.Visible && !record.Moved)
+                    bakeInstances.Add(record.NativeHandle);
+            lightConverter?.GetStaticLights(bakeLights);
+            bakeScene.Check(frameNum, bakeInstances, bakeLights, skyboxManager?.DrawnDomeLight ?? IntPtr.Zero);
         }
 
         private readonly Dictionary<ulong, RetainedInstanceRecord> retainedSceneInstances = new Dictionary<ulong, RetainedInstanceRecord>(4096);
@@ -190,6 +220,7 @@ namespace UnityRemix
             RemixAPI.remixapi_Interface remixInterface)
         {
             this.logger = logger;
+            bakeScene = new RemixBakeScene(logger);
             this.windowManager = windowManager;
             this.cameraHandler = cameraHandler;
             this.meshConverter = meshConverter;
@@ -384,6 +415,9 @@ namespace UnityRemix
                     RemixWatchdog.BeatRender("RenderFrame.DrawSkyLight");
                     skyboxManager?.DrawSkyLight(frameNum);
                     processLightsMs = renderPhaseSw.Elapsed.TotalMilliseconds;
+
+                    RemixWatchdog.BeatRender("RenderFrame.BakeScene");
+                    CheckBakeScene(frameNum);
                     
                     // Draw test light if lights disabled
                     if (!configEnableLights.Value && testLightHandle != IntPtr.Zero)
@@ -532,6 +566,7 @@ namespace UnityRemix
             
             if (Interlocked.Exchange(ref needClearRetained, 0) != 0)
             {
+                bakeScene?.Reset();
                 ClearRetainedSceneInstances();
             }
 
@@ -572,6 +607,7 @@ namespace UnityRemix
                             if (!TransformEquals(in record.Transform, in instance.Transform))
                             {
                                 fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT;
+                                record.Moved = true; // the runtime makes it dynamic: never baked
                                 record.Transform = instance.Transform;
                             }
                             if (!record.Visible)
@@ -633,6 +669,7 @@ namespace UnityRemix
                             if (!TransformEquals(in record.Transform, in instance.Transform))
                             {
                                 fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT;
+                                record.Moved = true; // the runtime makes it dynamic: never baked
                                 record.Transform = instance.Transform;
                             }
                             if (!record.Visible)
@@ -707,6 +744,7 @@ namespace UnityRemix
                             if (!TransformEquals(in record.Transform, in transform))
                             {
                                 fields |= RemixAPI.REMIXAPI_SCENE_INSTANCE_TRANSFORM_EXT;
+                                record.Moved = true; // the runtime makes it dynamic: never baked
                                 record.Transform = transform;
                             }
                             if (!record.Visible)
