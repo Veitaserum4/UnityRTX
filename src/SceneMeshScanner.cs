@@ -38,6 +38,10 @@ namespace UnityRemix
             IsNoPass = 1 << 2,
             HasMoved = 1 << 3,
             IsScaleZero = 1 << 4,
+            // Inactive in hierarchy: AncestorDisabled caches the activeSelf / ancestor walk
+            // (UpdateVisibility), redone when it goes inactive and then every 16th frame.
+            WasInactive = 1 << 5,
+            AncestorDisabled = 1 << 6,
         }
 
         private struct ScannedRendererRef
@@ -515,14 +519,31 @@ namespace UnityRemix
                             continue;
                         }
 
-                        // 5. Hierarchical active state check (only when scanActiveOnly is false)
+                        // 5. Hierarchical active state check (only when scanActiveOnly is false).
+                        // The walk is cached: done when the object goes inactive, then staggered.
                         if (!activeInHierarchy)
                         {
-                            if (!go.activeSelf || IsIntermediateAncestorDisabled(refObj.Transform))
+                            if ((instance.Flags & InstanceFlags.WasInactive) == 0 || ((i + frameCount) & 15) == 0)
+                            {
+                                var flags = (instance.Flags | InstanceFlags.WasInactive) & ~InstanceFlags.AncestorDisabled;
+                                if (!go.activeSelf || IsIntermediateAncestorDisabled(refObj.Transform))
+                                    flags |= InstanceFlags.AncestorDisabled;
+                                if (flags != instance.Flags)
+                                {
+                                    instance.Flags = flags;
+                                    currentInstances[i] = instance;
+                                }
+                            }
+                            if ((instance.Flags & InstanceFlags.AncestorDisabled) != 0)
                             {
                                 culledInactive++;
                                 continue;
                             }
+                        }
+                        else if ((instance.Flags & InstanceFlags.WasInactive) != 0)
+                        {
+                            instance.Flags &= ~(InstanceFlags.WasInactive | InstanceFlags.AncestorDisabled);
+                            currentInstances[i] = instance;
                         }
 
                         // 6. Visibility culling (only if enabled in config)
@@ -626,6 +647,10 @@ namespace UnityRemix
                     logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={reusableVisibleInstances.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
                 }
 
+                // Destroyed renderers never come back: drop them instead of checking them every frame.
+                if (culledNull >= 64)
+                    RemoveDestroyedInstances();
+
                 int count = reusableVisibleInstances.Count;
                 if (count == 0)
                 {
@@ -652,6 +677,28 @@ namespace UnityRemix
                     Volatile.Write(ref visibleSnapshot, backSnapshot);
                 }
             }
+        }
+
+        // Caller holds instanceLock. Keeps currentInstances and instanceRenderers in step.
+        private void RemoveDestroyedInstances()
+        {
+            int count = currentInstances.Count;
+            if (instanceRenderers.Count != count)
+                return;
+            int kept = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (instanceRenderers[i].Renderer == null)
+                    continue;
+                if (kept != i)
+                {
+                    currentInstances[kept] = currentInstances[i];
+                    instanceRenderers[kept] = instanceRenderers[i];
+                }
+                kept++;
+            }
+            currentInstances.RemoveRange(kept, count - kept);
+            instanceRenderers.RemoveRange(kept, count - kept);
         }
 
         private static bool MatrixEquals(in Matrix4x4 a, in Matrix4x4 b)

@@ -21,7 +21,8 @@ namespace UnityRemix
 
         // Cache of renderer instance ID -> is scrolling to avoid repeated reflection / component queries
         private static readonly Dictionary<int, bool> _rendererScrollCache = new Dictionary<int, bool>();
-        private static int _lastClearFrame = -1;
+        // Component type -> is a known UV scroller (IsKnownScrollerComponent matches by type name)
+        private static readonly Dictionary<Type, bool> _scrollerTypeCache = new Dictionary<Type, bool>();
         private static bool _enabled = true;
 
         /// <summary>
@@ -63,16 +64,9 @@ namespace UnityRemix
         {
             if (!_enabled || renderer == null) return false;
 
+            // Cleared on scene load (ClearCache); bounded by the scene's renderers, so never
+            // cleared on size (a level with more renderers would detect them all every frame).
             int id = renderer.GetInstanceID();
-            int currentFrame = Time.frameCount;
-
-            // Periodically clean cache if it grows large
-            if (currentFrame != _lastClearFrame && _rendererScrollCache.Count > 4096)
-            {
-                _rendererScrollCache.Clear();
-                _lastClearFrame = currentFrame;
-            }
-
             if (_rendererScrollCache.TryGetValue(id, out bool cached))
                 return cached;
 
@@ -143,7 +137,17 @@ namespace UnityRemix
         private static bool IsKnownScrollerComponent(MonoBehaviour c)
         {
             if (c == null) return false;
-            string typeName = c.GetType().Name;
+            Type type = c.GetType();
+            if (!_scrollerTypeCache.TryGetValue(type, out bool known))
+            {
+                known = IsKnownScrollerTypeName(type.Name);
+                _scrollerTypeCache[type] = known;
+            }
+            return known;
+        }
+
+        private static bool IsKnownScrollerTypeName(string typeName)
+        {
 
             // Explicitly exclude known non-scroller management and UI scripts FIRST
             if (typeName.StartsWith("Disable", StringComparison.OrdinalIgnoreCase) ||

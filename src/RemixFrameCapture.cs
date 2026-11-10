@@ -1046,7 +1046,9 @@ namespace UnityRemix
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();
             cachedScrollingRenderers.Clear();
-            RemixScrollingTextureDetector.ClearCache();
+            // The scroll detection cache is kept (cleared on scene load): re-detecting every
+            // renderer here made each refresh a spike. Property-block scrolling is still seen
+            // live by CaptureStaticMeshes.
             skinnedRoundRobinIndex = 0;
             
             // Lower-detail LOD levels are not captured: the detailed level is (LodFilter).
