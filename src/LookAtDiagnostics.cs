@@ -144,8 +144,43 @@ namespace UnityRemix
         private string Properties(Material m)
         {
             if (materials == null) return "";
-            try { return $" keywords [{string.Join(" ", m.shaderKeywords)}] {{{materials.DescribeMaterialProperties(m)}}}"; }
+            try { return $" keywords [{string.Join(" ", m.shaderKeywords)}] {{{materials.DescribeMaterialProperties(m)}}}{DumpMainTexture(m)}"; }
             catch { return ""; }
+        }
+
+        // The material's main texture, once per texture: format, mips and sampling logged, and
+        // its top level written as raw RGBA8 (bottom row first) to BepInEx/LookAtTextures.
+        private readonly System.Collections.Generic.HashSet<int> dumpedTextures = new System.Collections.Generic.HashSet<int>();
+
+        private string DumpMainTexture(Material m)
+        {
+            if (!(m.mainTexture is Texture2D tex))
+                return "";
+            string info = $" mainTex '{tex.name}' {tex.width}x{tex.height} {tex.format} mips {tex.mipmapCount} filter {tex.filterMode} wrap {tex.wrapMode} readable {tex.isReadable}";
+            if (!dumpedTextures.Add(tex.GetInstanceID()))
+                return info;
+            try
+            {
+                var rt = RenderTexture.GetTemporary(tex.width, tex.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
+                var previous = RenderTexture.active;
+                Graphics.Blit(tex, rt);
+                RenderTexture.active = rt;
+                var copy = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false);
+                copy.ReadPixels(new Rect(0, 0, tex.width, tex.height), 0, 0);
+                copy.Apply();
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+                string dir = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "LookAtTextures");
+                System.IO.Directory.CreateDirectory(dir);
+                string file = System.IO.Path.Combine(dir, $"{string.Join("_", tex.name.Split(System.IO.Path.GetInvalidFileNameChars()))}_{tex.width}x{tex.height}.rgba");
+                System.IO.File.WriteAllBytes(file, copy.GetRawTextureData());
+                UnityEngine.Object.Destroy(copy);
+                return info + $" dumped '{file}'";
+            }
+            catch (Exception ex)
+            {
+                return info + $" dump failed: {ex.Message}";
+            }
         }
 
         private static string Path(Transform t)
