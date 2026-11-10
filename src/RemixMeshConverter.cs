@@ -1103,7 +1103,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null, bool doubleSided = true)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -1208,7 +1208,7 @@ namespace UnityRemix
                     categoryFlags = categoryFlags,
                     mesh = meshHandle,
                     transform = transform,
-                    doubleSided = 1
+                    doubleSided = doubleSided ? 1u : 0u
                 };
                 
                 RemixAPI.remixapi_ErrorCode result;

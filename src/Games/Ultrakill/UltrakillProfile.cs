@@ -127,6 +127,10 @@ namespace UnityRemix.Games.Ultrakill
                 float width = (float)shapeWidth.GetValue(shape), height = (float)shapeHeight.GetValue(shape);
                 if (width <= 0f || height <= 0f)
                     continue;
+                // Both ends in one place (a view turned about the opening): left out, it would
+                // take a pair and lie on itself.
+                if ((entry.position - exit.position).sqrMagnitude < 0.0001f)
+                    continue;
                 portals.Add(new PortalPair
                 {
                     id = portal.GetInstanceID(),
@@ -136,11 +140,25 @@ namespace UnityRemix.Games.Ultrakill
                     height = height
                 });
             }
-            portals.Sort((a, b) => Nearest(a, eye).CompareTo(Nearest(b, eye)));
+            // Remix has room for a few: those with an end in front of the camera first, nearest first.
+            Vector3 look = worldCamera.transform.forward;
+            portals.Sort((a, b) => Priority(a, eye, look).CompareTo(Priority(b, eye, look)));
         }
 
-        private static float Nearest(PortalPair p, Vector3 eye) =>
-            Mathf.Min(((Vector3)p.entry.GetColumn(3) - eye).sqrMagnitude, ((Vector3)p.exit.GetColumn(3) - eye).sqrMagnitude);
+        private static float Priority(PortalPair p, Vector3 eye, Vector3 look)
+        {
+            float best = float.MaxValue;
+            foreach (var end in new[] { p.entry, p.exit })
+            {
+                Vector3 offset = (Vector3)end.GetColumn(3) - eye;
+                float distance = offset.magnitude;
+                float radius = 0.5f * Mathf.Sqrt(p.width * p.width + p.height * p.height);
+                // Behind the camera (its opening wholly so): after every end in front of it.
+                bool behind = Vector3.Dot(offset, look) < -radius;
+                best = Mathf.Min(best, distance + (behind ? 1e6f : 0f));
+            }
+            return best;
+        }
 
         private Type limboType;
         private bool limboTypeSearched;
