@@ -73,6 +73,16 @@ namespace UnityRemix.Games.Ultrakill
         // fakeCamStart, within its camera's far plane and nearer it than the player's start.
         public override bool OpensViewPortal(Material material) => material.IsKeywordEnabled("LIMBO_WALLS");
 
+        // V1's body (Player/GroundCheck/v1_combined: v1_mdl and the held weapons' models), on the
+        // Portal layer (30), which only mirror and portal views draw.
+        public override bool IsPlayerBody(Renderer renderer)
+        {
+            for (var t = renderer.transform; t != null; t = t.parent)
+                if (t.name == "v1_combined")
+                    return true;
+            return false;
+        }
+
         // ULTRAKILL.Portal.Portal (Fraud): entry and exit transforms (opening in their local XY
         // plane, +Z out), a PlaneShape (full width and height); travel exit (-1, 1, -1) entry^-1,
         // unscaled. Listed every 60 frames, read every frame.
@@ -130,10 +140,7 @@ namespace UnityRemix.Games.Ultrakill
                 float width = (float)shapeWidth.GetValue(shape), height = (float)shapeHeight.GetValue(shape);
                 if (width <= 0f || height <= 0f)
                     continue;
-                // Both ends in one place (a view turned about the opening): left out, it would
-                // take a pair and lie on itself. A mirror (its exit is its entry) is drawn as one.
-                if (!mirror && (entry.position - exit.position).sqrMagnitude < 0.0001f)
-                    continue;
+                LogNearbyPortal(portal, entry, exit, mirror, width, height, eye);
                 if (mirror && !loggedPortalLayer)
                 {
                     // What a mirror's view adds (canSeePortalLayer: the Portal layer, 30).
@@ -163,6 +170,20 @@ namespace UnityRemix.Games.Ultrakill
             // Remix has room for a few: those with an end in front of the camera first, nearest first.
             Vector3 look = worldCamera.transform.forward;
             portals.Sort((a, b) => Priority(a, eye, look).CompareTo(Priority(b, eye, look)));
+        }
+
+        // Diagnostic: each portal within 30 m of the camera, once.
+        private readonly HashSet<int> loggedNearbyPortals = new HashSet<int>();
+
+        private void LogNearbyPortal(Behaviour portal, Transform entry, Transform exit, bool mirror, float width, float height, Vector3 eye)
+        {
+            if (Mathf.Min((entry.position - eye).sqrMagnitude, (exit.position - eye).sqrMagnitude) > 900f || !loggedNearbyPortals.Add(portal.GetInstanceID()))
+                return;
+            string path = portal.name;
+            for (var t = portal.transform.parent; t != null; t = t.parent)
+                path = t.name + "/" + path;
+            Logger.LogInfo($"[Portal] near: {portal.GetInstanceID()} '{path}' {width:F2} x {height:F2}{(mirror ? " mirror" : "")}: " +
+                           $"entry {entry.position} {entry.rotation.eulerAngles}, exit {exit.position} {exit.rotation.eulerAngles}");
         }
 
         private static float Priority(PortalPair p, Vector3 eye, Vector3 look)

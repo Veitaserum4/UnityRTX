@@ -120,9 +120,11 @@ namespace UnityRemix
 
         private void ReportOnce(int pairs)
         {
-            if (pairs == 0 || reportFrame == int.MaxValue)
+            if (pairs == 0)
                 return;
             ++drawnFrames;
+            if (reportFrame == int.MaxValue)
+                return;
             string dir = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "openremix");
             try
             {

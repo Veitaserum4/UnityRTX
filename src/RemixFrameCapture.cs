@@ -830,6 +830,9 @@ namespace UnityRemix
         private readonly Dictionary<int, CachedSkinnedRendererInfo> cachedSkinnedInfo = new Dictionary<int, CachedSkinnedRendererInfo>(128);
         private readonly HashSet<int> reusableValidSkinnedIds = new HashSet<int>();
         private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
+        // The player's body (GameProfile.IsPlayerBody, asked once per renderer): reflection-only.
+        private readonly HashSet<int> playerBodySkinnedIds = new HashSet<int>();
+        private readonly Dictionary<int, bool> playerBodyRenderers = new Dictionary<int, bool>();
         // Skinned id (CachedSkinnedRendererInfo.hierarchyHash) -> the renderer holding it; kept
         // across renderer cache refreshes so twins never swap ids, cleared on scene load.
         private readonly Dictionary<int, SkinnedMeshRenderer> skinnedIdOwners = new Dictionary<int, SkinnedMeshRenderer>();
@@ -2310,6 +2313,7 @@ namespace UnityRemix
             Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;
             Transform mainCamTransform = mainCam != null ? mainCam.transform : null;
             viewModelSkinnedIds.Clear();
+            playerBodySkinnedIds.Clear();
 
             if (mainCam != null)
             {
@@ -2378,7 +2382,10 @@ namespace UnityRemix
                 if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
                     anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
-                if (IsLayerDisabled(go.layer) || IsRendererDisabled(skinnedId) || previewRendererIds.Contains(skinned.GetInstanceID()))
+                int rendererId = skinned.GetInstanceID();
+                if (!playerBodyRenderers.TryGetValue(rendererId, out bool playerBody))
+                    playerBodyRenderers[rendererId] = playerBody = Games.GameProfiles.IsPlayerBody(skinned);
+                if ((!playerBody && IsLayerDisabled(go.layer)) || IsRendererDisabled(skinnedId) || previewRendererIds.Contains(rendererId))
                 {
                     skipLayer++;
                     continue;
@@ -2408,6 +2415,8 @@ namespace UnityRemix
                 bool viewModel = mainCamTransform != null && tr.IsChildOf(mainCamTransform);
                 if (viewModel)
                     viewModelSkinnedIds.Add(skinnedId);
+                if (playerBody)
+                    playerBodySkinnedIds.Add(skinnedId);
                 // Also register per-submesh sub-keys so they survive the stale-pruning pass
                 // Formula: sub0 = skinnedId, sub>0 = skinnedId ^ (sub * KNUTH_PRIME)
                 var smMaterials = info.sharedMaterials;
@@ -2419,6 +2428,8 @@ namespace UnityRemix
                         validSkinnedIds.Add(subKey);
                         if (viewModel)
                             viewModelSkinnedIds.Add(subKey);
+                        if (playerBody)
+                            playerBodySkinnedIds.Add(subKey);
                     }
                 }
                 
@@ -2644,6 +2655,8 @@ namespace UnityRemix
                     var submitted = entry;
                     if (viewModelSkinnedIds.Contains(entry.meshId))
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
+                    if (playerBodySkinnedIds.Contains(entry.meshId))
+                        submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY;
                     state.skinned.Add(submitted);
                 }
             }

@@ -94,6 +94,10 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // The player's own body, which the game shows only in mirrors and through portals: drawn
+        // as Remix's reflection-only player body (camera rays pass it), whatever its layer.
+        public virtual bool IsPlayerBody(Renderer renderer) => false;
+
         // The game's portals this frame, nearest the camera first (RayPortals draws as many as
         // Remix has room for).
         public virtual void GetPortals(Camera worldCamera, List<PortalPair> portals) { }

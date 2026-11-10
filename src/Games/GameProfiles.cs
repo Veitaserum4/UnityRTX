@@ -120,6 +120,13 @@ namespace UnityRemix.Games
             Run(nameof(GetPortals), p => p.GetPortals(worldCamera, portals));
         }
 
+        public static bool IsPlayerBody(Renderer renderer)
+        {
+            bool body = false;
+            Run(nameof(IsPlayerBody), p => body = p.IsPlayerBody(renderer));
+            return body;
+        }
+
         public static bool OpensViewPortal(Material material)
         {
             bool opens = false;
