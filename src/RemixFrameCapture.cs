@@ -2626,8 +2626,8 @@ namespace UnityRemix
             
             PruneSkinningCache(frameCount);
 
-            // Capture world-space weapon UI screens (e.g. Nailgun ammo counter/heat, Shotgun slider, Rocket Launcher timer)
-            CaptureWeaponCanvasScreens(state, frameCount);
+            // World-space UI screens: on the weapons (Nailgun heat, Shotgun slider, Rocket Launcher timer) and in the level (shop terminals)
+            CaptureCanvasScreens(state, frameCount);
             
             if (frameCount % 60 == 0) // Force log every 60 frames
             {
@@ -2696,19 +2696,29 @@ namespace UnityRemix
             return true;
         }
 
-        /// <summary>
-        /// Captures world-space UI screens attached to viewmodels or camera hierarchy (e.g. digital ammo counters, holographic weapon displays).
-        /// </summary>
-        // Weapon screens drawn path traced with the view models are culled from Unity's own
-        // canvas rendering while the UI overlay captures UI cameras, which would draw them a
-        // second time, flat over the image (their canvases are on the UI layer). The capture
-        // generates their meshes itself, so culling does not affect it.
+        // World-space canvas screens, drawn path traced as emissive world UI: the screens on the
+        // held weapons (placed with the view models) and screens in the level (shop terminals,
+        // signs). Their graphics are culled from Unity's own canvas rendering when the UI
+        // overlay's UI cameras would draw them a second time, flat over the image (canvases on
+        // the UI layer). The capture generates their meshes itself, so culling does not affect it.
         private readonly HashSet<CanvasRenderer> culledWeaponScreens = new HashSet<CanvasRenderer>();
-        // Metres: the screen off the weapon, then each later graphic of its canvas above the
-        // last (Unity paints a canvas's graphics in hierarchy order, all on one plane).
+        // Metres: a screen off its surface, then each graphic above the graphics it overlaps that
+        // its canvas paints earlier (Unity paints a canvas's graphics in hierarchy order, all on
+        // one plane; path traced, overlapping ones would z-fight).
         private const float WeaponScreenLift = 0.002f, WeaponScreenLayerLift = 0.001f;
-        private readonly Dictionary<Canvas, int> weaponScreenLayers = new Dictionary<Canvas, int>();
+        private struct PlacedGraphic { public float xMin, yMin, xMax, yMax; public int layer; }
+        private readonly Dictionary<Canvas, List<PlacedGraphic>> placedGraphics = new Dictionary<Canvas, List<PlacedGraphic>>();
+        private readonly List<List<PlacedGraphic>> placedGraphicsPool = new List<List<PlacedGraphic>>();
+        private readonly Vector3[] graphicCorners = new Vector3[4];
         private readonly HashSet<int> loggedWeaponScreens = new HashSet<int>();
+        private int loggedWorldScreenGraphics;
+
+        // Root world-space canvases in the level (not on a camera), refreshed every 30 frames.
+        private readonly List<Canvas> worldCanvases = new List<Canvas>();
+        private readonly List<Graphic> worldCanvasGraphics = new List<Graphic>();
+        private readonly HashSet<int> loggedWorldCanvases = new HashSet<int>();
+        private int worldCanvasRefreshFrame = int.MinValue;
+        private const float WorldScreenMaxDistance = 80f;
 
         private void UncullWeaponScreens()
         {
@@ -2718,7 +2728,7 @@ namespace UnityRemix
             culledWeaponScreens.Clear();
         }
 
-        private void CaptureWeaponCanvasScreens(FrameState state, int frameCount)
+        private void CaptureCanvasScreens(FrameState state, int frameCount)
         {
             bool cullScreens = RemixUIOverlay.CapturesUICameras;
             if (!cullScreens && culledWeaponScreens.Count > 0)
@@ -2730,220 +2740,351 @@ namespace UnityRemix
             if (mainCam == null)
                 return;
 
-            var graphics = mainCam.GetComponentsInChildren<Graphic>(false);
-            if (graphics == null || graphics.Length == 0)
-                return;
-
             EnsureTmpReflection();
-            weaponScreenLayers.Clear();
+            foreach (var list in placedGraphics.Values)
+            {
+                list.Clear();
+                placedGraphicsPool.Add(list);
+            }
+            placedGraphics.Clear();
 
-            for (int i = 0; i < graphics.Length; i++)
+            // Screens on the held weapons (under the camera).
+            var graphics = mainCam.GetComponentsInChildren<Graphic>(false);
+            for (int i = 0; graphics != null && i < graphics.Length; i++)
             {
                 var g = graphics[i];
-                if (g == null || !g.enabled || !g.gameObject.activeInHierarchy)
+                if (g == null)
                     continue;
-
                 // Reject anything attached to the 2D HUD or overlay
                 if (IsExcludedHudElement(g))
                     continue;
-
-                // Must be mounted on an equipped weapon
                 if (!IsEquippedWeaponElement(g))
                     continue;
+                CaptureCanvasGraphic(state, g, mainCam, frameCount, onViewModel: true, cull: cullScreens);
+            }
 
-                var canvas = g.canvas;
-                if (canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+            CaptureWorldCanvasScreens(state, mainCam, frameCount, cullScreens);
+        }
+
+        private void CaptureWorldCanvasScreens(FrameState state, Camera mainCam, int frameCount, bool cullScreens)
+        {
+            if (frameCount - worldCanvasRefreshFrame >= 30 || frameCount < worldCanvasRefreshFrame)
+            {
+                worldCanvasRefreshFrame = frameCount;
+                worldCanvases.Clear();
+                foreach (var c in UnityEngine.Object.FindObjectsOfType<Canvas>())
+                {
+                    if (c == null || !c.isRootCanvas || c.renderMode != RenderMode.WorldSpace)
+                        continue;
+                    // On a camera: the weapon screens above, or HUD canvases the UI overlay draws.
+                    if (c.GetComponentInParent<Camera>() != null)
+                        continue;
+                    worldCanvases.Add(c);
+                }
+            }
+
+            int uiLayer = LayerMask.NameToLayer("UI");
+            Vector3 camPos = mainCam.transform.position;
+            float maxDistSqr = WorldScreenMaxDistance * WorldScreenMaxDistance;
+            for (int c = 0; c < worldCanvases.Count; c++)
+            {
+                var canvas = worldCanvases[c];
+                if (canvas == null || !canvas.isActiveAndEnabled)
+                    continue;
+                if ((canvas.transform.position - camPos).sqrMagnitude > maxDistSqr)
                     continue;
 
-                Color col = g.color;
-                if (col.a <= 0.001f)
-                    continue;
+                worldCanvasGraphics.Clear();
+                canvas.GetComponentsInChildren(false, worldCanvasGraphics);
+                if (loggedWorldCanvases.Add(canvas.GetInstanceID()))
+                    LogWorldCanvas(canvas);
 
-                if (cullScreens)
+                // Only canvases on the UI layer are also drawn by the overlay's UI cameras.
+                bool cull = cullScreens && canvas.gameObject.layer == uiLayer;
+                for (int i = 0; i < worldCanvasGraphics.Count; i++)
+                    CaptureCanvasGraphic(state, worldCanvasGraphics[i], mainCam, frameCount, onViewModel: false, cull: cull);
+            }
+        }
+
+        // Once per world canvas: its graphics, and the renderers and cameras beside it (a shop's
+        // item previews can be models, or a camera rendering into a RawImage's texture).
+        private void LogWorldCanvas(Canvas canvas)
+        {
+            var t = canvas.transform;
+            string path = t.name;
+            for (var p = t.parent; p != null; p = p.parent)
+                path = p.name + "/" + path;
+            var rect = canvas.GetComponent<RectTransform>();
+            Vector3 size = rect != null ? Vector3.Scale(rect.rect.size, rect.lossyScale) : Vector3.zero;
+            logger.LogInfo($"[WorldScreen] canvas '{path}' layer {LayerMask.LayerToName(canvas.gameObject.layer)}, {size.x:F2} x {size.y:F2} m, " +
+                           $"event camera '{(canvas.worldCamera != null ? canvas.worldCamera.name : "-")}', {worldCanvasGraphics.Count} active graphics");
+
+            var scope = t.parent != null ? t.parent : t;
+            int logged = 0;
+            foreach (var cam in scope.GetComponentsInChildren<Camera>(true))
+            {
+                var target = cam.targetTexture;
+                logger.LogInfo($"[WorldScreen]   camera '{cam.name}' active {cam.isActiveAndEnabled}, mask 0x{cam.cullingMask:X}, " +
+                               $"target {(target != null ? $"'{target.name}' {target.width}x{target.height}" : "screen")}");
+            }
+            foreach (var r in scope.GetComponentsInChildren<Renderer>(true))
+            {
+                if (logged++ >= 80) { logger.LogInfo("[WorldScreen]   ..."); break; }
+                Mesh mesh = r is SkinnedMeshRenderer s ? s.sharedMesh : r.GetComponent<MeshFilter>()?.sharedMesh;
+                string rpath = r.name;
+                for (var p = r.transform.parent; p != null && p != scope; p = p.parent)
+                    rpath = p.name + "/" + rpath;
+                logger.LogInfo($"[WorldScreen]   renderer '{rpath}' ({r.GetType().Name}) layer {LayerMask.LayerToName(r.gameObject.layer)}({r.gameObject.layer}), " +
+                               $"active {r.gameObject.activeInHierarchy}, enabled {r.enabled}, mesh '{(mesh != null ? mesh.name : "-")}', " +
+                               $"material '{(r.sharedMaterial != null ? r.sharedMaterial.name : "-")}'");
+            }
+            foreach (var raw in canvas.GetComponentsInChildren<RawImage>(true))
+            {
+                var tex = raw.texture;
+                logger.LogInfo($"[WorldScreen]   raw image '{raw.name}' active {raw.isActiveAndEnabled}, texture {(tex != null ? $"'{tex.name}' ({tex.GetType().Name})" : "none")}");
+            }
+        }
+
+        // Places a graphic above the graphics of its canvas that it overlaps and that paint
+        // before it (callers go in hierarchy pre-order, the canvas's painting order).
+        private int PlaceGraphic(Graphic g)
+        {
+            var canvas = g.canvas;
+            if (!placedGraphics.TryGetValue(canvas, out var placed))
+            {
+                if (placedGraphicsPool.Count > 0)
                 {
-                    var screenRenderer = g.canvasRenderer;
-                    if (screenRenderer != null && !screenRenderer.cull)
-                    {
-                        screenRenderer.cull = true;
-                        culledWeaponScreens.Add(screenRenderer);
-                    }
+                    placed = placedGraphicsPool[placedGraphicsPool.Count - 1];
+                    placedGraphicsPool.RemoveAt(placedGraphicsPool.Count - 1);
                 }
+                else
+                    placed = new List<PlacedGraphic>();
+                placedGraphics[canvas] = placed;
+            }
 
-                Mesh mesh = null;
-                try
+            g.rectTransform.GetWorldCorners(graphicCorners);
+            var canvasTransform = canvas.transform;
+            var box = new PlacedGraphic { xMin = float.MaxValue, yMin = float.MaxValue, xMax = float.MinValue, yMax = float.MinValue };
+            for (int i = 0; i < 4; i++)
+            {
+                Vector3 p = canvasTransform.InverseTransformPoint(graphicCorners[i]);
+                box.xMin = Mathf.Min(box.xMin, p.x); box.xMax = Mathf.Max(box.xMax, p.x);
+                box.yMin = Mathf.Min(box.yMin, p.y); box.yMax = Mathf.Max(box.yMax, p.y);
+            }
+            int layer = 0;
+            for (int i = 0; i < placed.Count; i++)
+            {
+                var o = placed[i];
+                if (o.layer >= layer && box.xMin < o.xMax && o.xMin < box.xMax && box.yMin < o.yMax && o.yMin < box.yMax)
+                    layer = o.layer + 1;
+            }
+            box.layer = layer;
+            placed.Add(box);
+            return layer;
+        }
+
+        private void CaptureCanvasGraphic(FrameState state, Graphic g, Camera mainCam, int frameCount, bool onViewModel, bool cull)
+        {
+            if (g == null || !g.enabled || !g.gameObject.activeInHierarchy)
+                return;
+
+            var canvas = g.canvas;
+            if (canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+                return;
+
+            var screenRenderer = g.canvasRenderer;
+            // Culled by a RectMask2D (scrolled out of view), unless culled here.
+            if (screenRenderer != null && screenRenderer.cull && !culledWeaponScreens.Contains(screenRenderer))
+                return;
+
+            Color col = g.color;
+            // CanvasGroup fades (a shop page switching) multiply in.
+            if (screenRenderer != null)
+                col.a *= screenRenderer.GetInheritedAlpha();
+            if (col.a <= 0.001f)
+                return;
+
+            if (cull && screenRenderer != null && !screenRenderer.cull)
+            {
+                screenRenderer.cull = true;
+                culledWeaponScreens.Add(screenRenderer);
+            }
+
+            Mesh mesh = null;
+            try
+            {
+                if (_tmpTextType != null && _tmpTextType.IsInstanceOfType(g))
                 {
-                    if (_tmpTextType != null && _tmpTextType.IsInstanceOfType(g))
+                    if (_tmpForceMeshUpdateMethod != null)
                     {
-                        if (_tmpForceMeshUpdateMethod != null)
-                        {
-                            var parms = _tmpForceMeshUpdateMethod.GetParameters();
-                            if (parms.Length == 2)
-                                _tmpForceMeshUpdateMethod.Invoke(g, new object[] { false, false });
-                            else
-                                _tmpForceMeshUpdateMethod.Invoke(g, null);
-                        }
-                        if (_tmpMeshProperty != null)
-                            mesh = (Mesh)_tmpMeshProperty.GetValue(g, null);
+                        var parms = _tmpForceMeshUpdateMethod.GetParameters();
+                        if (parms.Length == 2)
+                            _tmpForceMeshUpdateMethod.Invoke(g, new object[] { false, false });
+                        else
+                            _tmpForceMeshUpdateMethod.Invoke(g, null);
                     }
-
-                    if (mesh == null || mesh.vertexCount == 0)
-                    {
-                        if (_doMeshGenerationMethod != null)
-                            _doMeshGenerationMethod.Invoke(g, null);
-                        if (_workerMeshProperty != null)
-                            mesh = (Mesh)_workerMeshProperty.GetValue(null);
-                    }
+                    if (_tmpMeshProperty != null)
+                        mesh = (Mesh)_tmpMeshProperty.GetValue(g, null);
                 }
-                catch { }
 
                 if (mesh == null || mesh.vertexCount == 0)
                 {
-                    var cr = g.canvasRenderer;
-                    if (cr != null)
-                        mesh = UnityCompat.GetCanvasMesh(cr);
+                    if (_doMeshGenerationMethod != null)
+                        _doMeshGenerationMethod.Invoke(g, null);
+                    if (_workerMeshProperty != null)
+                        mesh = (Mesh)_workerMeshProperty.GetValue(null);
                 }
-
-                Vector3[] verts = null;
-                Vector3[] normals = null;
-                Vector2[] uvs = null;
-                Color32[] colors = null;
-                int[] tris = null;
-
-                if (mesh != null && mesh.vertexCount > 0 && mesh.isReadable)
-                {
-                    try
-                    {
-                        verts = mesh.vertices;
-                        normals = mesh.normals;
-                        uvs = mesh.uv;
-                        colors = mesh.colors32;
-                        tris = mesh.triangles;
-                    }
-                    catch { }
-                }
-
-                if (verts == null || verts.Length == 0 || tris == null || tris.Length == 0)
-                {
-                    Rect r = g.rectTransform.rect;
-                    if (r.width <= 0.001f || r.height <= 0.001f)
-                        continue;
-
-                    verts = new Vector3[]
-                    {
-                        new Vector3(r.xMin, r.yMin, 0f),
-                        new Vector3(r.xMin, r.yMax, 0f),
-                        new Vector3(r.xMax, r.yMax, 0f),
-                        new Vector3(r.xMax, r.yMin, 0f)
-                    };
-                    normals = new Vector3[]
-                    {
-                        Vector3.back, Vector3.back, Vector3.back, Vector3.back
-                    };
-                    uvs = new Vector2[]
-                    {
-                        new Vector2(0f, 0f),
-                        new Vector2(0f, 1f),
-                        new Vector2(1f, 1f),
-                        new Vector2(1f, 0f)
-                    };
-                    colors = new Color32[] { col, col, col, col };
-                    tris = new int[]
-                    {
-                        0, 1, 2,
-                        0, 2, 3
-                    };
-                }
-
-                if (normals == null || normals.Length != verts.Length)
-                {
-                    normals = new Vector3[verts.Length];
-                    for (int n = 0; n < normals.Length; n++)
-                        normals[n] = Vector3.back;
-                }
-
-                if (uvs == null || uvs.Length != verts.Length)
-                {
-                    uvs = new Vector2[verts.Length];
-                }
-
-                if (colors == null || colors.Length != verts.Length)
-                {
-                    colors = new Color32[verts.Length];
-                    Color32 c = col;
-                    for (int cIdx = 0; cIdx < colors.Length; cIdx++)
-                        colors[cIdx] = c;
-                }
-
-                Material mat = g.materialForRendering;
-                if (mat == null)
-                    mat = g.defaultMaterial;
-                if (mat == null)
-                    continue;
-
-                Texture2D mainTex = g.mainTexture as Texture2D;
-
-                Color32 c32 = col;
-                int qR = (c32.r >> 3);
-                int qG = (c32.g >> 3);
-                int qB = (c32.b >> 3);
-                int qA = (c32.a >> 3);
-                int colHash = (qA << 15) | (qR << 10) | (qG << 5) | qB;
-                int texHash = mainTex != null ? mainTex.GetInstanceID() : 0;
-                int uiMatId = HashCombine(mat.GetInstanceID(), HashCombine(texHash, colHash));
-
-                materialManager.CaptureMaterialTextures(
-                    mat,
-                    uiMatId,
-                    mpbEmissiveColor: col,
-                    mpbEmissiveIntensity: 1.0f,
-                    mpbMainTex: mainTex,
-                    mpbColor: col,
-                    suppressLightGeneration: true
-                );
-
-                int graphicId = g.GetInstanceID();
-                ulong remixMeshHash = (ulong)(uint)graphicId | 0x8000000000000000UL;
-
-                // A screen lies on the weapon's surface, and its graphics on one plane (Unity
-                // draws UI after the scene, in hierarchy order, with no depth); path traced they
-                // z-fight. Each is lifted toward the camera, on the side it faces, by its place
-                // in its canvas's drawing order (GetComponentsInChildren is that pre-order).
-                weaponScreenLayers.TryGetValue(g.canvas, out int layer);
-                weaponScreenLayers[g.canvas] = layer + 1;
-                var rect = g.rectTransform;
-                Vector3 facing = rect.forward;
-                if (Vector3.Dot(mainCam.transform.position - rect.position, facing) > 0f)
-                    facing = -facing; // mirrored canvas: its visible side is +Z
-                Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * (WeaponScreenLift + layer * WeaponScreenLayerLift)) * rect.localToWorldMatrix;
-                if (loggedWeaponScreens.Add(graphicId))
-                {
-                    Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
-                    logger.LogInfo($"[WeaponScreen] '{g.name}' under '{(rect.parent != null ? rect.parent.name : "-")}' " +
-                                   $"canvas '{g.canvas.name}' ({g.canvas.renderMode}, layer {LayerMask.LayerToName(g.gameObject.layer)}): " +
-                                   $"{size.x:F3} x {size.y:F3} m, {Vector3.Distance(mainCam.transform.position, rect.position):F3} m from the camera, " +
-                                   $"facing dot {Vector3.Dot((mainCam.transform.position - rect.position).normalized, rect.forward):F2}, mirrored {facing != rect.forward}, layer {layer}");
-                }
-
-                state.skinned.Add(new SkinnedMeshData
-                {
-                    source = DynamicSource.WorldUI,
-                    meshId = graphicId,
-                    remixMeshHash = remixMeshHash,
-                    materialId = uiMatId,
-                    vertices = verts,
-                    normals = normals,
-                    uvs = uvs,
-                    colors = colors,
-                    triangles = tris,
-                    localToWorld = screenToWorld,
-                    boneTransforms = null,
-                    skinningData = null,
-                    // On the held weapon (under the camera): placed with the view models.
-                    categoryFlags = (uint)(RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI |
-                                           RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL),
-                    bakeFrame = frameCount
-                });
             }
+            catch { }
+
+            if (mesh == null || mesh.vertexCount == 0)
+            {
+                if (screenRenderer != null)
+                    mesh = UnityCompat.GetCanvasMesh(screenRenderer);
+            }
+
+            Vector3[] verts = null;
+            Vector3[] normals = null;
+            Vector2[] uvs = null;
+            Color32[] colors = null;
+            int[] tris = null;
+
+            if (mesh != null && mesh.vertexCount > 0 && mesh.isReadable)
+            {
+                try
+                {
+                    verts = mesh.vertices;
+                    normals = mesh.normals;
+                    uvs = mesh.uv;
+                    colors = mesh.colors32;
+                    tris = mesh.triangles;
+                }
+                catch { }
+            }
+
+            if (verts == null || verts.Length == 0 || tris == null || tris.Length == 0)
+            {
+                Rect r = g.rectTransform.rect;
+                if (r.width <= 0.001f || r.height <= 0.001f)
+                    return;
+
+                verts = new Vector3[]
+                {
+                    new Vector3(r.xMin, r.yMin, 0f),
+                    new Vector3(r.xMin, r.yMax, 0f),
+                    new Vector3(r.xMax, r.yMax, 0f),
+                    new Vector3(r.xMax, r.yMin, 0f)
+                };
+                normals = new Vector3[]
+                {
+                    Vector3.back, Vector3.back, Vector3.back, Vector3.back
+                };
+                uvs = new Vector2[]
+                {
+                    new Vector2(0f, 0f),
+                    new Vector2(0f, 1f),
+                    new Vector2(1f, 1f),
+                    new Vector2(1f, 0f)
+                };
+                colors = new Color32[] { col, col, col, col };
+                tris = new int[]
+                {
+                    0, 1, 2,
+                    0, 2, 3
+                };
+            }
+
+            if (normals == null || normals.Length != verts.Length)
+            {
+                normals = new Vector3[verts.Length];
+                for (int n = 0; n < normals.Length; n++)
+                    normals[n] = Vector3.back;
+            }
+
+            if (uvs == null || uvs.Length != verts.Length)
+            {
+                uvs = new Vector2[verts.Length];
+            }
+
+            if (colors == null || colors.Length != verts.Length)
+            {
+                colors = new Color32[verts.Length];
+                Color32 c = col;
+                for (int cIdx = 0; cIdx < colors.Length; cIdx++)
+                    colors[cIdx] = c;
+            }
+
+            Material mat = g.materialForRendering;
+            if (mat == null)
+                mat = g.defaultMaterial;
+            if (mat == null)
+                return;
+
+            Texture2D mainTex = g.mainTexture as Texture2D;
+
+            Color32 c32 = col;
+            int qR = (c32.r >> 3);
+            int qG = (c32.g >> 3);
+            int qB = (c32.b >> 3);
+            int qA = (c32.a >> 3);
+            int colHash = (qA << 15) | (qR << 10) | (qG << 5) | qB;
+            int texHash = mainTex != null ? mainTex.GetInstanceID() : 0;
+            int uiMatId = HashCombine(mat.GetInstanceID(), HashCombine(texHash, colHash));
+
+            materialManager.CaptureMaterialTextures(
+                mat,
+                uiMatId,
+                mpbEmissiveColor: col,
+                mpbEmissiveIntensity: 1.0f,
+                mpbMainTex: mainTex,
+                mpbColor: col,
+                suppressLightGeneration: true
+            );
+
+            int graphicId = g.GetInstanceID();
+            ulong remixMeshHash = (ulong)(uint)graphicId | 0x8000000000000000UL;
+
+            // A screen lies on a surface, and its graphics on one plane (Unity draws UI in
+            // hierarchy order, without depth between them); path traced they z-fight. Each
+            // is lifted toward the camera, on the side it faces, above what it overlaps.
+            int layer = PlaceGraphic(g);
+            var rect = g.rectTransform;
+            Vector3 facing = rect.forward;
+            if (Vector3.Dot(mainCam.transform.position - rect.position, facing) > 0f)
+                facing = -facing; // mirrored canvas: its visible side is +Z
+            Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * (WeaponScreenLift + layer * WeaponScreenLayerLift)) * rect.localToWorldMatrix;
+            if (loggedWeaponScreens.Add(graphicId) && (onViewModel || loggedWorldScreenGraphics++ < 300))
+            {
+                Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
+                var shownTex = g.mainTexture;
+                logger.LogInfo($"[{(onViewModel ? "WeaponScreen" : "WorldScreen")}] '{g.name}' ({g.GetType().Name}) under '{(rect.parent != null ? rect.parent.name : "-")}' " +
+                               $"canvas '{canvas.name}' ({canvas.renderMode}, layer {LayerMask.LayerToName(g.gameObject.layer)}): " +
+                               $"{size.x:F3} x {size.y:F3} m, {Vector3.Distance(mainCam.transform.position, rect.position):F3} m from the camera, " +
+                               $"facing dot {Vector3.Dot((mainCam.transform.position - rect.position).normalized, rect.forward):F2}, mirrored {facing != rect.forward}, layer {layer}, " +
+                               $"texture {(shownTex != null ? $"'{shownTex.name}' ({shownTex.GetType().Name})" : "none")}");
+            }
+
+            state.skinned.Add(new SkinnedMeshData
+            {
+                source = DynamicSource.WorldUI,
+                meshId = graphicId,
+                remixMeshHash = remixMeshHash,
+                materialId = uiMatId,
+                vertices = verts,
+                normals = normals,
+                uvs = uvs,
+                colors = colors,
+                triangles = tris,
+                localToWorld = screenToWorld,
+                boneTransforms = null,
+                skinningData = null,
+                // On a held weapon (under the camera): placed with the view models.
+                categoryFlags = onViewModel
+                    ? (uint)(RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI |
+                             RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL)
+                    : (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI,
+                bakeFrame = frameCount
+            });
         }
         
         /// <summary>

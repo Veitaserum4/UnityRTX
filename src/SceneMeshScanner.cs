@@ -168,11 +168,12 @@ namespace UnityRemix
             // Layer 5: UI
             // Layer 16: Invisible (triggers, blockers, collision brushes)
             // Layer 18: PlayerOnly (invisible player barriers)
-            // Layer 19: Virtual Screen
             // Layer 20: GroundCheck
             // Layer 28: VirtualRender
             // Layer 30: Portal
-            if (layer == 16 || layer == 18 || layer == 20 || layer == 30 || layer == 5 || layer == 19 || layer == 28)
+            // (Layer 19, Virtual Screen, is drawn: ULTRAKILL's Virtual Camera draws it over the
+            // scene. Layers no game camera draws are left out per frame, IsLayerExcluded.)
+            if (layer == 16 || layer == 18 || layer == 20 || layer == 30 || layer == 5 || layer == 28)
                 return true;
 
             return false;
