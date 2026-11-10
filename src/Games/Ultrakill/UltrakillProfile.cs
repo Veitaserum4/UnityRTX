@@ -186,16 +186,49 @@ namespace UnityRemix.Games.Ultrakill
                            $"entry {entry.position} {entry.rotation.eulerAngles}, exit {exit.position} {exit.rotation.eulerAngles}");
             if (!mirror)
             {
-                LogSeenThrough("through the entry, at the exit", exit);
-                LogSeenThrough("through the exit, at the entry", entry);
+                LogSeenThrough("past the exit's -Z side", exit, -1f);
+                LogSeenThrough("past the exit's +Z side", exit, 1f);
+                LogSeenThrough("past the entry's -Z side", entry, -1f);
+                LogSeenThrough("past the entry's +Z side", entry, 1f);
+            }
+            LogOnOpening("entry", entry, width, height);
+            if (!mirror)
+                LogOnOpening("exit", exit, width, height);
+        }
+
+        // What lies on an opening: renderers whose bounds reach within 0.5 m of its plane inside
+        // its rectangle (a pool's water over it), with their materials.
+        private void LogOnOpening(string label, Transform end, float width, float height)
+        {
+            var toLocal = Matrix4x4.TRS(end.position, end.rotation, Vector3.one).inverse;
+            int n = 0;
+            foreach (var r in Resources.FindObjectsOfTypeAll<Renderer>())
+            {
+                if (r == null || !r.gameObject.scene.IsValid() || !(r is MeshRenderer || r is SkinnedMeshRenderer))
+                    continue;
+                Vector3 c = toLocal.MultiplyPoint3x4(r.bounds.center);
+                Vector3 e = r.bounds.extents;
+                float reach = e.magnitude;
+                if (Mathf.Abs(c.z) > 0.5f + Mathf.Min(reach, 2f) || Mathf.Abs(c.x) > width * 0.5f + reach || Mathf.Abs(c.y) > height * 0.5f + reach)
+                    continue;
+                if (n++ >= 10)
+                    break;
+                string rpath = r.name;
+                for (var t = r.transform.parent; t != null; t = t.parent)
+                    rpath = t.name + "/" + rpath;
+                var m = r.sharedMaterial;
+                string mat = m == null ? "none" :
+                    $"'{m.name}' shader '{(m.shader != null ? m.shader.name : "-")}' queue {m.renderQueue} keywords [{string.Join(" ", m.shaderKeywords)}]";
+                Logger.LogInfo($"[Portal]   on the {label}: '{rpath}' local {c}, size {r.bounds.size}, layer {r.gameObject.layer}, active {r.gameObject.activeInHierarchy}, " +
+                               $"enabled {r.enabled}: {mat}");
             }
         }
 
         // What a portal shows: renderers within 25 m on an end's -Z side (rays leave an end
         // that way), by layer and state, and the nearest few.
-        private void LogSeenThrough(string label, Transform end)
+        private void LogSeenThrough(string label, Transform end, float side)
         {
-            Vector3 origin = end.position, outward = -end.forward;
+            Vector3 origin = end.position, outward = side * end.forward;
             var found = new List<(float distance, Renderer renderer)>();
             foreach (var r in Resources.FindObjectsOfTypeAll<Renderer>())
             {
@@ -219,7 +252,7 @@ namespace UnityRemix.Games.Ultrakill
                 summary.Add($"{kv.Value} {kv.Key}");
             Logger.LogInfo($"[Portal]   seen {label}: {found.Count} renderers: {string.Join(", ", summary)}");
             found.Sort((a, b) => a.distance.CompareTo(b.distance));
-            for (int i = 0; i < found.Count && i < 8; i++)
+            for (int i = 0; i < found.Count && i < 5; i++)
             {
                 var r = found[i].renderer;
                 string rpath = r.name;
