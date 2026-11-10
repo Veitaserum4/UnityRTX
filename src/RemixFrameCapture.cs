@@ -2704,6 +2704,7 @@ namespace UnityRemix
         // second time, flat over the image (their canvases are on the UI layer). The capture
         // generates their meshes itself, so culling does not affect it.
         private readonly HashSet<CanvasRenderer> culledWeaponScreens = new HashSet<CanvasRenderer>();
+        private const float WeaponScreenLift = 0.002f; // metres
 
         private void UncullWeaponScreens()
         {
@@ -2898,6 +2899,15 @@ namespace UnityRemix
                 int graphicId = g.GetInstanceID();
                 ulong remixMeshHash = (ulong)(uint)graphicId | 0x8000000000000000UL;
 
+                // A screen lies on the weapon's surface (Unity draws UI after the scene, so it
+                // never needed a gap); coplanar for the path tracer, the two z-fight. Lifted a
+                // little toward the camera, on the side the screen faces.
+                var rect = g.rectTransform;
+                Vector3 facing = rect.forward;
+                if (Vector3.Dot(mainCam.transform.position - rect.position, facing) > 0f)
+                    facing = -facing; // mirrored canvas: its visible side is +Z
+                Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * WeaponScreenLift) * rect.localToWorldMatrix;
+
                 state.skinned.Add(new SkinnedMeshData
                 {
                     source = DynamicSource.WorldUI,
@@ -2909,7 +2919,7 @@ namespace UnityRemix
                     uvs = uvs,
                     colors = colors,
                     triangles = tris,
-                    localToWorld = g.rectTransform.localToWorldMatrix,
+                    localToWorld = screenToWorld,
                     boneTransforms = null,
                     skinningData = null,
                     // On the held weapon (under the camera): placed with the view models.
