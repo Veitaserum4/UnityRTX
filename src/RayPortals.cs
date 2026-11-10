@@ -191,7 +191,11 @@ namespace UnityRemix
         {
             if (!meshes.TryGetMeshHandle(MirrorMeshKey, out var mirror))
                 return;
-            var t = portal.entry * FacePlusZ * Matrix4x4.Scale(new Vector3(1f, portal.height, portal.width));
+            // Facing the camera's side, in front of what lies over it (its glass).
+            Vector3 normal = portal.entry.GetColumn(2);
+            var face = Vector3.Dot(camera.position - (Vector3)portal.entry.GetColumn(3), normal) >= 0f ? FacePlusZ : FaceMinusZ;
+            var t = portal.entry * face * Matrix4x4.Translate(new Vector3(Mathf.Max(OpeningLift, portal.lift), 0f, 0f)) *
+                    Matrix4x4.Scale(new Vector3(1f, portal.height, portal.width));
             meshes.DrawMeshInstance(mirror, t, objectPickingValue++, 0, MirrorMeshKey ^ (ulong)(uint)portal.id, isDynamic: true);
             if (loggedPortals.Add(portal.id))
                 logger.LogInfo($"[Portal] mirror {portal.id}: at {(Vector3)portal.entry.GetColumn(3)}, {portal.width:F2} x {portal.height:F2}");
@@ -212,8 +216,9 @@ namespace UnityRemix
             // The near end stands OpeningLift in front of its plane, so camera rays meet it before a
             // surface lying on that plane (a pool's water); the far end as far behind its own,
             // which keeps the map: (+d) diag(-1, 1, -1) (-d) = diag(-1, 1, -1).
-            var liftNear = Matrix4x4.Translate(new Vector3(OpeningLift, 0f, 0f));
-            var liftFar = Matrix4x4.Translate(new Vector3(-OpeningLift, 0f, 0f));
+            float lift = Mathf.Max(OpeningLift, portal.lift);
+            var liftNear = Matrix4x4.Translate(new Vector3(lift, 0f, 0f));
+            var liftFar = Matrix4x4.Translate(new Vector3(-lift, 0f, 0f));
             var t0 = portal.entry * face * (nearEntry ? liftNear : liftFar) * size;
             var t1 = portal.exit * face * (nearEntry ? liftFar : liftNear) * size;
             // Double-sided: one-sided openings were not drawn by the raster G-buffer from the

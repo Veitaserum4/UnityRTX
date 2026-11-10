@@ -40,6 +40,9 @@ namespace UnityRemix.Games
         public float width, height;
         // A mirror: the opening reflects (exit is entry).
         public bool mirror;
+        // How far in front of its plane the opening must stand to be met before what lies over
+        // it (a pool's water, a mirror's glass), which the game draws the portal over.
+        public float lift;
     }
 
     public abstract class GameProfile

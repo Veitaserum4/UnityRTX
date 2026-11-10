@@ -159,6 +159,7 @@ namespace UnityRemix.Games.Ultrakill
                 }
                 portals.Add(new PortalPair
                 {
+                    lift = OpeningLift(portal, entry, exit, mirror, width, height),
                     id = portal.GetInstanceID(),
                     entry = Matrix4x4.TRS(entry.position, entry.rotation, Vector3.one),
                     exit = Matrix4x4.TRS(exit.position, exit.rotation, Vector3.one),
@@ -170,6 +171,44 @@ namespace UnityRemix.Games.Ultrakill
             // Remix has room for a few: those with an end in front of the camera first, nearest first.
             Vector3 look = worldCamera.transform.forward;
             portals.Sort((a, b) => Priority(a, eye, look).CompareTo(Priority(b, eye, look)));
+        }
+
+        // How far transparent surfaces over a portal's openings reach from their planes (a pool's
+        // water sprite, a mirror's glass pane), once per portal: its openings stand past them.
+        // Layers the game never draws are left out (the Archive mirror's OopsBlocker).
+        private readonly Dictionary<int, float> openingLifts = new Dictionary<int, float>();
+
+        private float OpeningLift(Behaviour portal, Transform entry, Transform exit, bool mirror, float width, float height)
+        {
+            int id = portal.GetInstanceID();
+            if (openingLifts.TryGetValue(id, out float lift))
+                return lift;
+            lift = 0f;
+            foreach (var end in mirror ? new[] { entry } : new[] { entry, exit })
+            {
+                var toLocal = Matrix4x4.TRS(end.position, end.rotation, Vector3.one).inverse;
+                Vector3 normal = end.forward;
+                foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                {
+                    if (!(r is MeshRenderer) || !r.enabled || r.gameObject.layer == 16 || r.gameObject.layer == 18 ||
+                        r.gameObject.layer == 20 || r.gameObject.layer == 30)
+                        continue;
+                    var m = r.sharedMaterial;
+                    if (m == null || m.renderQueue < 2500)
+                        continue;
+                    var b = r.bounds;
+                    Vector3 c = toLocal.MultiplyPoint3x4(b.center);
+                    float depth = Mathf.Abs(b.extents.x * normal.x) + Mathf.Abs(b.extents.y * normal.y) + Mathf.Abs(b.extents.z * normal.z);
+                    float reach = Mathf.Abs(c.z) + depth;
+                    if (reach > 1f || Mathf.Abs(c.x) > width * 0.5f || Mathf.Abs(c.y) > height * 0.5f)
+                        continue;
+                    lift = Mathf.Max(lift, reach + 0.02f);
+                }
+            }
+            openingLifts[id] = lift;
+            if (lift > 0f)
+                Logger.LogInfo($"[Portal] {portal.name} {id}: openings lifted {lift:F2} m past the transparent surfaces over them");
+            return lift;
         }
 
         // Diagnostic: each portal within 30 m of the camera, once.
