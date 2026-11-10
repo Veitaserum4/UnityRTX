@@ -1305,6 +1305,13 @@ int queued = 0;
                     vertexHandles.Add(sharedVertexHandle);
                 }
 
+                // Single-sided when every surface's material culls back faces (RemixMeshConverter
+                // CullBackFaces): camera rays then pass its back faces; its triangles reversed to
+                // face Unity's way in Remix (ReverseSingleSidedWinding).
+                bool singleSided = RemixMeshConverter.SingleSidedEnabled && data.Surfaces.Length > 0;
+                for (int s = 0; singleSided && s < data.Surfaces.Length; s++)
+                    singleSided = materialManager.CullsBackFaces(surfaceList[s].MaterialId);
+
                 // Build one surface per submesh, each with its own material (skipping non-triangle or empty surfaces)
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 bool bakeable = true;
@@ -1331,6 +1338,8 @@ int queued = 0;
                     }
                     if (validIndices.Count < 3)
                         continue;
+                    if (singleSided && RemixMeshConverter.ReverseWinding)
+                        RemixMeshConverter.ReverseTriangles(validIndices);
 
                     // Upward-facing triangles of a top-colored material get its top variant.
                     var parts = new List<(uint[] indices, int materialId)>(2);
@@ -1442,6 +1451,7 @@ int queued = 0;
                     return IntPtr.Zero;
                 }
                 meshConverter.SetBakeable(handle, bakeable);
+                meshConverter.SetSingleSided(handle, singleSided);
 
                 meshHandles[data.MeshHash] = handle;
                 return handle;

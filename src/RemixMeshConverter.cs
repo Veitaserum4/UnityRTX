@@ -271,6 +271,60 @@ namespace UnityRemix
 
         public bool IsBakeable(IntPtr meshHandle) => !unbakeableMeshes.ContainsKey(meshHandle);
 
+        // Single-sided meshes (every surface's material culls back faces, CullBackFaces on): their
+        // instances carry remixapi_InstanceInfoCameraCullingEXT BACK_FACES, so camera rays (and
+        // teleported ones) pass their back faces as Unity's camera does, while shadow, light and
+        // bounce rays still meet both sides. Their triangles are reversed when
+        // ReverseSingleSidedWinding is on: Unity's front faces are clockwise and Remix's (an
+        // unmirrored instance) counter-clockwise, and the y/z swap into Remix's axes mirrors.
+        public static ConfigEntry<bool> CullBackFaces;
+        public static ConfigEntry<bool> ReverseSingleSidedWinding;
+        private readonly ConcurrentDictionary<IntPtr, byte> singleSidedMeshes = new ConcurrentDictionary<IntPtr, byte>();
+        private static IntPtr cameraCullExt;
+
+        public static bool SingleSidedEnabled => CullBackFaces != null && CullBackFaces.Value;
+        public static bool ReverseWinding => ReverseSingleSidedWinding == null || ReverseSingleSidedWinding.Value;
+
+        public void SetSingleSided(IntPtr meshHandle, bool singleSided)
+        {
+            if (singleSided) singleSidedMeshes[meshHandle] = 0;
+            else singleSidedMeshes.TryRemove(meshHandle, out _);
+        }
+
+        public bool IsSingleSided(IntPtr meshHandle) => singleSidedMeshes.ContainsKey(meshHandle);
+
+        // InstanceInfo pNext for a retained instance of the mesh: the shared camera culling
+        // extension (immutable, its pNext null) when single-sided, else none.
+        public IntPtr CameraCullExtension(IntPtr meshHandle)
+        {
+            if (!singleSidedMeshes.ContainsKey(meshHandle))
+                return IntPtr.Zero;
+            if (cameraCullExt == IntPtr.Zero)
+            {
+                var ext = new RemixAPI.remixapi_InstanceInfoCameraCullingEXT
+                {
+                    sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_CULLING_EXT,
+                    pNext = IntPtr.Zero,
+                    flags = RemixAPI.REMIXAPI_INSTANCE_CAMERA_CULL_BACK_FACES_EXT
+                };
+                var p = Marshal.AllocHGlobal(Marshal.SizeOf<RemixAPI.remixapi_InstanceInfoCameraCullingEXT>());
+                Marshal.StructureToPtr(ext, p, false);
+                cameraCullExt = p;
+            }
+            return cameraCullExt;
+        }
+
+        // Reverses each triangle (i0 i1 i2 -> i0 i2 i1) in place.
+        public static void ReverseTriangles(List<uint> indices)
+        {
+            for (int i = 0; i + 2 < indices.Count; i += 3)
+            {
+                uint t = indices[i + 1];
+                indices[i + 1] = indices[i + 2];
+                indices[i + 2] = t;
+            }
+        }
+
         public void SetBakeable(IntPtr meshHandle, bool bakeable)
         {
             if (bakeable) unbakeableMeshes.TryRemove(meshHandle, out _);
@@ -660,6 +714,11 @@ namespace UnityRemix
                     meshToMaterialMap[meshKey] = primaryMatId;
                 }
 
+                // Single-sided when every surface's material culls back faces (CullBackFaces).
+                bool singleSided = SingleSidedEnabled && submeshIndices.Count > 0 && data.SubmeshMaterialIds != null;
+                for (int s = 0; singleSided && s < submeshIndices.Count; s++)
+                    singleSided = s < data.SubmeshMaterialIds.Count && materialManager.CullsBackFaces(data.SubmeshMaterialIds[s]);
+
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 bool bakeable = true;
                 for (int s = 0; s < submeshIndices.Count; s++)
@@ -685,6 +744,8 @@ namespace UnityRemix
                     }
                     if (validIndices.Count < 3)
                         continue;
+                    if (singleSided && ReverseWinding)
+                        ReverseTriangles(validIndices);
 
                     Material mat = (s < submeshMaterials.Count) ? submeshMaterials[s] : null;
                     int baseMatId = (data.SubmeshMaterialIds != null && s < data.SubmeshMaterialIds.Count && data.SubmeshMaterialIds[s] != 0)
@@ -809,6 +870,7 @@ namespace UnityRemix
 
                 meshCache[meshKey] = handle;
                 SetBakeable(handle, bakeable);
+                SetSingleSided(handle, singleSided);
                 logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
 
                 return handle;
@@ -1201,10 +1263,17 @@ namespace UnityRemix
                     offsetY = uvTransform.HasValue ? uvTransform.Value.w : 0f
                 };
 
+                var cullExt = new RemixAPI.remixapi_InstanceInfoCameraCullingEXT
+                {
+                    sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_CULLING_EXT,
+                    pNext = uvTransform.HasValue ? (IntPtr)(&texcoordExt) : (IntPtr)(&objectPickingExt),
+                    flags = RemixAPI.REMIXAPI_INSTANCE_CAMERA_CULL_BACK_FACES_EXT
+                };
                 var instanceInfo = new RemixAPI.remixapi_InstanceInfo
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                    pNext = uvTransform.HasValue ? (IntPtr)(&texcoordExt) : (IntPtr)(&objectPickingExt),
+                    pNext = singleSidedMeshes.ContainsKey(meshHandle) ? (IntPtr)(&cullExt)
+                          : uvTransform.HasValue ? (IntPtr)(&texcoordExt) : (IntPtr)(&objectPickingExt),
                     categoryFlags = categoryFlags,
                     mesh = meshHandle,
                     transform = transform,
