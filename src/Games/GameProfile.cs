@@ -38,6 +38,10 @@ namespace UnityRemix.Games
         // however the material is first captured).
         public virtual void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor) { }
 
+        // The camera the game draws its view models (weapons, arms) with, when it isn't the
+        // world camera; null: the world camera's projection.
+        public virtual Camera FindViewModelCamera(Camera worldCamera) => null;
+
         // The Remix menu opened or closed (Single Window). On close, returns whether the
         // cursor locks again; null restores the lock it had when the menu opened.
         public virtual bool? OnRemixMenu(bool open) => null;

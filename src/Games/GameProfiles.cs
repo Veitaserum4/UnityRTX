@@ -82,6 +82,13 @@ namespace UnityRemix.Games
             albedoColor = color;
         }
 
+        public static Camera FindViewModelCamera(Camera worldCamera)
+        {
+            Camera camera = null;
+            Run(nameof(FindViewModelCamera), p => camera = p.FindViewModelCamera(worldCamera));
+            return camera;
+        }
+
         public static bool? OnRemixMenu(bool open)
         {
             bool? lockCursor = null;

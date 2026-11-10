@@ -357,6 +357,7 @@ namespace UnityRemix
             {
                 if (cam == null) continue;
 
+                GameCameraMasks.Remember(cam);
                 if (!originalCullingMasks.ContainsKey(cam))
                 {
                     originalCullingMasks[cam] = cam.cullingMask;
@@ -370,21 +371,6 @@ namespace UnityRemix
 
             inEngineRenderingSuppressed = true;
             logger?.LogInfo($"[RemixFramebufferPresenter] In-engine 3D rendering suppressed on {suppressedCount} World Cameras.");
-        }
-
-        /// <summary>
-        /// Layers the game's cameras draw: every enabled camera's culling mask as the game set
-        /// it (suppressed world cameras count with their saved mask). Main thread.
-        /// </summary>
-        public int GameLayerMask()
-        {
-            int mask = 0;
-            foreach (var cam in Camera.allCameras)
-            {
-                if (cam != null)
-                    mask |= originalCullingMasks.TryGetValue(cam, out int original) ? original : cam.cullingMask;
-            }
-            return mask;
         }
 
         public void ApplyInEngineRenderingSuppression()

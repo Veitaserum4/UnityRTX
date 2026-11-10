@@ -30,6 +30,27 @@ namespace UnityRemix.Games.Ultrakill
             UltrakillSpawnPatch.Apply(harmony, Logger);
         }
 
+        // Weapons and arms are drawn by the main camera's "HUD Camera" child, at the weapon FOV.
+        private Camera worldCamera, hudCamera;
+
+        public override Camera FindViewModelCamera(Camera world)
+        {
+            if (world != worldCamera || (hudCamera == null && Time.frameCount % 60 == 0))
+            {
+                worldCamera = world;
+                hudCamera = null;
+                foreach (var cam in world.GetComponentsInChildren<Camera>(true))
+                {
+                    if (cam.name == "HUD Camera")
+                    {
+                        hudCamera = cam;
+                        break;
+                    }
+                }
+            }
+            return hudCamera;
+        }
+
         public override bool? OnRemixMenu(bool open) => UltrakillGameState.SetRemixMenuState(open, Logger);
 
         public override void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) =>

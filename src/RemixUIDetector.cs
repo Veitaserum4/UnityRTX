@@ -452,6 +452,7 @@ namespace UnityRemix
             {
                 if (cam != null && cam != dedicatedUICamera)
                 {
+                    GameCameraMasks.Remember(cam);
                     cam.cullingMask &= ~1; // Strip Default (0)
                     cam.cullingMask |= uiLayerBit; // Include UI (5)
                 }
@@ -774,6 +775,7 @@ namespace UnityRemix
             }
 
             // Ensure UI layer is included in camera culling mask
+            GameCameraMasks.Remember(cam);
             cam.cullingMask |= (1 << uiLayer);
         }
 

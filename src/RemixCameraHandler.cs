@@ -403,6 +403,49 @@ namespace UnityRemix
         }
         
         /// <summary>
+        /// REMIXAPI_CAMERA_TYPE_VIEW_MODEL: the camera VIEW_MODEL instances (weapons, arms) are
+        /// projected with; OpenRemix places them so this camera's image of them lands in the
+        /// world camera's view.
+        /// </summary>
+        public void SetupViewModelCamera(Vector3 position, Vector3 forward, Vector3 up, Vector3 right,
+            float fov, float aspect, float nearPlane, float farPlane)
+        {
+            if (setupCameraFunc == null || !(fov > 0f && fov < 180f) || !(nearPlane > 0f) || !(farPlane > nearPlane))
+                return;
+
+            var paramCamera = new RemixAPI.remixapi_CameraInfoParameterizedEXT
+            {
+                sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT,
+                pNext = IntPtr.Zero,
+                position = new RemixAPI.remixapi_Float3D(position.x, position.z, position.y),
+                forward = new RemixAPI.remixapi_Float3D(forward.x, forward.z, forward.y),
+                up = new RemixAPI.remixapi_Float3D(up.x, up.z, up.y),
+                right = new RemixAPI.remixapi_Float3D(right.x, right.z, right.y),
+                fovYInDegrees = fov,
+                aspect = aspect,
+                nearPlane = nearPlane,
+                farPlane = farPlane
+            };
+
+            GCHandle paramHandle = GCHandle.Alloc(paramCamera, GCHandleType.Pinned);
+            try
+            {
+                var cameraInfo = new RemixAPI.remixapi_CameraInfo
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_INFO,
+                    pNext = paramHandle.AddrOfPinnedObject(),
+                    type = RemixAPI.remixapi_CameraType.REMIXAPI_CAMERA_TYPE_VIEW_MODEL
+                };
+                setupCameraFunc(ref cameraInfo);
+            }
+            catch { }
+            finally
+            {
+                paramHandle.Free();
+            }
+        }
+
+        /// <summary>
         /// Setup a test camera at origin looking down +Z
         /// </summary>
         public void SetupTestCamera(int windowWidth, int windowHeight, int frameCount)

@@ -515,6 +515,10 @@ namespace UnityRemix
                     cam.position, cam.forward, cam.up, cam.right,
                     cam.fov, cam.aspect, cam.nearPlane, cam.farPlane
                 );
+                cameraHandler.SetupViewModelCamera(
+                    cam.viewModelPosition, cam.viewModelForward, cam.viewModelUp, cam.viewModelRight,
+                    cam.viewModelFov, cam.aspect, cam.viewModelNearPlane, cam.viewModelFarPlane
+                );
             }
             else
             {

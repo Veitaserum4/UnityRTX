@@ -106,6 +106,7 @@ namespace UnityRemix
                 cam.targetTexture = uiRenderTexture;
                 cam.clearFlags = targetClear;
                 cam.backgroundColor = targetBg;
+                GameCameraMasks.Remember(cam);
                 if (cam.name == "UnityRemix_DedicatedUICamera")
                 {
                     cam.cullingMask = uiLayerBit;
@@ -803,6 +804,7 @@ namespace UnityRemix
                 int uiLayerBit = uiLayer >= 0 ? (1 << uiLayer) : (1 << 5);
                 int threeDMask = RemixUIDetector.CurrentThreeDLayerMask & ~uiLayerBit;
 
+                GameCameraMasks.Remember(cam);
                 if (cam.name == "UnityRemix_DedicatedUICamera")
                 {
                     cam.cullingMask = uiLayerBit;

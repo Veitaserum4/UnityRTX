@@ -670,6 +670,10 @@ namespace UnityRemix
             public float nearPlane;
             public float farPlane;
             public bool valid;
+            // The view-model camera (REMIXAPI_CAMERA_TYPE_VIEW_MODEL): the game's own when its
+            // GameProfile names one, else the world camera's.
+            public Vector3 viewModelPosition, viewModelForward, viewModelUp, viewModelRight;
+            public float viewModelFov, viewModelNearPlane, viewModelFarPlane;
         }
         
         public struct MeshInstanceData
@@ -812,6 +816,7 @@ namespace UnityRemix
         private readonly Dictionary<int, CachedStaticRendererInfo> cachedStaticInfo = new Dictionary<int, CachedStaticRendererInfo>(1024);
         private readonly Dictionary<int, CachedSkinnedRendererInfo> cachedSkinnedInfo = new Dictionary<int, CachedSkinnedRendererInfo>(128);
         private readonly HashSet<int> reusableValidSkinnedIds = new HashSet<int>();
+        private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
         private readonly List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)> reusableBakeFallbackQueue = new List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)>();
         private readonly List<int> reusableStaleSkinnedKeys = new List<int>();
         private Camera lastTrackedCamera;
@@ -1368,6 +1373,16 @@ namespace UnityRemix
                     farPlane = mainCam.farClipPlane,
                     valid = true
                 };
+                var viewModelCam = Games.GameProfiles.FindViewModelCamera(mainCam);
+                var vm = viewModelCam != null ? viewModelCam : mainCam;
+                var vt = vm.transform;
+                state.camera.viewModelPosition = vt.position;
+                state.camera.viewModelForward = vt.forward;
+                state.camera.viewModelUp = vt.up;
+                state.camera.viewModelRight = vt.right;
+                state.camera.viewModelFov = vm.fieldOfView;
+                state.camera.viewModelNearPlane = vm.nearClipPlane;
+                state.camera.viewModelFarPlane = vm.farClipPlane;
 
                 // Update skybox state on main thread
                 skyboxManager?.UpdateSkybox(mainCam, frameCount);
@@ -2225,12 +2240,14 @@ namespace UnityRemix
             
             Camera mainCam = cameraHandler.GetPreferredCamera();
             Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;
+            Transform mainCamTransform = mainCam != null ? mainCam.transform : null;
+            viewModelSkinnedIds.Clear();
 
             if (mainCam != null)
             {
                 EnsureCameraRenderersTracked(mainCam, frameCount);
             }
-            
+
             // BakeMesh fallback budget
             var bakeSw = System.Diagnostics.Stopwatch.StartNew();
             const float bakeMaxMs = 100.0f;
@@ -2312,13 +2329,22 @@ namespace UnityRemix
                 }
                 
                 validSkinnedIds.Add(skinnedId);
+                // Held by the camera (arms, weapons): drawn as view models.
+                bool viewModel = mainCamTransform != null && tr.IsChildOf(mainCamTransform);
+                if (viewModel)
+                    viewModelSkinnedIds.Add(skinnedId);
                 // Also register per-submesh sub-keys so they survive the stale-pruning pass
                 // Formula: sub0 = skinnedId, sub>0 = skinnedId ^ (sub * KNUTH_PRIME)
                 var smMaterials = info.sharedMaterials;
                 if (smMaterials != null)
                 {
                     for (int sub = 1; sub < smMaterials.Length; sub++)
-                        validSkinnedIds.Add((int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u)));
+                    {
+                        int subKey = (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
+                        validSkinnedIds.Add(subKey);
+                        if (viewModel)
+                            viewModelSkinnedIds.Add(subKey);
+                    }
                 }
                 
                 // Compute unscaled transform (sign-only scale preserves winding)
@@ -2540,7 +2566,10 @@ namespace UnityRemix
             {
                 if (validSkinnedIds.Contains(entry.meshId))
                 {
-                    state.skinned.Add(entry);
+                    var submitted = entry;
+                    if (viewModelSkinnedIds.Contains(entry.meshId))
+                        submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
+                    state.skinned.Add(submitted);
                 }
             }
             
