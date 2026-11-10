@@ -49,11 +49,12 @@ namespace UnityRemix
             if (queued || capture == null || materials == null)
                 return;
             queued = true;
-            var shader = Shader.Find("Unlit/Color") ?? Shader.Find("UI/Default") ?? Shader.Find("Standard");
+            var shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color");
             for (int index = 0; index < SlotPairs * 2; index++)
             {
-                // Magenta: seen only where a portal is drawn but does not open (diagnostic).
-                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.magenta };
+                // Black, not emissive: seen only where a portal is drawn but does not open (camera
+                // rays only: OpenRemix leaves openings out of every other ray).
+                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.black };
                 int materialId = MaterialIdBase - index;
                 materials.SetRayPortalIndex(materialId, index);
                 materials.CaptureMaterialTextures(material, materialId);
@@ -63,7 +64,16 @@ namespace UnityRemix
                 if (index < 2)
                     Queue(capture, HiddenMeshKey(index), material, materialId, $"RemixRayPortalHidden{index}", 10000f, 0.001f);
             }
+            // A mirror: white, metallic, smooth (the path tracer reflects).
+            var mirror = new Material(Shader.Find("Standard") ?? shader) { name = "RemixMirror", color = Color.white };
+            if (mirror.HasProperty("_Metallic")) mirror.SetFloat("_Metallic", 1f);
+            if (mirror.HasProperty("_Glossiness")) mirror.SetFloat("_Glossiness", 1f);
+            materials.CaptureMaterialTextures(mirror, MirrorMaterialId);
+            Queue(capture, MirrorMeshKey, mirror, MirrorMaterialId, "RemixMirror", 0f, 1f);
         }
+
+        private const ulong MirrorMeshKey = MeshKeyBase | 0x200UL;
+        private const int MirrorMaterialId = MaterialIdBase - 100;
 
         private static void Queue(RemixFrameCapture capture, ulong meshKey, Material material, int materialId, string name, float offset, float size)
         {
@@ -93,9 +103,11 @@ namespace UnityRemix
             if (camera.portalActive && DrawView(meshes, camera, ref objectPickingValue))
                 pair = 1;
             var portals = camera.portals;
-            for (int i = 0; portals != null && i < portals.Length && pair < SlotPairs; i++)
+            for (int i = 0; portals != null && i < portals.Length; i++)
             {
-                if (DrawPortal(meshes, camera, portals[i], pair, ref objectPickingValue))
+                if (portals[i].mirror)
+                    DrawMirror(meshes, camera, portals[i], ref objectPickingValue);
+                else if (pair < SlotPairs && DrawPortal(meshes, camera, portals[i], pair, ref objectPickingValue))
                     pair++;
             }
             ReportOnce(pair);
@@ -167,6 +179,17 @@ namespace UnityRemix
         // Remix's opening frame onto the game's: x -> +z or -z (a quarter turn about y).
         private static readonly Matrix4x4 FacePlusZ = Matrix4x4.Rotate(Quaternion.AngleAxis(-90f, Vector3.up));
         private static readonly Matrix4x4 FaceMinusZ = Matrix4x4.Rotate(Quaternion.AngleAxis(90f, Vector3.up));
+
+        // A mirror portal (its view reflected in its opening): a mirror quad, both sides.
+        private void DrawMirror(RemixMeshConverter meshes, RemixFrameCapture.CameraData camera, Games.PortalPair portal, ref uint objectPickingValue)
+        {
+            if (!meshes.TryGetMeshHandle(MirrorMeshKey, out var mirror))
+                return;
+            var t = portal.entry * FacePlusZ * Matrix4x4.Scale(new Vector3(1f, portal.height, portal.width));
+            meshes.DrawMeshInstance(mirror, t, objectPickingValue++, 0, MirrorMeshKey ^ (ulong)(uint)portal.id, isDynamic: true);
+            if (loggedPortals.Add(portal.id))
+                logger.LogInfo($"[Portal] mirror {portal.id}: at {(Vector3)portal.entry.GetColumn(3)}, {portal.width:F2} x {portal.height:F2}");
+        }
 
         private bool DrawPortal(RemixMeshConverter meshes, RemixFrameCapture.CameraData camera, Games.PortalPair portal, int pair, ref uint objectPickingValue)
         {

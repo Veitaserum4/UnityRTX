@@ -38,6 +38,8 @@ namespace UnityRemix.Games
         public int id;
         public Matrix4x4 entry, exit;
         public float width, height;
+        // A mirror: the opening reflects (exit is entry).
+        public bool mirror;
     }
 
     public abstract class GameProfile

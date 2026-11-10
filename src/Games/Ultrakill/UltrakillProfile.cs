@@ -78,7 +78,8 @@ namespace UnityRemix.Games.Ultrakill
         // unscaled. Listed every 60 frames, read every frame.
         private Type portalType;
         private bool portalTypeSearched;
-        private System.Reflection.FieldInfo portalEntry, portalExit, portalShape, shapeWidth, shapeHeight;
+        private System.Reflection.FieldInfo portalEntry, portalExit, portalShape, shapeWidth, shapeHeight, portalMirror;
+        private bool loggedPortalLayer;
         private readonly List<Behaviour> portalComponents = new List<Behaviour>();
         private int portalListFrame = int.MinValue / 2;
 
@@ -97,6 +98,7 @@ namespace UnityRemix.Games.Ultrakill
                     portalEntry = portalType.GetField("entry");
                     portalExit = portalType.GetField("exit");
                     portalShape = portalType.GetField("shape");
+                    portalMirror = portalType.GetField("mirror");
                     var planeShape = portalType.Assembly.GetType("ULTRAKILL.Portal.Geometry.PlaneShape");
                     shapeWidth = planeShape?.GetField("width");
                     shapeHeight = planeShape?.GetField("height");
@@ -120,7 +122,8 @@ namespace UnityRemix.Games.Ultrakill
                 if (portal == null || !portal.isActiveAndEnabled)
                     continue;
                 var entry = portalEntry.GetValue(portal) as Transform;
-                var exit = portalExit.GetValue(portal) as Transform;
+                bool mirror = portalMirror != null && (bool)portalMirror.GetValue(portal);
+                var exit = mirror ? entry : portalExit.GetValue(portal) as Transform;
                 var shape = portalShape.GetValue(portal);
                 if (entry == null || exit == null || shape == null || shape.GetType() != shapeWidth.DeclaringType)
                     continue;
@@ -128,16 +131,33 @@ namespace UnityRemix.Games.Ultrakill
                 if (width <= 0f || height <= 0f)
                     continue;
                 // Both ends in one place (a view turned about the opening): left out, it would
-                // take a pair and lie on itself.
-                if ((entry.position - exit.position).sqrMagnitude < 0.0001f)
+                // take a pair and lie on itself. A mirror (its exit is its entry) is drawn as one.
+                if (!mirror && (entry.position - exit.position).sqrMagnitude < 0.0001f)
                     continue;
+                if (mirror && !loggedPortalLayer)
+                {
+                    // What a mirror's view adds (canSeePortalLayer: the Portal layer, 30).
+                    loggedPortalLayer = true;
+                    int n = 0;
+                    foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                    {
+                        if (r.gameObject.layer != 30 || n++ >= 40)
+                            continue;
+                        string path = r.name;
+                        for (var t = r.transform.parent; t != null; t = t.parent)
+                            path = t.name + "/" + path;
+                        Logger.LogInfo($"[Portal] layer 30 renderer '{path}' ({r.GetType().Name}), enabled {r.enabled}, at {r.bounds.center}");
+                    }
+                    Logger.LogInfo($"[Portal] {n} active renderers on layer 30");
+                }
                 portals.Add(new PortalPair
                 {
                     id = portal.GetInstanceID(),
                     entry = Matrix4x4.TRS(entry.position, entry.rotation, Vector3.one),
                     exit = Matrix4x4.TRS(exit.position, exit.rotation, Vector3.one),
                     width = width,
-                    height = height
+                    height = height,
+                    mirror = mirror
                 });
             }
             // Remix has room for a few: those with an end in front of the camera first, nearest first.
