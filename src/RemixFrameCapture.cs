@@ -2704,7 +2704,8 @@ namespace UnityRemix
         // second time, flat over the image (their canvases are on the UI layer). The capture
         // generates their meshes itself, so culling does not affect it.
         private readonly HashSet<CanvasRenderer> culledWeaponScreens = new HashSet<CanvasRenderer>();
-        private const float WeaponScreenLift = 0.002f; // metres
+        private const float WeaponScreenLift = 0.01f; // metres
+        private readonly HashSet<int> loggedWeaponScreens = new HashSet<int>();
 
         private void UncullWeaponScreens()
         {
@@ -2907,6 +2908,14 @@ namespace UnityRemix
                 if (Vector3.Dot(mainCam.transform.position - rect.position, facing) > 0f)
                     facing = -facing; // mirrored canvas: its visible side is +Z
                 Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * WeaponScreenLift) * rect.localToWorldMatrix;
+                if (loggedWeaponScreens.Add(graphicId))
+                {
+                    Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
+                    logger.LogInfo($"[WeaponScreen] '{g.name}' under '{(rect.parent != null ? rect.parent.name : "-")}' " +
+                                   $"canvas '{g.canvas.name}' ({g.canvas.renderMode}, layer {LayerMask.LayerToName(g.gameObject.layer)}): " +
+                                   $"{size.x:F3} x {size.y:F3} m, {Vector3.Distance(mainCam.transform.position, rect.position):F3} m from the camera, " +
+                                   $"facing dot {Vector3.Dot((mainCam.transform.position - rect.position).normalized, rect.forward):F2}, mirrored {facing != rect.forward}");
+                }
 
                 state.skinned.Add(new SkinnedMeshData
                 {
