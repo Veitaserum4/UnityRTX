@@ -674,10 +674,6 @@ namespace UnityRemix
             // GameProfile names one, else the world camera's.
             public Vector3 viewModelPosition, viewModelForward, viewModelUp, viewModelRight;
             public float viewModelFov, viewModelNearPlane, viewModelFarPlane;
-            // The game's 3D sky (GameProfile.GetSkyView): the sky camera's position, and the
-            // region whose scanned geometry is drawn from it as sky.
-            public bool skyActive;
-            public Games.SkyView sky;
         }
         
         public struct MeshInstanceData
@@ -1430,8 +1426,6 @@ namespace UnityRemix
                 state.camera.viewModelFov = vm.fieldOfView;
                 state.camera.viewModelNearPlane = vm.nearClipPlane;
                 state.camera.viewModelFarPlane = vm.farClipPlane;
-                state.camera.skyActive = Games.GameProfiles.GetSkyView(mainCam, out state.camera.sky);
-                SceneMeshScanner.SkyRegion = state.camera.skyActive ? state.camera.sky : (Games.SkyView?)null;
 
                 // Update skybox state on main thread
                 skyboxManager?.UpdateSkybox(mainCam, frameCount);

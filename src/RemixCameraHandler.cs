@@ -298,14 +298,8 @@ namespace UnityRemix
         /// <summary>
         /// Setup Remix camera from raw parameters (for captured frame data)
         /// </summary>
-        // The sky camera's far plane: the skybox sphere is drawn at half of it (RemixSkyboxManager).
-        public const float SkyFarPlane = 1000f;
-
-        public static float SkyFarFor(Games.SkyView? sky) =>
-            sky.HasValue ? Mathf.Max(SkyFarPlane, sky.Value.regionRadius * 4f) : SkyFarPlane;
-
         public void SetupRemixCamera(Vector3 position, Vector3 forward, Vector3 up, Vector3 right,
-            float fov, float aspect, float nearPlane, float farPlane, Games.SkyView? sky = null)
+            float fov, float aspect, float nearPlane, float farPlane)
         {
             if (setupCameraFunc == null)
                 return;
@@ -374,21 +368,19 @@ namespace UnityRemix
                 }
             }
 
-            // Also setup REMIXAPI_CAMERA_TYPE_SKY with the same orientation and projection: at the
-            // game's 3D sky camera when it has one, else at the origin (the skybox sphere's centre).
-            Vector3 skyPosition = sky.HasValue ? sky.Value.cameraPosition : Vector3.zero;
+            // Also setup REMIXAPI_CAMERA_TYPE_SKY (centered at origin with same orientation and projection)
             var skyParamCamera = new RemixAPI.remixapi_CameraInfoParameterizedEXT
             {
                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT,
                 pNext = IntPtr.Zero,
-                position = new RemixAPI.remixapi_Float3D(skyPosition.x, skyPosition.z, skyPosition.y),
+                position = new RemixAPI.remixapi_Float3D(0f, 0f, 0f),
                 forward = new RemixAPI.remixapi_Float3D(forward.x, forward.z, forward.y),
                 up = new RemixAPI.remixapi_Float3D(up.x, up.z, up.y),
                 right = new RemixAPI.remixapi_Float3D(right.x, right.z, right.y),
                 fovYInDegrees = fov,
                 aspect = aspect,
-                nearPlane = sky.HasValue ? Mathf.Max(0.01f, nearPlane) : 0.1f,
-                farPlane = SkyFarFor(sky)
+                nearPlane = 0.1f,
+                farPlane = 1000.0f
             };
 
             GCHandle skyParamHandle = GCHandle.Alloc(skyParamCamera, GCHandleType.Pinned);

@@ -547,8 +547,7 @@ namespace UnityRemix
                 // Convert camera from Unity Y-up to Z-up coordinate system
                 cameraHandler.SetupRemixCamera(
                     cam.position, cam.forward, cam.up, cam.right,
-                    cam.fov, cam.aspect, cam.nearPlane, cam.farPlane,
-                    cam.skyActive ? cam.sky : (Games.SkyView?)null
+                    cam.fov, cam.aspect, cam.nearPlane, cam.farPlane
                 );
                 cameraHandler.SetupViewModelCamera(
                     cam.viewModelPosition, cam.viewModelForward, cam.viewModelUp, cam.viewModelRight,
@@ -582,7 +581,6 @@ namespace UnityRemix
             pendingChanges.Clear();
 
             // 1. Scanned static scene meshes (level geometry)
-            int skyInstancesDrawn = 0;
             if (sceneMeshScanner != null && (sceneMeshScanner.HasData || sceneMeshScanner.IsStreaming))
             {
                 var scannedInstances = sceneMeshScanner.GetInstances(out int scannedCount);
@@ -599,18 +597,6 @@ namespace UnityRemix
 
                         if (!StaticGeometryDedupe.TryClaimVisibleInstance(instance.RendererInstanceId, instance.DedupeKey, claimedRendererIds, claimedStaticKeys))
                             continue;
-
-                        // The game's 3D sky: drawn each frame from the sky camera (the path
-                        // tracer's sky pass depth-tests it), not kept in the traced world.
-                        if (state.camera.skyActive && state.camera.sky.Contains(instance.BoundsCenter))
-                        {
-                            meshConverter.DrawMeshInstance(instance.MeshHandle, UnityEngine.Matrix4x4.identity, objectPickingValue,
-                                (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY,
-                                (ulong)(uint)instance.RendererInstanceId, isDynamic: true, remixTransform: instance.Transform);
-                            objectPickingValue++;
-                            skyInstancesDrawn++;
-                            continue;
-                        }
 
                         ulong instanceKey = ((ulong)(uint)instance.RendererInstanceId << 32) | (ulong)(uint)(instance.MeshHandle.ToInt64() & 0xFFFFFFFF);
                         visibleRetainedKeysThisFrame.Add(instanceKey);
@@ -658,9 +644,6 @@ namespace UnityRemix
                     }
                 }
             }
-
-            if (state.camera.skyActive && state.frameCount % 300 == 0)
-                logger.LogInfo($"[Sky] 3D sky: {skyInstancesDrawn} scanned instances drawn from the sky camera at {state.camera.sky.cameraPosition} (region radius {state.camera.sky.regionRadius:F1})");
 
             // 2. Terrain chunks
             if (terrainManager != null && (terrainManager.HasData || terrainManager.IsStreaming))

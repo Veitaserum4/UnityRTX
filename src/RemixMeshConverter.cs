@@ -1103,14 +1103,14 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null, RemixAPI.remixapi_Transform? remixTransform = null)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
-
-            // Convert Unity Matrix4x4 to Remix transform (Y-up to Z-up), unless given one already
+            
+            // Convert Unity Matrix4x4 to Remix transform (Y-up to Z-up)
             var m = localToWorld;
-            var transform = remixTransform ?? RemixAPI.remixapi_Transform.FromMatrix(
+            var transform = RemixAPI.remixapi_Transform.FromMatrix(
                 m.m00, m.m02, m.m01, m.m03,
                 m.m20, m.m22, m.m21, m.m23,
                 m.m10, m.m12, m.m11, m.m13

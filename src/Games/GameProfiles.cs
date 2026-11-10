@@ -105,15 +105,6 @@ namespace UnityRemix.Games
             return found;
         }
 
-        public static bool GetSkyView(Camera worldCamera, out SkyView view)
-        {
-            bool found = false;
-            var result = default(SkyView);
-            Run(nameof(GetSkyView), p => found = p.GetSkyView(worldCamera, out result));
-            view = result;
-            return found;
-        }
-
         public static Camera FindViewModelCamera(Camera worldCamera)
         {
             Camera camera = null;

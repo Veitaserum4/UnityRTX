@@ -62,75 +62,8 @@ namespace UnityRemix.Games.Ultrakill
 
         // Unity's built-in Default-Material appears only on helper shapes the game doesn't show:
         // crusher base boxes, skull altar placeholders, invisible walls.
-        // Limbo's TV-screen walls (LIMBO_WALLS) show _LimboSky, the LimboSkybox camera's view,
-        // in screen space (times their own texture, with glitches): drawn as the 3D sky
-        // (GetSkyView) seen through where they stand.
         public override bool IsHiddenMaterial(Material material) =>
-            material.name.StartsWith("Default-Material", StringComparison.Ordinal) ||
-            material.IsKeywordEnabled("LIMBO_WALLS");
-
-        // LimboSkybox: a camera ("fakeCam") in a miniature scene elsewhere in the level, turned
-        // like the player's, at fakeCamStart + (player - playerStart) / 16 (y not below the
-        // start's with lockMinimumHeight), drawing everything around it. The sky region: around
-        // fakeCamStart, within its camera's far plane and nearer it than the player's start.
-        private Type limboType;
-        private bool limboTypeSearched;
-        private Behaviour limbo;
-        private int limboSearchFrame = int.MinValue / 2;
-        private System.Reflection.FieldInfo limboFakeCamStart, limboPlayerStartPos, limboLockMinimumHeight;
-        private int loggedLimbo;
-
-        public override bool GetSkyView(Camera worldCamera, out SkyView view)
-        {
-            view = default;
-            if (!limboTypeSearched)
-            {
-                limboTypeSearched = true;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    try { limboType = asm.GetType("LimboSkybox"); } catch { }
-                    if (limboType != null) break;
-                }
-                if (limboType != null)
-                {
-                    const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
-                    limboFakeCamStart = limboType.GetField("fakeCamStart", all);
-                    limboPlayerStartPos = limboType.GetField("playerStartPos", all);
-                    limboLockMinimumHeight = limboType.GetField("lockMinimumHeight", all);
-                }
-            }
-            if (limboType == null || limboFakeCamStart == null || limboPlayerStartPos == null || worldCamera == null)
-                return false;
-            int frame = Time.frameCount;
-            if (limbo == null && frame - limboSearchFrame >= 120)
-            {
-                limboSearchFrame = frame;
-                limbo = UnityEngine.Object.FindObjectOfType(limboType) as Behaviour;
-            }
-            if (limbo == null || !limbo.isActiveAndEnabled)
-                return false;
-            var fakeCamStart = limboFakeCamStart.GetValue(limbo) as Transform;
-            if (fakeCamStart == null)
-                return false;
-            var playerStart = (Vector3)limboPlayerStartPos.GetValue(limbo);
-            bool lockHeight = limboLockMinimumHeight == null || (bool)limboLockMinimumHeight.GetValue(limbo);
-            Vector3 offset = (worldCamera.transform.position - playerStart) / 16f;
-            if (lockHeight)
-                offset.y = Mathf.Max(offset.y, 0f);
-            Vector3 centre = fakeCamStart.position;
-            var fakeCam = limbo.GetComponent<Camera>();
-            float far = fakeCam != null ? fakeCam.farClipPlane : 1000f;
-            view.cameraPosition = centre + offset;
-            view.regionCenter = centre;
-            view.regionRadius = Mathf.Min(far, Vector3.Distance(centre, playerStart) * 0.5f);
-            if (loggedLimbo != limbo.GetInstanceID())
-            {
-                loggedLimbo = limbo.GetInstanceID();
-                Logger.LogInfo($"[Limbo] sky camera '{limbo.name}': fake start {centre}, player start {playerStart}, far {far:F0}, " +
-                               $"sky region radius {view.regionRadius:F1}, lock height {lockHeight}");
-            }
-            return true;
-        }
+            material.name.StartsWith("Default-Material", StringComparison.Ordinal);
 
         public override void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
         {
