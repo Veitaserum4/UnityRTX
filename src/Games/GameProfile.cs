@@ -28,6 +28,10 @@ namespace UnityRemix.Games
         // (the game moves, spawns or swaps it).
         public virtual bool IsDynamicObject(MeshFilter filter, Renderer renderer) => false;
 
+        // A static renderer the game shows or hides by deactivating it: the scan draws it only
+        // while active in the hierarchy, even when inactive geometry is otherwise kept.
+        public virtual bool FollowsActiveState(MeshFilter filter, Renderer renderer) => false;
+
         // A material the game never shows (helper shapes, trigger volumes): surfaces with it
         // are not drawn.
         public virtual bool IsHiddenMaterial(Material material) => false;

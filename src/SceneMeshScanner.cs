@@ -34,8 +34,8 @@ namespace UnityRemix
         {
             None = 0,
             IsCombinedMesh = 1 << 0,
-            IsCheckPoint = 1 << 1,
-            IsNoPass = 1 << 2,
+            // The game toggles it by deactivation (GameProfile.FollowsActiveState).
+            FollowsActiveState = 1 << 1,
             HasMoved = 1 << 3,
             IsScaleZero = 1 << 4,
             // Inactive in hierarchy: AncestorDisabled caches the activeSelf / ancestor walk
@@ -541,8 +541,8 @@ namespace UnityRemix
                             continue;
                         }
 
-                        // 4. Special toggleable objects that must follow activeInHierarchy (CheckPoint graphic, Door noPass skull lock)
-                        if ((instance.Flags & (InstanceFlags.IsCheckPoint | InstanceFlags.IsNoPass)) != 0 && !activeInHierarchy)
+                        // 4. Objects the game toggles by deactivation (its profile names them)
+                        if ((instance.Flags & InstanceFlags.FollowsActiveState) != 0 && !activeInHierarchy)
                         {
                             culledInactive++;
                             continue;
@@ -781,78 +781,11 @@ namespace UnityRemix
             activeScene = default;
         }
 
-        private static Type _checkPointType;
-        private static bool _checkPointTypeSearched;
-
-        private static Type GetCheckPointType()
-        {
-            if (!_checkPointTypeSearched)
-            {
-                _checkPointTypeSearched = true;
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    var t = asm.GetType("CheckPoint");
-                    if (t != null)
-                    {
-                        _checkPointType = t;
-                        break;
-                    }
-                }
-            }
-            return _checkPointType;
-        }
-
         private static InstanceFlags DetermineInstanceFlags(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
         {
             if (isCombinedMesh)
                 return InstanceFlags.IsCombinedMesh;
-
-            InstanceFlags flags = InstanceFlags.None;
-
-            try
-            {
-                var cpType = GetCheckPointType();
-                if (cpType != null && renderer.GetComponentInParent(cpType) != null)
-                {
-                    flags |= InstanceFlags.IsCheckPoint;
-                }
-                else
-                {
-                    string objName = filter.gameObject.name;
-                    if (!string.IsNullOrEmpty(objName) && objName.IndexOf("CheckPoint", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        flags |= InstanceFlags.IsCheckPoint;
-                    }
-                    else if (filter.transform.parent != null && !string.IsNullOrEmpty(filter.transform.parent.name) &&
-                             filter.transform.parent.name.IndexOf("CheckPoint", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        flags |= InstanceFlags.IsCheckPoint;
-                    }
-                }
-            }
-            catch { }
-
-            try
-            {
-                string objName = filter.gameObject.name;
-                if (!string.IsNullOrEmpty(objName) && objName.IndexOf("NoPass", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    flags |= InstanceFlags.IsNoPass;
-                }
-                else if (filter.transform.parent != null && !string.IsNullOrEmpty(filter.transform.parent.name) &&
-                         filter.transform.parent.name.IndexOf("NoPass", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    flags |= InstanceFlags.IsNoPass;
-                }
-                else if (renderer.sharedMaterial != null && !string.IsNullOrEmpty(renderer.sharedMaterial.name) &&
-                         renderer.sharedMaterial.name.IndexOf("NoPass", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    flags |= InstanceFlags.IsNoPass;
-                }
-            }
-            catch { }
-
-            return flags;
+            return Games.GameProfiles.FollowsActiveState(filter, renderer) ? InstanceFlags.FollowsActiveState : InstanceFlags.None;
         }
 
         private static bool IsDynamicOrIgnored(MeshFilter filter, Renderer renderer, bool isCombinedMesh)

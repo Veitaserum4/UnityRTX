@@ -21,6 +21,8 @@ namespace UnityRemix.Games.Ultrakill
         private static readonly string[] dynamicParentNames = { "SpawnEffect", "SeasonalHats", "Halloween", "Christmas", "Easter" };
 
         private Type[] dynamicTypes;
+        private Type checkPointType;
+        private bool checkPointTypeSearched;
         private readonly UltrakillBloodStains bloodStains = new UltrakillBloodStains();
 
         public override void Apply(Harmony harmony)
@@ -101,6 +103,32 @@ namespace UnityRemix.Games.Ultrakill
             var parent = filter.transform.parent;
             return parent != null && ContainsAny(parent.name, dynamicParentNames);
         }
+
+        // Checkpoint graphics and the doors' "NoPass" skull locks are toggled by deactivation.
+        public override bool FollowsActiveState(MeshFilter filter, Renderer renderer)
+        {
+            if (!checkPointTypeSearched)
+            {
+                checkPointTypeSearched = true;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { checkPointType = asm.GetType("CheckPoint"); } catch { }
+                    if (checkPointType != null)
+                        break;
+                }
+            }
+            if (checkPointType != null && renderer.GetComponentInParent(checkPointType) != null)
+                return true;
+
+            var parent = filter.transform.parent;
+            string parentName = parent != null ? parent.name : null;
+            var material = renderer.sharedMaterial;
+            return ContainsAny(filter.gameObject.name, followNames) || ContainsAny(parentName, followNames) ||
+                   (material != null && ContainsAny(material.name, noPassNames));
+        }
+
+        private static readonly string[] followNames = { "CheckPoint", "NoPass" };
+        private static readonly string[] noPassNames = { "NoPass" };
 
         private static bool ContainsAny(string name, string[] parts)
         {

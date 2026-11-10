@@ -71,6 +71,13 @@ namespace UnityRemix.Games
             return hidden;
         }
 
+        public static bool FollowsActiveState(MeshFilter filter, Renderer renderer)
+        {
+            bool follows = false;
+            Run(nameof(FollowsActiveState), p => follows = p.FollowsActiveState(filter, renderer));
+            return follows;
+        }
+
         public static bool IsDynamicObject(MeshFilter filter, Renderer renderer)
         {
             bool dynamic = false;
