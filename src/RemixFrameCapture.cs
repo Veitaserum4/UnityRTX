@@ -2882,7 +2882,9 @@ namespace UnityRemix
                     localToWorld = g.rectTransform.localToWorldMatrix,
                     boneTransforms = null,
                     skinningData = null,
-                    categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI,
+                    // On the held weapon (under the camera): placed with the view models.
+                    categoryFlags = (uint)(RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_WORLD_UI |
+                                           RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL),
                     bakeFrame = frameCount
                 });
             }
