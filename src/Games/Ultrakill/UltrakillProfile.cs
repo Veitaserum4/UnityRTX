@@ -184,6 +184,50 @@ namespace UnityRemix.Games.Ultrakill
                 path = t.name + "/" + path;
             Logger.LogInfo($"[Portal] near: {portal.GetInstanceID()} '{path}' {width:F2} x {height:F2}{(mirror ? " mirror" : "")}: " +
                            $"entry {entry.position} {entry.rotation.eulerAngles}, exit {exit.position} {exit.rotation.eulerAngles}");
+            if (!mirror)
+            {
+                LogSeenThrough("through the entry, at the exit", exit);
+                LogSeenThrough("through the exit, at the entry", entry);
+            }
+        }
+
+        // What a portal shows: renderers within 25 m on an end's -Z side (rays leave an end
+        // that way), by layer and state, and the nearest few.
+        private void LogSeenThrough(string label, Transform end)
+        {
+            Vector3 origin = end.position, outward = -end.forward;
+            var found = new List<(float distance, Renderer renderer)>();
+            foreach (var r in Resources.FindObjectsOfTypeAll<Renderer>())
+            {
+                if (r == null || !r.gameObject.scene.IsValid() || !(r is MeshRenderer || r is SkinnedMeshRenderer))
+                    continue;
+                Vector3 offset = r.bounds.center - origin;
+                float distance = offset.magnitude;
+                if (distance > 25f || Vector3.Dot(offset, outward) <= 0f)
+                    continue;
+                found.Add((distance, r));
+            }
+            var counts = new Dictionary<string, int>();
+            foreach (var (_, r) in found)
+            {
+                string key = $"{LayerMask.LayerToName(r.gameObject.layer)}({r.gameObject.layer}) {(r.gameObject.activeInHierarchy ? "active" : "inactive")}{(r.enabled ? "" : " disabled")}{(r.forceRenderingOff ? " off" : "")}";
+                counts.TryGetValue(key, out int n);
+                counts[key] = n + 1;
+            }
+            var summary = new List<string>();
+            foreach (var kv in counts)
+                summary.Add($"{kv.Value} {kv.Key}");
+            Logger.LogInfo($"[Portal]   seen {label}: {found.Count} renderers: {string.Join(", ", summary)}");
+            found.Sort((a, b) => a.distance.CompareTo(b.distance));
+            for (int i = 0; i < found.Count && i < 8; i++)
+            {
+                var r = found[i].renderer;
+                string rpath = r.name;
+                for (var t = r.transform.parent; t != null; t = t.parent)
+                    rpath = t.name + "/" + rpath;
+                Logger.LogInfo($"[Portal]     {found[i].distance:F1} m '{rpath}' layer {r.gameObject.layer}, active {r.gameObject.activeInHierarchy}, enabled {r.enabled}, " +
+                               $"off {r.forceRenderingOff}, static batch {r.isPartOfStaticBatch}");
+            }
         }
 
         private static float Priority(PortalPair p, Vector3 eye, Vector3 look)
