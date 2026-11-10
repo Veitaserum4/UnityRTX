@@ -1138,6 +1138,30 @@ namespace UnityRemix
             RefreshRendererSnapshots();
         }
 
+        // Diagnostics (LookAtDiagnostics): the nearest tracked renderer this capture would draw
+        // whose bounds the ray enters in front of the camera, colliders or not. View models
+        // (under the camera) and bounds around the camera are skipped. Main thread.
+        public Renderer PickDrawnRenderer(Ray ray, Transform camera, out float distance)
+        {
+            Renderer best = null;
+            float nearest = float.MaxValue;
+            void Consider(Renderer r)
+            {
+                if (r == null || !r.enabled || SceneMeshScanner.IsRenderingOff(r) || !r.gameObject.activeInHierarchy ||
+                    IsLayerDisabled(r.gameObject.layer) || r.transform.IsChildOf(camera))
+                    return;
+                if (r.bounds.IntersectRay(ray, out float d) && d > 0.01f && d < nearest)
+                {
+                    nearest = d;
+                    best = r;
+                }
+            }
+            foreach (var r in cachedRenderers) Consider(r);
+            foreach (var r in cachedSkinnedRenderers) Consider(r);
+            distance = nearest;
+            return best;
+        }
+
         private void TrackMeshRenderer(MeshRenderer r)
         {
             if (r == null || SceneMeshScanner.IsRendererInvisible(r) || !cachedRendererIds.Add(r.GetInstanceID()))
@@ -1424,7 +1448,7 @@ namespace UnityRemix
 
             foreach (var renderer in cachedRenderers)
             {
-                if (renderer == null || !renderer.enabled)
+                if (renderer == null || !renderer.enabled || SceneMeshScanner.IsRenderingOff(renderer))
                     continue;
 
                 var info = GetOrCreateStaticInfo(renderer);
@@ -1917,7 +1941,7 @@ namespace UnityRemix
             for (int i = 0; i < viewmodelRenderers.Length; i++)
             {
                 var renderer = viewmodelRenderers[i];
-                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy)
+                if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy || SceneMeshScanner.IsRenderingOff(renderer))
                     continue;
                 if (IsLayerDisabled(renderer.gameObject.layer) || IsRendererDisabled(renderer.GetInstanceID()))
                     continue;
@@ -2280,7 +2304,7 @@ namespace UnityRemix
                 int skinnedId = info.hierarchyHash;
                 var go = info.gameObject;
 
-                if (!skinned.enabled || go == null || !go.activeInHierarchy)
+                if (!skinned.enabled || go == null || !go.activeInHierarchy || SceneMeshScanner.IsRenderingOff(skinned))
                 {
                     persistentSkinnedData.Remove(skinnedId);
                     skipNull++;

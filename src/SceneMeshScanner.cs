@@ -213,6 +213,11 @@ namespace UnityRemix
         }
 
         /// <summary>True if the renderer has materials and all of them are invisible.</summary>
+        // Enabled, but drawn by Unity only into shadow maps or not at all: checked per frame
+        // (both can change at runtime), next to renderer.enabled.
+        public static bool IsRenderingOff(Renderer renderer) =>
+            renderer.forceRenderingOff || renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
+
         public static bool IsRendererInvisible(Renderer renderer)
         {
             var materials = renderer.sharedMaterials;
@@ -503,7 +508,7 @@ namespace UnityRemix
                         }
 
                         // 2. Disabled renderer component (e.g. invisible brushes, disabled lights/props)
-                        if (!renderer.enabled)
+                        if (!renderer.enabled || IsRenderingOff(renderer))
                         {
                             culledDisabled++;
                             continue;
