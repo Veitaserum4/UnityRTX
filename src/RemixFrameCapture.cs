@@ -2704,7 +2704,10 @@ namespace UnityRemix
         // second time, flat over the image (their canvases are on the UI layer). The capture
         // generates their meshes itself, so culling does not affect it.
         private readonly HashSet<CanvasRenderer> culledWeaponScreens = new HashSet<CanvasRenderer>();
-        private const float WeaponScreenLift = 0.01f; // metres
+        // Metres: the screen off the weapon, then each later graphic of its canvas above the
+        // last (Unity paints a canvas's graphics in hierarchy order, all on one plane).
+        private const float WeaponScreenLift = 0.002f, WeaponScreenLayerLift = 0.001f;
+        private readonly Dictionary<Canvas, int> weaponScreenLayers = new Dictionary<Canvas, int>();
         private readonly HashSet<int> loggedWeaponScreens = new HashSet<int>();
 
         private void UncullWeaponScreens()
@@ -2732,6 +2735,7 @@ namespace UnityRemix
                 return;
 
             EnsureTmpReflection();
+            weaponScreenLayers.Clear();
 
             for (int i = 0; i < graphics.Length; i++)
             {
@@ -2900,21 +2904,24 @@ namespace UnityRemix
                 int graphicId = g.GetInstanceID();
                 ulong remixMeshHash = (ulong)(uint)graphicId | 0x8000000000000000UL;
 
-                // A screen lies on the weapon's surface (Unity draws UI after the scene, so it
-                // never needed a gap); coplanar for the path tracer, the two z-fight. Lifted a
-                // little toward the camera, on the side the screen faces.
+                // A screen lies on the weapon's surface, and its graphics on one plane (Unity
+                // draws UI after the scene, in hierarchy order, with no depth); path traced they
+                // z-fight. Each is lifted toward the camera, on the side it faces, by its place
+                // in its canvas's drawing order (GetComponentsInChildren is that pre-order).
+                weaponScreenLayers.TryGetValue(g.canvas, out int layer);
+                weaponScreenLayers[g.canvas] = layer + 1;
                 var rect = g.rectTransform;
                 Vector3 facing = rect.forward;
                 if (Vector3.Dot(mainCam.transform.position - rect.position, facing) > 0f)
                     facing = -facing; // mirrored canvas: its visible side is +Z
-                Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * WeaponScreenLift) * rect.localToWorldMatrix;
+                Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * (WeaponScreenLift + layer * WeaponScreenLayerLift)) * rect.localToWorldMatrix;
                 if (loggedWeaponScreens.Add(graphicId))
                 {
                     Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
                     logger.LogInfo($"[WeaponScreen] '{g.name}' under '{(rect.parent != null ? rect.parent.name : "-")}' " +
                                    $"canvas '{g.canvas.name}' ({g.canvas.renderMode}, layer {LayerMask.LayerToName(g.gameObject.layer)}): " +
                                    $"{size.x:F3} x {size.y:F3} m, {Vector3.Distance(mainCam.transform.position, rect.position):F3} m from the camera, " +
-                                   $"facing dot {Vector3.Dot((mainCam.transform.position - rect.position).normalized, rect.forward):F2}, mirrored {facing != rect.forward}");
+                                   $"facing dot {Vector3.Dot((mainCam.transform.position - rect.position).normalized, rect.forward):F2}, mirrored {facing != rect.forward}, layer {layer}");
                 }
 
                 state.skinned.Add(new SkinnedMeshData
