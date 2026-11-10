@@ -75,7 +75,6 @@ namespace UnityRemix
         }
         private readonly List<CachedSceneLight> cachedSceneLights = new List<CachedSceneLight>(64);
         private readonly HashSet<int> cachedSceneLightIds = new HashSet<int>();
-        private readonly HashSet<ulong> cachedSceneLightHashes = new HashSet<ulong>();
         private readonly List<UnityLightData> reusableLightList = new List<UnityLightData>(64);
         private int lightDiscoveryCounter = -1;
         private const int LightDiscoveryIntervalFrames = 30;
@@ -183,6 +182,36 @@ namespace UnityRemix
             }
         }
 
+        // The sibling indices of the transform and its ancestors, at each level where a sibling
+        // has the same name (0 when the path is unique).
+        private static ulong SiblingDisambiguator(Transform t)
+        {
+            ulong h = 0;
+            int depth = 0;
+            for (var node = t; node != null; node = node.parent, depth++)
+            {
+                var parent = node.parent;
+                bool repeated = false;
+                if (parent != null)
+                {
+                    for (int i = 0; i < parent.childCount && !repeated; i++)
+                    {
+                        var other = parent.GetChild(i);
+                        repeated = other != node && other.name == node.name;
+                    }
+                }
+                else
+                {
+                    var roots = node.gameObject.scene.GetRootGameObjects();
+                    for (int i = 0; i < roots.Length && !repeated; i++)
+                        repeated = roots[i].transform != node && roots[i].name == node.name;
+                }
+                if (repeated)
+                    h = (h ^ ((ulong)(uint)depth << 32 | (uint)(node.GetSiblingIndex() + 1))) * 1099511628211UL;
+            }
+            return h;
+        }
+
         private void DiscoverSceneLights()
         {
             Light[] allLights = UnityCompat.FindSceneComponentsIncludingInactive<Light>();
@@ -204,13 +233,12 @@ namespace UnityRemix
                 {
                     hash ^= ((ulong)(uint)id * 1099511628211UL);
                 }
-                // Siblings with the same name share a path: a later one gets its own hash
-                // (OpenRemix keys lights by hash, so they would be one light).
-                if (!cachedSceneLightHashes.Add(hash))
-                {
-                    hash ^= ((ulong)(uint)id * 0x9E3779B97F4A7C15UL) | 1UL;
-                    cachedSceneLightHashes.Add(hash);
-                }
+                // Siblings with the same name share a path, and OpenRemix keys lights by hash,
+                // so they would be one light: where a name repeats, its sibling index tells
+                // them apart (persistent across sessions; unique paths keep their hash).
+                ulong siblings = SiblingDisambiguator(t);
+                if (siblings != 0)
+                    hash ^= siblings * 0x9E3779B97F4A7C15UL;
 
                 cachedSceneLights.Add(new CachedSceneLight
                 {
@@ -231,7 +259,6 @@ namespace UnityRemix
         {
             cachedSceneLights.Clear();
             cachedSceneLightIds.Clear();
-            cachedSceneLightHashes.Clear();
             lightDiscoveryCounter = -1;
 
             lock (cacheLock)

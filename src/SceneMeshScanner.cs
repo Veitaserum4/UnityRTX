@@ -1368,6 +1368,7 @@ int queued = 0;
 
                 // Build one surface per submesh, each with its own material (skipping non-triangle or empty surfaces)
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
+                bool bakeable = true;
                 for (int s = 0; s < data.Surfaces.Length; s++)
                 {
                     var surf = surfaceList[s];
@@ -1407,6 +1408,8 @@ int queued = 0;
 
                     foreach (var (surfIndices, partMaterialId) in parts)
                     {
+                        if (!materialManager.IsBakeableMaterial(partMaterialId != 0 ? partMaterialId : (data.Surfaces.Length > 0 ? data.Surfaces[0].MaterialId : 0)))
+                            bakeable = false;
                         GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
                         indexHandles.Add(idxHandle);
 
@@ -1499,6 +1502,7 @@ int queued = 0;
                     logger.LogError($"Failed to create scanned mesh 0x{data.MeshHash:X16}: {result}");
                     return IntPtr.Zero;
                 }
+                meshConverter.SetBakeable(handle, bakeable);
 
                 meshHandles[data.MeshHash] = handle;
                 return handle;

@@ -1222,6 +1222,7 @@ namespace UnityRemix
             }
 
             LoadedApiVersion = apiVersion;
+            NativeLogForwarder.Install();
             IntPtr pumpPtr = GetProcAddress(hModule, "remixapi_PumpEvents");
             if (pumpPtr != IntPtr.Zero)
                 NativePumpEvents = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_PumpEvents>(pumpPtr);

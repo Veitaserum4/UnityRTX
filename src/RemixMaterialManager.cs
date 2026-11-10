@@ -260,6 +260,16 @@ namespace UnityRemix
         /// <summary>
         /// Get material texture data for a material ID
         /// </summary>
+        /// <summary>
+        /// Whether a Forward+ bake can hold a surface with this material: not blended and
+        /// not water/glass transmission (unsupported bake coverage).
+        /// </summary>
+        public bool IsBakeableMaterial(int materialId)
+        {
+            return materialId == 0 || !materialTextureData.TryGetValue(materialId, out var data) ||
+                   (data.alphaMode != AlphaMode.Blend && data.translucentKind == TranslucentKind.None);
+        }
+
         public bool TryGetMaterialData(int materialId, out MaterialTextureData data)
         {
             return materialTextureData.TryGetValue(materialId, out data);
