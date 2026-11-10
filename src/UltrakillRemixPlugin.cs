@@ -236,14 +236,6 @@ namespace UnityRemix
             configEnableParticleDistanceCulling = Config.Bind("Rendering", "EnableParticleDistanceCulling", false,
                 "Enable distance-based culling for particle systems. When enabled, particle systems beyond ParticleMaxDistance are not rendered.");
 
-            RemixMeshConverter.CullBackFaces = Config.Bind("Rendering", "CullBackFaces", true,
-                "Level geometry whose materials cull back faces (as Unity draws them) has those back faces skipped by camera rays, " +
-                "also through portals; shadows, light and reflections still meet both sides. Off: every surface is seen from both sides. " +
-                "Applies to meshes created after the setting is read (restart the level).");
-            RemixMeshConverter.ReverseSingleSidedWinding = Config.Bind("Rendering", "ReverseSingleSidedWinding", true,
-                "Reverses the triangles of single-sided meshes so Remix's front faces are Unity's. " +
-                "If level geometry looks see-through from the front with CullBackFaces on, turn this off.");
-
             configRasterParticles = Config.Bind("Rendering", "RasterParticles", false,
                 "Draw particle systems and trails with OpenRemix's raster backend over the path-traced image instead of path tracing them. " +
                 "Cheaper with many particles; they are not lit, reflected, refracted or shadowed by the path tracer.");

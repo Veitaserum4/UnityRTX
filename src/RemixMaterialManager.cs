@@ -183,7 +183,6 @@ namespace UnityRemix
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
-            public bool cullsBackFaces; // the shader culls back faces (_CullMode / _Cull = Back)
             public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
@@ -300,22 +299,6 @@ namespace UnityRemix
         /// Whether a Forward+ bake can hold a surface with this material: not blended and
         /// not water/glass transmission (unsupported bake coverage).
         /// </summary>
-        // A material whose shader draws front faces only: a _CullMode or _Cull property set to
-        // Back (UnityEngine.Rendering.CullMode 2). Without either, unknown: drawn both sides.
-        private static bool CullsBackFaces(Material material)
-        {
-            try
-            {
-                if (material.HasProperty("_CullMode")) return Mathf.RoundToInt(material.GetFloat("_CullMode")) == 2;
-                if (material.HasProperty("_Cull")) return Mathf.RoundToInt(material.GetFloat("_Cull")) == 2;
-            }
-            catch { }
-            return false;
-        }
-
-        public bool CullsBackFaces(int materialId) =>
-            materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.cullsBackFaces;
-
         public bool IsBakeableMaterial(int materialId)
         {
             return materialId == 0 || !materialTextureData.TryGetValue(materialId, out var data) ||
@@ -742,7 +725,6 @@ namespace UnityRemix
                 rayPortalIndex = rayPortalIndices.TryGetValue(materialId, out int portalIndex) ? portalIndex
                                : Games.GameProfiles.OpensViewPortal(material) ? RayPortals.EntranceIndex : -1,
                 rayPortalStandalone = rayPortalIndices.ContainsKey(materialId),
-                cullsBackFaces = CullsBackFaces(material),
                 metallic = 0.0f,
                 roughness = 0.7f,
                 translucentKind = TranslucentKind.None,

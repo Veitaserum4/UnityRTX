@@ -633,7 +633,7 @@ namespace UnityRemix
                             pendingAddInfos.Add(new RemixAPI.remixapi_InstanceInfo
                             {
                                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                                pNext = meshConverter.CameraCullExtension(instance.MeshHandle),
+                                pNext = IntPtr.Zero,
                                 categoryFlags = 0,
                                 mesh = instance.MeshHandle,
                                 transform = instance.Transform,
@@ -699,7 +699,7 @@ namespace UnityRemix
                             pendingAddInfos.Add(new RemixAPI.remixapi_InstanceInfo
                             {
                                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                                pNext = meshConverter.CameraCullExtension(instance.MeshHandle),
+                                pNext = IntPtr.Zero,
                                 categoryFlags = 0,
                                 mesh = instance.MeshHandle,
                                 transform = instance.Transform,
@@ -774,7 +774,7 @@ namespace UnityRemix
                             pendingAddInfos.Add(new RemixAPI.remixapi_InstanceInfo
                             {
                                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                                pNext = meshConverter.CameraCullExtension(meshHandle),
+                                pNext = IntPtr.Zero,
                                 categoryFlags = 0,
                                 mesh = meshHandle,
                                 transform = transform,

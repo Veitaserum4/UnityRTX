@@ -613,21 +613,6 @@ namespace UnityRemix
             public float rotationSpeed;
         }
 
-        /// <summary>
-        /// pNext on InstanceInfo: what camera rays skip of the instance (OpenRemix
-        /// remix_native_ext.h): 1 its back faces (shadow, light and bounce rays still meet them).
-        /// </summary>
-        public const int REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_CULLING_EXT = 0x7fff100f;
-        public const uint REMIXAPI_INSTANCE_CAMERA_CULL_BACK_FACES_EXT = 1u;
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct remixapi_InstanceInfoCameraCullingEXT
-        {
-            public int sType;
-            public IntPtr pNext;
-            public uint flags;
-        }
-
         /// <summary>Optional pNext on opaque MaterialInfo: remaps its roughness and metallic maps.</summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_MaterialPbrRemapEXT
