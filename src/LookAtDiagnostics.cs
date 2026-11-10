@@ -21,14 +21,16 @@ namespace UnityRemix
         private PropertyInfo hitCollider, hitPoint;
         private bool unavailable;
         private int lastTarget, lastDrawn;
+        private SceneMeshScanner scanner;
 
         public LookAtDiagnostics(ManualLogSource logger)
         {
             this.logger = logger;
         }
 
-        public void Update(Camera camera, RemixFrameCapture capture, int frameCount)
+        public void Update(Camera camera, RemixFrameCapture capture, SceneMeshScanner scanner, int frameCount)
         {
+            this.scanner = scanner;
             if (camera == null || frameCount % 120 != 0)
                 return;
             var ray = new Ray(camera.transform.position, camera.transform.forward);
@@ -103,7 +105,16 @@ namespace UnityRemix
             return true;
         }
 
-        private static string Describe(Renderer renderer)
+        // The renderer as Unity has it now, then as the scene scan captured it (a static batch
+        // can replace its mesh and materials after the scan).
+        private string Describe(Renderer renderer)
+        {
+            string text = DescribeLive(renderer);
+            string scanned = renderer != null ? scanner?.DescribeScanned(renderer) : null;
+            return scanned != null ? $"{text} ||| scanned as {scanned}" : text;
+        }
+
+        private static string DescribeLive(Renderer renderer)
         {
             if (renderer == null)
                 return "no renderer";

@@ -121,6 +121,22 @@ namespace UnityRemix
         // Mesh handle dedup: same geometry → same Remix handle
         private readonly Dictionary<ulong, IntPtr> meshHandles = new Dictionary<ulong, IntPtr>();
 
+        // Diagnostics (LookAtDiagnostics): what each renderer was scanned as. Main thread.
+        private readonly Dictionary<int, string> scannedDescriptions = new Dictionary<int, string>();
+
+        public string DescribeScanned(Renderer renderer)
+        {
+            if (renderer == null || !scannedDescriptions.TryGetValue(renderer.GetInstanceID(), out string scanned))
+                return null;
+            var text = new System.Text.StringBuilder(scanned);
+            foreach (System.Text.RegularExpressions.Match id in System.Text.RegularExpressions.Regex.Matches(scanned, @" id (-?\d+)"))
+            {
+                if (materialManager.TryDescribeMaterial(int.Parse(id.Groups[1].Value), out string description))
+                    text.Append($" || material {id.Groups[1].Value}: {description}");
+            }
+            return text.ToString();
+        }
+
         // Track which MeshFilter instance IDs we've already scanned (avoids duplicates across rescans)
         private readonly HashSet<int> scannedFilterIds = new HashSet<int>();
 
@@ -761,6 +777,7 @@ namespace UnityRemix
                 clearGeneration++;
             }
             scannedFilterIds.Clear();
+            scannedDescriptions.Clear();
             activeScene = default;
         }
 
@@ -1137,6 +1154,14 @@ int queued = 0;
 
                 if (colors != null && colors.Length > 0)
                     vertexColorCount++;
+
+                var scanned = new System.Text.StringBuilder($"mesh '{mesh.name}' {vertices.Length} verts, colors {(colors != null && colors.Length > 0)}");
+                for (int s = 0; s < surfaces.Count; s++)
+                {
+                    var m = surfaceMaterials[s];
+                    scanned.Append($" | surface {s} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' id {surfaces[s].MaterialId}");
+                }
+                scannedDescriptions[renderer.GetInstanceID()] = scanned.ToString();
 
                 lock (streamLock)
                 {
