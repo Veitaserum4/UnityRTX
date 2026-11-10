@@ -1195,33 +1195,45 @@ namespace UnityRemix
             EnsureRemixWindowSubclassed();
             if (setConfigVariableFunc != null)
             {
-                string backend = configNativeBackend?.Value ?? "pathtrace";
-                bool asyncPresent = configOpenRemixAsyncPresent?.Value ?? true;
-                bool shadowEarlyOut = configOpenRemixShadowEarlyOut?.Value ?? true;
-                bool keepCompressed = configOpenRemixKeepCompressed?.Value ?? true;
-                bool refreshInPlace = configOpenRemixRefreshInPlace?.Value ?? true;
-                int bounces = configOpenRemixBounces?.Value ?? 2;
-                int samples = configOpenRemixSamples?.Value ?? 1;
-
-                var settings = new (string key, string value)[]
+                // OpenRemix saves the whole settings profile (openremix/profiles, beside the
+                // working directory) and loads it at startup; setting values here overrides it.
+                // So UnityRTX's values are first-run defaults only, applied while no profile has
+                // been saved, and a BepInEx [Native] entry overrides the profile only when it was
+                // changed from its default. gpuPassTimers feeds the bridge profiler: always on.
+                bool firstRun = !HasSavedOpenRemixProfile();
+                var settings = new System.Collections.Generic.List<(string key, string value)>();
+                void Default(string key, string value)
                 {
-                    ("rtx.native.backend", backend),
-                    ("rtx.native.vsync", "false"),
-                    ("rtx.native.asyncPresent", asyncPresent ? "true" : "false"),
-                    ("rtx.native.pathtrace.shadowEarlyOut", shadowEarlyOut ? "true" : "false"),
-                    ("rtx.native.textures.keepCompressed", keepCompressed ? "true" : "false"),
-                    ("rtx.native.meshes.refreshInPlace", refreshInPlace ? "true" : "false"),
-                    ("rtx.native.pathtrace.samples", samples.ToString()),
-                    ("rtx.native.pathtrace.bounces", bounces.ToString()),
-                    ("rtx.native.pathtrace.accumulate", "false"),
-                    ("rtx.native.pathtrace.taa", "true"),
-                    ("rtx.native.pathtrace.denoiser", "reblur-sh"),
-                    ("rtx.native.pathtrace.sharc", "false"),
-                    ("rtx.native.pathtrace.sigma", "false"),
-                    ("rtx.native.pathtrace.sky", "true"),
-                    ("rtx.native.gpuPassTimers", "true")
-                };
+                    if (firstRun) settings.Add((key, value));
+                }
+                void FromConfig<T>(string key, BepInEx.Configuration.ConfigEntry<T> entry, T fallback, Func<T, string> format)
+                {
+                    bool changed = entry != null && !Equals(entry.Value, entry.DefaultValue);
+                    if (firstRun || changed)
+                        settings.Add((key, format(entry != null ? entry.Value : fallback)));
+                }
+                string Bool(bool value) => value ? "true" : "false";
 
+                FromConfig("rtx.native.backend", configNativeBackend, "pathtrace", v => v);
+                FromConfig("rtx.native.asyncPresent", configOpenRemixAsyncPresent, true, Bool);
+                FromConfig("rtx.native.pathtrace.shadowEarlyOut", configOpenRemixShadowEarlyOut, true, Bool);
+                FromConfig("rtx.native.textures.keepCompressed", configOpenRemixKeepCompressed, true, Bool);
+                FromConfig("rtx.native.meshes.refreshInPlace", configOpenRemixRefreshInPlace, true, Bool);
+                FromConfig("rtx.native.pathtrace.samples", configOpenRemixSamples, 1, v => v.ToString());
+                FromConfig("rtx.native.pathtrace.bounces", configOpenRemixBounces, 2, v => v.ToString());
+                Default("rtx.native.vsync", "false");
+                Default("rtx.native.pathtrace.accumulate", "false");
+                Default("rtx.native.pathtrace.taa", "true");
+                Default("rtx.native.pathtrace.denoiser", "reblur-sh");
+                Default("rtx.native.pathtrace.sharc", "false");
+                Default("rtx.native.pathtrace.sigma", "false");
+                Default("rtx.native.pathtrace.sky", "true");
+                Default("rtx.native.pathtrace.viewModel", "true");
+                settings.Add(("rtx.native.gpuPassTimers", "true"));
+
+                logger.LogInfo(firstRun
+                    ? "[OpenRemix Config] no saved profile: applying UnityRTX defaults"
+                    : "[OpenRemix Config] saved profile found: keeping its settings");
                 foreach (var (key, val) in settings)
                 {
                     var res = setConfigVariableFunc(key, val);
@@ -1230,6 +1242,21 @@ namespace UnityRemix
                 logger.LogInfo("openremix settings: press F12 in the game or openremix window.");
             }
             return true;
+        }
+
+        // A settings profile OpenRemix saved (Save in its panel): openremix/profiles/*.conf in
+        // the working directory, where OpenRemix keeps it.
+        private static bool HasSavedOpenRemixProfile()
+        {
+            try
+            {
+                string folder = System.IO.Path.Combine(Environment.CurrentDirectory, "openremix", "profiles");
+                return System.IO.Directory.Exists(folder) && System.IO.Directory.GetFiles(folder, "*.conf").Length > 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
