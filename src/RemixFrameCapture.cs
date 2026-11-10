@@ -804,6 +804,9 @@ namespace UnityRemix
             public Transform transform;
             public GameObject gameObject;
             public Animator animator;
+            // GetComponentInParent skips inactive objects: a renderer cached while inactive
+            // (enemies waiting for their wave) looks its animator up once it is active.
+            public bool animatorResolved;
             public Material primarySharedMaterial;
             public Material[] sharedMaterials;
             public Transform[] bones;
@@ -987,6 +990,7 @@ namespace UnityRemix
                     transform = tr,
                     gameObject = sr.gameObject,
                     animator = sr.GetComponentInParent<Animator>(),
+                    animatorResolved = sr.gameObject.activeInHierarchy,
                     primarySharedMaterial = (mats != null && mats.Length > 0) ? mats[0] : null,
                     sharedMaterials = mats,
                     bones = bones,
@@ -1256,6 +1260,9 @@ namespace UnityRemix
                 foreach (var sr in root.GetComponentsInChildren<SkinnedMeshRenderer>(true)) TrackSkinnedRenderer(sr);
                 foreach (var pr in root.GetComponentsInChildren<ParticleSystemRenderer>(true)) TrackParticleRenderer(pr);
                 foreach (var tr in root.GetComponentsInChildren<TrailRenderer>(true)) TrackTrailRenderer(tr);
+                foreach (var animator in root.GetComponentsInChildren<Animator>(true))
+                    if (animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
             }
         }
         
@@ -2336,10 +2343,17 @@ namespace UnityRemix
                 if (!skinned.updateWhenOffscreen)
                     skinned.updateWhenOffscreen = true;
 
+                if (!info.animatorResolved)
+                {
+                    info.animator = skinned.GetComponentInParent<Animator>();
+                    info.animatorResolved = true;
+                }
+                // Single Window draws nothing with the game's cameras: a culling animator
+                // would stop posing (enemies slide instead of walking).
                 var anim = info.animator;
                 if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
                     anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
-                
+
                 if (IsLayerDisabled(go.layer) || IsRendererDisabled(skinnedId))
                 {
                     skipLayer++;
