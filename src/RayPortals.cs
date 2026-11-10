@@ -52,9 +52,10 @@ namespace UnityRemix
             var shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color");
             for (int index = 0; index < SlotPairs * 2; index++)
             {
-                // Green, not emissive (diagnostic): seen only where a portal is drawn but does not open (camera
+                // Near black (pure black broke portals: unexplained), not emissive: seen only where a portal is
+                // drawn but does not open (camera
                 // rays only: OpenRemix leaves openings out of every other ray).
-                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.green };
+                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = new Color(0.03f, 0.03f, 0.03f) };
                 int materialId = MaterialIdBase - index;
                 materials.SetRayPortalIndex(materialId, index);
                 materials.CaptureMaterialTextures(material, materialId);
@@ -180,6 +181,7 @@ namespace UnityRemix
         }
 
         private static readonly Matrix4x4 Flip = Matrix4x4.Scale(new Vector3(-1f, 1f, -1f));
+        private const float OpeningLift = 0.02f;
         // Remix's opening frame onto the game's: x -> +z or -z (a quarter turn about y).
         private static readonly Matrix4x4 FacePlusZ = Matrix4x4.Rotate(Quaternion.AngleAxis(-90f, Vector3.up));
         private static readonly Matrix4x4 FaceMinusZ = Matrix4x4.Rotate(Quaternion.AngleAxis(90f, Vector3.up));
@@ -207,8 +209,13 @@ namespace UnityRemix
             var face = Vector3.Dot(camera.position - nearPos, nearNormal) >= 0f ? FacePlusZ : FaceMinusZ;
             // The opening's size along Remix's y (the game's y) and z (the game's x).
             var size = Matrix4x4.Scale(new Vector3(1f, portal.height, portal.width));
-            var t0 = portal.entry * face * size;
-            var t1 = portal.exit * face * size;
+            // The near end stands OpeningLift in front of its plane, so camera rays meet it before a
+            // surface lying on that plane (a pool's water); the far end as far behind its own,
+            // which keeps the map: (+d) diag(-1, 1, -1) (-d) = diag(-1, 1, -1).
+            var liftNear = Matrix4x4.Translate(new Vector3(OpeningLift, 0f, 0f));
+            var liftFar = Matrix4x4.Translate(new Vector3(-OpeningLift, 0f, 0f));
+            var t0 = portal.entry * face * (nearEntry ? liftNear : liftFar) * size;
+            var t1 = portal.exit * face * (nearEntry ? liftFar : liftNear) * size;
             // Double-sided: one-sided openings were not drawn by the raster G-buffer from the
             // side they open on (its winding convention against the tracer's is untested).
             meshes.DrawMeshInstance(entrance, t0, objectPickingValue++, 0, OpeningMeshKey(entranceIndex), isDynamic: true);
