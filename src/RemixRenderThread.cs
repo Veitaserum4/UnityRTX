@@ -99,7 +99,7 @@ namespace UnityRemix
             bakeInstances.Clear();
             bakeLights.Clear();
             foreach (var record in retainedSceneInstances.Values)
-                if (record.Visible && !record.Moved)
+                if (record.Visible && !record.Moved && meshConverter.IsBakeable(record.MeshHandle))
                     bakeInstances.Add(record.NativeHandle);
             lightConverter?.GetStaticLights(bakeLights);
             bakeScene.Check(frameNum, bakeInstances, bakeLights, skyboxManager?.DrawnDomeLight ?? IntPtr.Zero);

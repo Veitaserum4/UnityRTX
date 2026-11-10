@@ -115,6 +115,9 @@ namespace UnityRemix
                 lights.Add(domeLight);
             instances.Sort();
             lights.Sort((a, b) => Key(a).CompareTo(Key(b)));
+            for (int i = lights.Count - 1; i > 0; i--)
+                if (lights[i] == lights[i - 1])
+                    lights.RemoveAt(i); // a handle listed twice refuses the scene
 
             LogStatus(frame);
 

@@ -75,6 +75,7 @@ namespace UnityRemix
         }
         private readonly List<CachedSceneLight> cachedSceneLights = new List<CachedSceneLight>(64);
         private readonly HashSet<int> cachedSceneLightIds = new HashSet<int>();
+        private readonly HashSet<ulong> cachedSceneLightHashes = new HashSet<ulong>();
         private readonly List<UnityLightData> reusableLightList = new List<UnityLightData>(64);
         private int lightDiscoveryCounter = -1;
         private const int LightDiscoveryIntervalFrames = 30;
@@ -203,6 +204,13 @@ namespace UnityRemix
                 {
                     hash ^= ((ulong)(uint)id * 1099511628211UL);
                 }
+                // Siblings with the same name share a path: a later one gets its own hash
+                // (OpenRemix keys lights by hash, so they would be one light).
+                if (!cachedSceneLightHashes.Add(hash))
+                {
+                    hash ^= ((ulong)(uint)id * 0x9E3779B97F4A7C15UL) | 1UL;
+                    cachedSceneLightHashes.Add(hash);
+                }
 
                 cachedSceneLights.Add(new CachedSceneLight
                 {
@@ -223,6 +231,7 @@ namespace UnityRemix
         {
             cachedSceneLights.Clear();
             cachedSceneLightIds.Clear();
+            cachedSceneLightHashes.Clear();
             lightDiscoveryCounter = -1;
 
             lock (cacheLock)
@@ -341,18 +350,11 @@ namespace UnityRemix
 
                     if (dataChanged || makeStatic || multiplierChanged)
                     {
-                        // Recreated: the old handle is destroyed once the new one exists.
+                        // Same hash: OpenRemix updates the light in place (its handle is the hash).
                         bool isStatic = makeStatic || state.isStatic;
                         IntPtr created = CreateRemixLightFromData(ref lightData, frameCount, isStatic);
                         if (created != IntPtr.Zero)
                         {
-                            if (hasExisting && destroyLightFunc != null)
-                            {
-                                lock (apiLock)
-                                {
-                                    try { destroyLightFunc(lightHandle); } catch { }
-                                }
-                            }
                             lightHandle = created;
                             lightCache[lightData.instanceId] = lightHandle;
                             lastSubmittedLightData[lightData.instanceId] = lightData;

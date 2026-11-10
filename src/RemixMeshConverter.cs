@@ -264,6 +264,12 @@ namespace UnityRemix
         
         // Cache for game meshes - maps composite mesh key (meshId + materialSignature) to Remix handle
         private ConcurrentDictionary<ulong, IntPtr> meshCache = new ConcurrentDictionary<ulong, IntPtr>();
+
+        // Static meshes with a surface Forward+ cannot bake (blended, or water/glass transmission):
+        // their instances stay out of the bake scene.
+        private readonly ConcurrentDictionary<IntPtr, byte> unbakeableMeshes = new ConcurrentDictionary<IntPtr, byte>();
+
+        public bool IsBakeable(IntPtr meshHandle) => !unbakeableMeshes.ContainsKey(meshHandle);
         
         // Cache for skinned mesh Remix handles - keyed by Remix mesh hash
         private Dictionary<ulong, IntPtr> skinnedMeshHandles = new Dictionary<ulong, IntPtr>();
@@ -649,6 +655,7 @@ namespace UnityRemix
                 }
 
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
+                bool bakeable = true;
                 for (int s = 0; s < submeshIndices.Count; s++)
                 {
                     var surfIndices = submeshIndices[s];
@@ -707,6 +714,11 @@ namespace UnityRemix
                         {
                             materialHandle = materialManager.GetOrCreateMaterial(primaryMatId);
                         }
+                        int usedMatId = targetMatId != 0 ? targetMatId : primaryMatId;
+                        if (usedMatId != 0 && materialManager.TryGetMaterialData(usedMatId, out var usedMat) &&
+                            (usedMat.alphaMode == RemixMaterialManager.AlphaMode.Blend ||
+                             usedMat.translucentKind != RemixMaterialManager.TranslucentKind.None))
+                            bakeable = false;
 
                         IntPtr vertsPtr;
                         ulong vertsCount;
@@ -793,7 +805,9 @@ namespace UnityRemix
                 }
 
                 meshCache[meshKey] = handle;
-                logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces");
+                if (bakeable) unbakeableMeshes.TryRemove(handle, out _);
+                else unbakeableMeshes[handle] = 0;
+                logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
 
                 return handle;
             }
