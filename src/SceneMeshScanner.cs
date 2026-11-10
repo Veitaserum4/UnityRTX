@@ -483,8 +483,12 @@ namespace UnityRemix
         /// active state, scale-zero, distance culling, and visibility culling,
         /// and dynamically updates transforms for moving non-combined objects.
         /// </summary>
+        // The game's 3D sky region this frame (main thread; GameProfile.GetSkyView), or null.
+        public static Games.SkyView? SkyRegion;
+
         public void UpdateVisibility(Vector3 cameraPosition, bool useDistanceCulling, float maxRenderDistance, bool useVisibilityCulling)
         {
+            var sky = SkyRegion;
             lock (instanceLock)
             {
                 if (currentInstances.Count == 0)
@@ -657,8 +661,9 @@ namespace UnityRemix
                         }
                     }
 
-                    // Distance culling using up-to-date bounds center
-                    if (useDistanceCulling)
+                    // Distance culling using up-to-date bounds center (not the 3D sky's geometry,
+                    // drawn from the sky camera wherever the player is)
+                    if (useDistanceCulling && !(sky.HasValue && sky.Value.Contains(instance.BoundsCenter)))
                     {
                         float sqrDist = (instance.BoundsCenter - cameraPosition).sqrMagnitude;
                         if (sqrDist > maxDistSqr)

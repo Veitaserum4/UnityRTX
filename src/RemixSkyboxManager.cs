@@ -283,7 +283,11 @@ namespace UnityRemix
             {
                 meshKey = skyboxMeshKey,
                 meshId = skyboxMeshId,
-                localToWorld = Matrix4x4.TRS(Vector3.zero, skyRot, Vector3.one * 500f),
+                // Around the sky camera (RemixCameraHandler), within its far plane; past a 3D
+                // sky's geometry, which the sky pass depth-tests against it.
+                localToWorld = state.camera.skyActive
+                    ? Matrix4x4.TRS(state.camera.sky.cameraPosition, skyRot, Vector3.one * (RemixCameraHandler.SkyFarFor(state.camera.sky) * 0.5f))
+                    : Matrix4x4.TRS(Vector3.zero, skyRot, Vector3.one * 500f),
                 rendererInstanceId = -999999,
                 categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY
             });

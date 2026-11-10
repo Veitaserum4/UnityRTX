@@ -10,6 +10,21 @@ namespace UnityRemix.Games
     /// picks the profile whose executable is running; the generic bridge calls the hooks
     /// below through GameProfiles, so a game without a profile pays nothing.
     /// </summary>
+    /// <summary>
+    /// A 3D sky: part of the level the game shows as its sky through a camera of its own
+    /// (Source-style 3D skyboxes, ULTRAKILL's Limbo walls). The sky camera looks the world
+    /// camera's way from cameraPosition; the level's geometry within the region (a sphere)
+    /// is drawn from it as sky, not as part of the world.
+    /// </summary>
+    public struct SkyView
+    {
+        public Vector3 cameraPosition;
+        public Vector3 regionCenter;
+        public float regionRadius;
+
+        public bool Contains(Vector3 point) => (point - regionCenter).sqrMagnitude <= regionRadius * regionRadius;
+    }
+
     public abstract class GameProfile
     {
         public abstract string Name { get; }
@@ -52,6 +67,13 @@ namespace UnityRemix.Games
         public virtual bool GetColorMask(Material material, MaterialPropertyBlock block, out RemixMaterialManager.ColorMask colorMask)
         {
             colorMask = default;
+            return false;
+        }
+
+        // The game's 3D sky this frame, when it shows one (worldCamera: the player's view).
+        public virtual bool GetSkyView(Camera worldCamera, out SkyView view)
+        {
+            view = default;
             return false;
         }
 
