@@ -114,6 +114,12 @@ namespace UnityRemix.Games
             return found;
         }
 
+        public static void GetPortals(Camera worldCamera, System.Collections.Generic.List<PortalPair> portals)
+        {
+            portals.Clear();
+            Run(nameof(GetPortals), p => p.GetPortals(worldCamera, portals));
+        }
+
         public static bool OpensViewPortal(Material material)
         {
             bool opens = false;

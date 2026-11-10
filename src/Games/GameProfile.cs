@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -14,7 +15,7 @@ namespace UnityRemix.Games
     /// A view portal: surfaces that show another part of the level as seen from a camera of
     /// the game's own, which follows the player's at a scale (ULTRAKILL's Limbo walls; a
     /// Source-style 3D skybox seen through windows). Camera rays meeting such a surface go on
-    /// from exitCamera + scale x (point - camera), in the same direction (RayPortalPair).
+    /// from exitCamera + scale x (point - camera), in the same direction (RayPortals).
     /// The exit region's geometry is drawn wherever the player is (never distance-culled).
     /// </summary>
     public struct RayPortalView
@@ -25,6 +26,18 @@ namespace UnityRemix.Games
         public float exitRegionRadius;
 
         public bool InExitRegion(Vector3 point) => (point - exitRegionCenter).sqrMagnitude <= exitRegionRadius * exitRegionRadius;
+    }
+
+    /// <summary>
+    /// One of the game's portals: its two ends (unscaled frames; the opening lies in the frame's
+    /// local XY plane, normal +Z, width along x, height along y). What is seen through the entry
+    /// is at the exit mapped by exit diag(-1, 1, -1) entry^-1, and the other way round.
+    /// </summary>
+    public struct PortalPair
+    {
+        public int id;
+        public Matrix4x4 entry, exit;
+        public float width, height;
     }
 
     public abstract class GameProfile
@@ -78,6 +91,10 @@ namespace UnityRemix.Games
             view = default;
             return false;
         }
+
+        // The game's portals this frame, nearest the camera first (RayPortals draws as many as
+        // Remix has room for).
+        public virtual void GetPortals(Camera worldCamera, List<PortalPair> portals) { }
 
         // A material whose surfaces open the view portal (they keep their look where it doesn't
         // open: at their back, for rays other than the camera's).

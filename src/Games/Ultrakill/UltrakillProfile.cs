@@ -73,6 +73,75 @@ namespace UnityRemix.Games.Ultrakill
         // fakeCamStart, within its camera's far plane and nearer it than the player's start.
         public override bool OpensViewPortal(Material material) => material.IsKeywordEnabled("LIMBO_WALLS");
 
+        // ULTRAKILL.Portal.Portal (Fraud): entry and exit transforms (opening in their local XY
+        // plane, +Z out), a PlaneShape (full width and height); travel exit (-1, 1, -1) entry^-1,
+        // unscaled. Listed every 60 frames, read every frame.
+        private Type portalType;
+        private bool portalTypeSearched;
+        private System.Reflection.FieldInfo portalEntry, portalExit, portalShape, shapeWidth, shapeHeight;
+        private readonly List<Behaviour> portalComponents = new List<Behaviour>();
+        private int portalListFrame = int.MinValue / 2;
+
+        public override void GetPortals(Camera worldCamera, List<PortalPair> portals)
+        {
+            if (!portalTypeSearched)
+            {
+                portalTypeSearched = true;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { portalType = asm.GetType("ULTRAKILL.Portal.Portal"); } catch { }
+                    if (portalType != null) break;
+                }
+                if (portalType != null)
+                {
+                    portalEntry = portalType.GetField("entry");
+                    portalExit = portalType.GetField("exit");
+                    portalShape = portalType.GetField("shape");
+                    var planeShape = portalType.Assembly.GetType("ULTRAKILL.Portal.Geometry.PlaneShape");
+                    shapeWidth = planeShape?.GetField("width");
+                    shapeHeight = planeShape?.GetField("height");
+                }
+                Logger.LogInfo($"[Portal] ULTRAKILL portals {(portalType != null && portalEntry != null && portalExit != null && shapeWidth != null ? "found" : "not found")}");
+            }
+            if (portalType == null || portalEntry == null || portalExit == null || portalShape == null || shapeWidth == null || shapeHeight == null || worldCamera == null)
+                return;
+            int frame = Time.frameCount;
+            if (frame - portalListFrame >= 60)
+            {
+                portalListFrame = frame;
+                portalComponents.Clear();
+                foreach (var found in UnityEngine.Object.FindObjectsOfType(portalType))
+                    if (found is Behaviour behaviour)
+                        portalComponents.Add(behaviour);
+            }
+            Vector3 eye = worldCamera.transform.position;
+            foreach (var portal in portalComponents)
+            {
+                if (portal == null || !portal.isActiveAndEnabled)
+                    continue;
+                var entry = portalEntry.GetValue(portal) as Transform;
+                var exit = portalExit.GetValue(portal) as Transform;
+                var shape = portalShape.GetValue(portal);
+                if (entry == null || exit == null || shape == null || shape.GetType() != shapeWidth.DeclaringType)
+                    continue;
+                float width = (float)shapeWidth.GetValue(shape), height = (float)shapeHeight.GetValue(shape);
+                if (width <= 0f || height <= 0f)
+                    continue;
+                portals.Add(new PortalPair
+                {
+                    id = portal.GetInstanceID(),
+                    entry = Matrix4x4.TRS(entry.position, entry.rotation, Vector3.one),
+                    exit = Matrix4x4.TRS(exit.position, exit.rotation, Vector3.one),
+                    width = width,
+                    height = height
+                });
+            }
+            portals.Sort((a, b) => Nearest(a, eye).CompareTo(Nearest(b, eye)));
+        }
+
+        private static float Nearest(PortalPair p, Vector3 eye) =>
+            Mathf.Min(((Vector3)p.entry.GetColumn(3) - eye).sqrMagnitude, ((Vector3)p.exit.GetColumn(3) - eye).sqrMagnitude);
+
         private Type limboType;
         private bool limboTypeSearched;
         private Behaviour limbo;

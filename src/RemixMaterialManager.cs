@@ -664,7 +664,7 @@ namespace UnityRemix
         /// <summary>
         /// Capture textures from a Unity material, with optional per-renderer property overrides
         /// </summary>
-        // Materials registered as ray portals by id (RayPortalPair's own), else by game profile.
+        // Materials registered as ray portals by id (RayPortals' own), else by game profile.
         private readonly Dictionary<int, int> rayPortalIndices = new Dictionary<int, int>();
 
         public void SetRayPortalIndex(int materialId, int index) => rayPortalIndices[materialId] = index;
@@ -723,7 +723,7 @@ namespace UnityRemix
                 emissiveIntensity = 0f,
                 suppressLightGeneration = autoSuppressLight,
                 rayPortalIndex = rayPortalIndices.TryGetValue(materialId, out int portalIndex) ? portalIndex
-                               : Games.GameProfiles.OpensViewPortal(material) ? RayPortalPair.EntranceIndex : -1,
+                               : Games.GameProfiles.OpensViewPortal(material) ? RayPortals.EntranceIndex : -1,
                 rayPortalStandalone = rayPortalIndices.ContainsKey(materialId),
                 metallic = 0.0f,
                 roughness = 0.7f,
@@ -4043,7 +4043,7 @@ namespace UnityRemix
                     }
 
                     // A ray portal: its surfaces open it; the opaque material is their look where
-                    // it doesn't open. A registered portal (RayPortalPair's own) stands alone:
+                    // it doesn't open. A registered portal (RayPortals' own) stands alone:
                     // its draw places the portal over the surfaces opening it.
                     bool standalonePortal = matData.rayPortalIndex >= 0 && matData.rayPortalStandalone;
                     if (matData.rayPortalIndex >= 0)

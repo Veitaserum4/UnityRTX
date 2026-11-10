@@ -322,8 +322,9 @@ namespace UnityRemix
         public int CachedSkinnedRendererCount => cachedSkinnedRenderers.Count;
 
         // A game's view portal as a Remix ray portal pair (drawn by the render thread).
-        private RayPortalPair rayPortals;
-        internal RayPortalPair RayPortals => rayPortals ?? (rayPortals = new RayPortalPair(logger));
+        private RayPortals rayPortals;
+        internal RayPortals RayPortals => rayPortals ?? (rayPortals = new RayPortals(logger));
+        private readonly List<Games.PortalPair> framePortals = new List<Games.PortalPair>();
 
         public void QueuePriorityMesh(PreparedMeshData data)
         {
@@ -678,9 +679,11 @@ namespace UnityRemix
             // GameProfile names one, else the world camera's.
             public Vector3 viewModelPosition, viewModelForward, viewModelUp, viewModelRight;
             public float viewModelFov, viewModelNearPlane, viewModelFarPlane;
-            // The game's view portal this frame (GameProfile.GetRayPortalView; RayPortalPair).
+            // The game's view portal this frame (GameProfile.GetRayPortalView; RayPortals).
             public bool portalActive;
             public Games.RayPortalView portal;
+            // The game's portals this frame, nearest first (GameProfile.GetPortals), or null.
+            public Games.PortalPair[] portals;
         }
         
         public struct MeshInstanceData
@@ -1435,7 +1438,9 @@ namespace UnityRemix
                 state.camera.viewModelFarPlane = vm.farClipPlane;
                 state.camera.portalActive = Games.GameProfiles.GetRayPortalView(mainCam, out state.camera.portal);
                 SceneMeshScanner.PortalExitRegion = state.camera.portalActive ? state.camera.portal : (Games.RayPortalView?)null;
-                if (state.camera.portalActive)
+                Games.GameProfiles.GetPortals(mainCam, framePortals);
+                state.camera.portals = framePortals.Count > 0 ? framePortals.ToArray() : null;
+                if (state.camera.portalActive || state.camera.portals != null)
                     RayPortals.Ensure(this, materialManager);
 
                 // Update skybox state on main thread

@@ -645,8 +645,8 @@ namespace UnityRemix
                 }
             }
 
-            // A game's view portal: its ray portal pair, this frame's.
-            if (state.camera.portalActive && frameCapture != null)
+            // A game's portals (its view portal, its own portals): Remix ray portals, this frame's.
+            if ((state.camera.portalActive || state.camera.portals != null) && frameCapture != null)
                 frameCapture.RayPortals.Draw(meshConverter, state.camera, ref objectPickingValue);
 
             // 2. Terrain chunks
