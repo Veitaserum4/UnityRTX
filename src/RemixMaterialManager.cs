@@ -111,12 +111,21 @@ namespace UnityRemix
         private readonly Dictionary<long, ulong> pendingTintedHashes = new Dictionary<long, ulong>();
         private readonly object pendingTextureLock = new object();
         
-        // A recolour mask: the albedo tinted by up to three colours, each where the mask's red,
-        // green or blue channel is set (a game's player-chosen colours; GameProfile.GetColorMask).
+        // A recolour mask (a game's player-chosen colours; GameProfile.GetColorMask): where the
+        // mask's red, green, blue channel is set, the albedo moves toward itself times color1,
+        // color2, color3 in turn, by weight x the channel. The base is the mask's own alpha
+        // (baseInMaskAlpha: a greyscale copy of the surface) or the material's albedo texture.
+        // metalFromColorAlpha: each colour's alpha is that region's metal amount, combined as
+        // 1 - (1-m1)(1-m2)(1-m3); metal texels are given metalRoughness. Values are in the
+        // shader's working space (linear in a linear-colour-space project).
         public struct ColorMask
         {
             public Texture2D mask;
             public Color color1, color2, color3;
+            public float weight;
+            public bool baseInMaskAlpha;
+            public bool metalFromColorAlpha;
+            public float metalRoughness;
 
             public int Hash()
             {
@@ -126,9 +135,11 @@ namespace UnityRemix
                     foreach (var c in new[] { color1, color2, color3 })
                     {
                         Color32 q = c;
-                        h = h * 397 ^ ((q.r << 16) | (q.g << 8) | q.b);
+                        h = h * 397 ^ ((q.r << 24) | (q.g << 16) | (q.b << 8) | q.a);
                     }
-                    return h;
+                    h = h * 397 ^ Mathf.RoundToInt(weight * 1000f);
+                    h = h * 397 ^ (baseInMaskAlpha ? 1 : 0) ^ (metalFromColorAlpha ? 2 : 0);
+                    return h * 397 ^ Mathf.RoundToInt(metalRoughness * 1000f);
                 }
             }
         }
@@ -957,7 +968,8 @@ namespace UnityRemix
                 }
                 else if (colorMask.HasValue && colorMask.Value.mask != null)
                 {
-                    var (maskedHandle, maskedHash) = UploadMaskTintedAlbedoTexture(tex, colorMask.Value);
+                    var cm = colorMask.Value;
+                    var (maskedHandle, maskedHash, metalHandle) = UploadMaskTintedAlbedoTexture(tex, cm, matData.roughness);
                     matData.albedoHandle = maskedHandle;
                     matData.albedoTextureHash = maskedHash;
                     if (isTinted)
@@ -968,6 +980,15 @@ namespace UnityRemix
                     else
                     {
                         matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
+                    }
+                    // Per-texel metal (red) and smoothness (alpha) from the recolour.
+                    if (metalHandle != IntPtr.Zero)
+                    {
+                        matData.pbrMapHandle = metalHandle;
+                        matData.pbrMapMetallic = matData.pbrMapSmoothness = true;
+                        matData.smoothnessInAlbedoAlpha = false;
+                        matData.pbrMetalBias = 0f; matData.pbrMetalScale = 1f;
+                        matData.pbrRoughBias = 0f; matData.pbrRoughScale = 1f;
                     }
                 }
                 else if (remap.HasValue || hsbc.HasValue)
@@ -1948,30 +1969,56 @@ namespace UnityRemix
         }
 
         /// <summary>
-        /// The albedo recoloured by a ColorMask: each texel multiplied by color1/2/3 in
-        /// proportion to the mask's red/green/blue there (sampled at the same UV, nearest).
-        /// Multiplying the stored (sRGB) bytes by the colour equals multiplying in linear space.
+        /// The albedo recoloured by a ColorMask (its formula above), at the mask's resolution
+        /// when the base is the mask's alpha, else the albedo's (mask sampled nearest). Also,
+        /// with metalFromColorAlpha, a linear PBR map: red the metal amount, alpha smoothness
+        /// (the material's roughness where no metal, metalRoughness where full metal); its
+        /// handle zero when no texel is metal.
         /// </summary>
-        private (IntPtr handle, ulong hash) UploadMaskTintedAlbedoTexture(Texture2D tex, ColorMask colorMask)
+        private (IntPtr handle, ulong hash, IntPtr metalHandle) UploadMaskTintedAlbedoTexture(Texture2D tex, ColorMask colorMask, float baseRoughness = 0.7f)
         {
-            if (tex == null || colorMask.mask == null || createTextureFunc == null)
-                return (IntPtr.Zero, 0);
-            long cacheKey = unchecked((long)0x4200000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ (uint)colorMask.Hash());
+            if (colorMask.mask == null || createTextureFunc == null || (tex == null && !colorMask.baseInMaskAlpha))
+                return (IntPtr.Zero, 0, IntPtr.Zero);
+            long cacheKey = unchecked((long)0x4200000000000000L ^ ((long)(tex != null ? tex.GetInstanceID() : 0) << 28) ^ (uint)colorMask.Hash());
+            long metalKey = cacheKey ^ 0x0100000000000000L;
             lock (pendingTextureLock)
             {
-                if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
-                    return cached;
-                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
-                    return (new IntPtr((long)pHash), pHash);
+                bool haveAlbedo = tintedTextureCache.TryGetValue(cacheKey, out var cached);
+                if (!haveAlbedo && pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
+                {
+                    cached = (new IntPtr((long)pHash), pHash);
+                    haveAlbedo = true;
+                }
+                if (haveAlbedo)
+                {
+                    IntPtr metal = IntPtr.Zero;
+                    if (tintedTextureCache.TryGetValue(metalKey, out var m)) metal = m.Item1;
+                    else if (pendingTintedHashes.TryGetValue(metalKey, out ulong mHash)) metal = new IntPtr((long)mHash);
+                    return (cached.Item1, cached.Item2, metal);
+                }
             }
 
             try
             {
-                var pixels = ReadPixels32(tex, linear: false);
-                var mask = ReadPixels32(colorMask.mask, linear: true);
-                int w = tex.width, h = tex.height, mw = colorMask.mask.width, mh = colorMask.mask.height;
+                bool linearSpace = QualitySettings.activeColorSpace == ColorSpace.Linear;
+                var maskTex = colorMask.mask;
+                // The mask as the shader samples it (sRGB-decoded when its texture is sRGB).
+                var mask = ReadPixels32(maskTex, linear: true);
+                int mw = maskTex.width, mh = maskTex.height;
+                Color32[] basePixels = colorMask.baseInMaskAlpha ? null : ReadPixels32(tex, linear: true);
+                int w = colorMask.baseInMaskAlpha ? mw : tex.width, h = colorMask.baseInMaskAlpha ? mh : tex.height;
                 Color c1 = colorMask.color1, c2 = colorMask.color2, c3 = colorMask.color3;
-                byte[] pixelData = new byte[pixels.Length * 4];
+                if (linearSpace)
+                {
+                    c1 = new Color(c1.linear.r, c1.linear.g, c1.linear.b, c1.a);
+                    c2 = new Color(c2.linear.r, c2.linear.g, c2.linear.b, c2.a);
+                    c3 = new Color(c3.linear.r, c3.linear.g, c3.linear.b, c3.a);
+                }
+                float k = colorMask.weight;
+                float smoothBase = 1f - Mathf.Clamp01(baseRoughness), smoothMetal = 1f - Mathf.Clamp01(colorMask.metalRoughness);
+                byte[] pixelData = new byte[w * h * 4];
+                byte[] metalData = colorMask.metalFromColorAlpha ? new byte[w * h * 4] : null;
+                bool anyMetal = false;
                 for (int y = 0; y < h; y++)
                 {
                     int my = Mathf.Min(mh - 1, (int)((y + 0.5f) * mh / h));
@@ -1980,21 +2027,54 @@ namespace UnityRemix
                         int i = y * w + x;
                         var m = mask[my * mw + Mathf.Min(mw - 1, (int)((x + 0.5f) * mw / w))];
                         float mr = m.r / 255f, mg = m.g / 255f, mb = m.b / 255f;
-                        float r = pixels[i].r / 255f, g = pixels[i].g / 255f, b = pixels[i].b / 255f;
-                        float tr = Mathf.Lerp(1f, c1.r, mr) * Mathf.Lerp(1f, c2.r, mg) * Mathf.Lerp(1f, c3.r, mb);
-                        float tg = Mathf.Lerp(1f, c1.g, mr) * Mathf.Lerp(1f, c2.g, mg) * Mathf.Lerp(1f, c3.g, mb);
-                        float tb = Mathf.Lerp(1f, c1.b, mr) * Mathf.Lerp(1f, c2.b, mg) * Mathf.Lerp(1f, c3.b, mb);
-                        pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r * tr) * 255f);
-                        pixelData[i * 4 + 1] = (byte)(Mathf.Clamp01(g * tg) * 255f);
-                        pixelData[i * 4 + 2] = (byte)(Mathf.Clamp01(b * tb) * 255f);
-                        pixelData[i * 4 + 3] = pixels[i].a;
+                        // The base, in the shader's working space.
+                        float br, bg, bb;
+                        if (colorMask.baseInMaskAlpha)
+                        {
+                            br = bg = bb = m.a / 255f;
+                        }
+                        else
+                        {
+                            br = basePixels[i].r / 255f; bg = basePixels[i].g / 255f; bb = basePixels[i].b / 255f;
+                        }
+                        if (!linearSpace && colorMask.baseInMaskAlpha == false)
+                        {
+                            // read linear: back to the gamma values a gamma-space shader works in
+                            br = Mathf.LinearToGammaSpace(br); bg = Mathf.LinearToGammaSpace(bg); bb = Mathf.LinearToGammaSpace(bb);
+                        }
+                        float r = br, g = bg, b = bb;
+                        r = Mathf.Lerp(r, br * c1.r, k * mr); g = Mathf.Lerp(g, bg * c1.g, k * mr); b = Mathf.Lerp(b, bb * c1.b, k * mr);
+                        r = Mathf.Lerp(r, br * c2.r, k * mg); g = Mathf.Lerp(g, bg * c2.g, k * mg); b = Mathf.Lerp(b, bb * c2.b, k * mg);
+                        r = Mathf.Lerp(r, br * c3.r, k * mb); g = Mathf.Lerp(g, bg * c3.g, k * mb); b = Mathf.Lerp(b, bb * c3.b, k * mb);
+                        // Stored as sRGB bytes (albedo textures are read as sRGB).
+                        if (linearSpace)
+                        {
+                            r = Mathf.LinearToGammaSpace(Mathf.Clamp01(r)); g = Mathf.LinearToGammaSpace(Mathf.Clamp01(g)); b = Mathf.LinearToGammaSpace(Mathf.Clamp01(b));
+                        }
+                        pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r) * 255f);
+                        pixelData[i * 4 + 1] = (byte)(Mathf.Clamp01(g) * 255f);
+                        pixelData[i * 4 + 2] = (byte)(Mathf.Clamp01(b) * 255f);
+                        pixelData[i * 4 + 3] = colorMask.baseInMaskAlpha ? (byte)255 : basePixels[i].a;
+                        if (metalData != null)
+                        {
+                            float metal = 1f - (1f - mr * c1.a) * (1f - mg * c2.a) * (1f - mb * c3.a);
+                            if (metal > 0.004f) anyMetal = true;
+                            metalData[i * 4 + 0] = (byte)(Mathf.Clamp01(metal) * 255f);
+                            metalData[i * 4 + 3] = (byte)(Mathf.Lerp(smoothBase, smoothMetal, Mathf.Clamp01(metal)) * 255f);
+                        }
                     }
                 }
 
                 ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);
                 if (hash == 0) hash = 1;
+                ulong metalHash = 0;
+                if (anyMetal)
+                {
+                    metalHash = XXHash64.ComputeHash(metalData, 0, metalData.Length);
+                    if (metalHash == 0) metalHash = 1;
+                }
                 if (verboseTextureLogging.Value)
-                    logger.LogInfo($"Computed colour-masked albedo for '{tex.name}' (mask '{colorMask.mask.name}'): 0x{hash:X16}");
+                    logger.LogInfo($"Computed colour-masked albedo (mask '{maskTex.name}', base {(colorMask.baseInMaskAlpha ? "mask alpha" : tex.name)}): 0x{hash:X16}, metal {(anyMetal ? $"0x{metalHash:X16}" : "none")}");
 
                 lock (pendingTextureLock)
                 {
@@ -2011,13 +2091,29 @@ namespace UnityRemix
                     });
                     pendingTintedKeys.Add(cacheKey);
                     pendingTintedHashes[cacheKey] = hash;
+                    if (anyMetal)
+                    {
+                        pendingTextureUploads.Enqueue(new PendingTextureUpload
+                        {
+                            texId = -1,
+                            tintedCacheKey = metalKey,
+                            pixelData = metalData,
+                            hash = metalHash,
+                            width = (uint)w,
+                            height = (uint)h,
+                            mipLevels = 1,
+                            format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                        });
+                        pendingTintedKeys.Add(metalKey);
+                        pendingTintedHashes[metalKey] = metalHash;
+                    }
                 }
-                return (new IntPtr((long)hash), hash);
+                return (new IntPtr((long)hash), hash, anyMetal ? new IntPtr((long)metalHash) : IntPtr.Zero);
             }
             catch (Exception ex)
             {
-                logger.LogError($"Exception uploading colour-masked albedo '{tex.name}': {ex.Message}");
-                return (IntPtr.Zero, 0);
+                logger.LogError($"Exception uploading colour-masked albedo '{(tex != null ? tex.name : colorMask.mask.name)}': {ex.Message}");
+                return (IntPtr.Zero, 0, IntPtr.Zero);
             }
         }
 

@@ -75,8 +75,12 @@ namespace UnityRemix.Games.Ultrakill
         }
 
         // Weapon colours (GunColorGetter): the weapon's materials are swapped for "colored" copies
-        // whose _IDTex marks, in red/green/blue, where _CustomColor1/2/3 (set through the
-        // renderer's property block; alpha is the metal amount, not applied) tint the albedo.
+        // (keyword CUSTOM_COLORS) and _CustomColor1/2/3 set through the renderer's property
+        // block. ULTRAKILL/Master's CUSTOM_COLORS pixel shader (disassembled): the albedo is
+        // _IDTex.a (a greyscale copy of the weapon; _MainTex is not read), lerped toward
+        // itself x _CustomColorN.rgb by 0.8 x _IDTex.r/g/b in turn; the metal amount is
+        // _IDTex.rgb x _CustomColorN.a, combined 1 - (1-a)(1-b)(1-c), and adds _CubeTex's
+        // reflection tinted by the albedo: a metallic surface.
         private static readonly int IDTex = Shader.PropertyToID("_IDTex");
         private static readonly int[] CustomColors =
         {
@@ -86,21 +90,25 @@ namespace UnityRemix.Games.Ultrakill
         public override bool GetColorMask(Material material, MaterialPropertyBlock block, out RemixMaterialManager.ColorMask colorMask)
         {
             colorMask = default;
-            if (!material.HasProperty(IDTex) || !(material.GetTexture(IDTex) is Texture2D mask))
+            if (!material.IsKeywordEnabled("CUSTOM_COLORS") || !material.HasProperty(IDTex) || !(material.GetTexture(IDTex) is Texture2D mask))
                 return false;
             var colors = new Color[3];
-            bool tinted = false;
             for (int i = 0; i < 3; i++)
             {
                 Color c = block != null && !block.isEmpty ? block.GetColor(CustomColors[i]) : Color.clear;
                 if (c == Color.clear)
                     c = material.HasProperty(CustomColors[i]) ? material.GetColor(CustomColors[i]) : Color.white;
                 colors[i] = c;
-                tinted |= c.r < 0.99f || c.g < 0.99f || c.b < 0.99f;
             }
-            if (!tinted)
-                return false;
-            colorMask = new RemixMaterialManager.ColorMask { mask = mask, color1 = colors[0], color2 = colors[1], color3 = colors[2] };
+            colorMask = new RemixMaterialManager.ColorMask
+            {
+                mask = mask,
+                color1 = colors[0], color2 = colors[1], color3 = colors[2],
+                weight = 0.8f,
+                baseInMaskAlpha = true,
+                metalFromColorAlpha = true,
+                metalRoughness = 0.2f
+            };
             return true;
         }
 
