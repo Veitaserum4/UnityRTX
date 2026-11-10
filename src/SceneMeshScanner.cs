@@ -234,6 +234,7 @@ namespace UnityRemix
         public static bool IsMaterialOrShaderInvisible(Material mat)
         {
             if (mat == null) return false;
+            if (Games.GameProfiles.IsHiddenMaterial(mat)) return true;
 
             string matName = mat.name;
             if (!string.IsNullOrEmpty(matName))

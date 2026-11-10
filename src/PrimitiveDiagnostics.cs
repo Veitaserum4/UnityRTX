@@ -5,8 +5,8 @@ using UnityEngine;
 namespace UnityRemix
 {
     /// <summary>
-    /// Logs, once per renderer, each Unity primitive mesh (Cube, Sphere, ...) or
-    /// Default-Material renderer that UnityRTX draws: games use them for trigger volumes and
+    /// Logs, once per renderer (up to MaxPerScene per scene), each Unity primitive mesh (Cube,
+    /// Sphere, ...) or Default-Material renderer UnityRTX captures: games use them for trigger volumes and
     /// helper shapes they hide one way or another, which show up as stray untextured blocks.
     /// Main thread only.
     /// </summary>
@@ -14,11 +14,13 @@ namespace UnityRemix
     {
         public static ManualLogSource Logger;
         private static readonly HashSet<int> logged = new HashSet<int>();
-        private static readonly HashSet<string> primitives = new HashSet<string> { "Cube", "Sphere", "Capsule", "Cylinder", "Plane", "Quad" };
+        // Quads left out: decals and sprites use them by the thousand.
+        private static readonly HashSet<string> primitives = new HashSet<string> { "Cube", "Sphere", "Capsule", "Cylinder", "Plane" };
+        private const int MaxPerScene = 100;
 
         public static void Note(Renderer renderer, Mesh mesh, string origin)
         {
-            if (Logger == null || renderer == null || mesh == null)
+            if (Logger == null || renderer == null || mesh == null || logged.Count >= MaxPerScene)
                 return;
             var material = renderer.sharedMaterial;
             bool defaultMaterial = material != null && material.name.StartsWith("Default-Material");

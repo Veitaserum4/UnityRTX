@@ -58,6 +58,11 @@ namespace UnityRemix.Games.Ultrakill
 
         public override void OnSceneLoaded() => bloodStains.Reset();
 
+        // Unity's built-in Default-Material appears only on helper shapes the game doesn't show:
+        // crusher base boxes, skull altar placeholders, invisible walls.
+        public override bool IsHiddenMaterial(Material material) =>
+            material.name.StartsWith("Default-Material", StringComparison.Ordinal);
+
         public override void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
         {
             if (!bloodStains.IsStainMaterial(material))

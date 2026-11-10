@@ -28,6 +28,10 @@ namespace UnityRemix.Games
         // (the game moves, spawns or swaps it).
         public virtual bool IsDynamicObject(MeshFilter filter, Renderer renderer) => false;
 
+        // A material the game never shows (helper shapes, trigger volumes): surfaces with it
+        // are not drawn.
+        public virtual bool IsHiddenMaterial(Material material) => false;
+
         // Adds the game's own per-frame meshes (geometry Unity's renderers don't show).
         public virtual void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) { }
 

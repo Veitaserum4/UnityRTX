@@ -64,6 +64,13 @@ namespace UnityRemix.Games
 
         public static void OnSceneLoaded() => Run(nameof(OnSceneLoaded), p => p.OnSceneLoaded());
 
+        public static bool IsHiddenMaterial(Material material)
+        {
+            bool hidden = false;
+            Run(nameof(IsHiddenMaterial), p => hidden = p.IsHiddenMaterial(material));
+            return hidden;
+        }
+
         public static bool IsDynamicObject(MeshFilter filter, Renderer renderer)
         {
             bool dynamic = false;
