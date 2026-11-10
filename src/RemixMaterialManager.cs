@@ -111,6 +111,28 @@ namespace UnityRemix
         private readonly Dictionary<long, ulong> pendingTintedHashes = new Dictionary<long, ulong>();
         private readonly object pendingTextureLock = new object();
         
+        // A recolour mask: the albedo tinted by up to three colours, each where the mask's red,
+        // green or blue channel is set (a game's player-chosen colours; GameProfile.GetColorMask).
+        public struct ColorMask
+        {
+            public Texture2D mask;
+            public Color color1, color2, color3;
+
+            public int Hash()
+            {
+                unchecked
+                {
+                    int h = mask != null ? mask.GetInstanceID() : 0;
+                    foreach (var c in new[] { color1, color2, color3 })
+                    {
+                        Color32 q = c;
+                        h = h * 397 ^ ((q.r << 16) | (q.g << 8) | q.b);
+                    }
+                    return h;
+                }
+            }
+        }
+
         // Alpha handling modes detected from Unity materials
         public enum AlphaMode
         {
@@ -629,7 +651,7 @@ namespace UnityRemix
         /// <summary>
         /// Capture textures from a Unity material, with optional per-renderer property overrides
         /// </summary>
-        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false)
+        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null)
         {
             if (material == null)
                 return;
@@ -923,6 +945,21 @@ namespace UnityRemix
                     var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint);
                     matData.albedoHandle = partHandle;
                     matData.albedoTextureHash = partHash;
+                    if (isTinted)
+                    {
+                        Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
+                        matData.albedoColor = new Color(linTint.r, linTint.g, linTint.b, matData.albedoColor.a);
+                    }
+                    else
+                    {
+                        matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
+                    }
+                }
+                else if (colorMask.HasValue && colorMask.Value.mask != null)
+                {
+                    var (maskedHandle, maskedHash) = UploadMaskTintedAlbedoTexture(tex, colorMask.Value);
+                    matData.albedoHandle = maskedHandle;
+                    matData.albedoTextureHash = maskedHash;
                     if (isTinted)
                     {
                         Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
@@ -1890,6 +1927,100 @@ namespace UnityRemix
         /// so we bake the color multiplication (and greyscale remapping) into the texture pixels.
         /// Returns (handle, hash) for the uploaded texture.
         /// </summary>
+        // A texture's top-level pixels (a GPU copy when it isn't readable).
+        private static Color32[] ReadPixels32(Texture2D tex, bool linear)
+        {
+            if (tex.isReadable)
+                return tex.GetPixels32();
+            var tmp = RenderTexture.GetTemporary(tex.width, tex.height, 0, RenderTextureFormat.ARGB32,
+                linear ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
+            var prev = RenderTexture.active;
+            Graphics.Blit(tex, tmp);
+            RenderTexture.active = tmp;
+            var readable = new Texture2D(tex.width, tex.height, TextureFormat.RGBA32, false, linear);
+            readable.ReadPixels(new Rect(0, 0, tmp.width, tmp.height), 0, 0);
+            readable.Apply();
+            RenderTexture.active = prev;
+            RenderTexture.ReleaseTemporary(tmp);
+            var pixels = readable.GetPixels32();
+            UnityEngine.Object.Destroy(readable);
+            return pixels;
+        }
+
+        /// <summary>
+        /// The albedo recoloured by a ColorMask: each texel multiplied by color1/2/3 in
+        /// proportion to the mask's red/green/blue there (sampled at the same UV, nearest).
+        /// Multiplying the stored (sRGB) bytes by the colour equals multiplying in linear space.
+        /// </summary>
+        private (IntPtr handle, ulong hash) UploadMaskTintedAlbedoTexture(Texture2D tex, ColorMask colorMask)
+        {
+            if (tex == null || colorMask.mask == null || createTextureFunc == null)
+                return (IntPtr.Zero, 0);
+            long cacheKey = unchecked((long)0x4200000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ (uint)colorMask.Hash());
+            lock (pendingTextureLock)
+            {
+                if (tintedTextureCache.TryGetValue(cacheKey, out var cached))
+                    return cached;
+                if (pendingTintedHashes.TryGetValue(cacheKey, out ulong pHash))
+                    return (new IntPtr((long)pHash), pHash);
+            }
+
+            try
+            {
+                var pixels = ReadPixels32(tex, linear: false);
+                var mask = ReadPixels32(colorMask.mask, linear: true);
+                int w = tex.width, h = tex.height, mw = colorMask.mask.width, mh = colorMask.mask.height;
+                Color c1 = colorMask.color1, c2 = colorMask.color2, c3 = colorMask.color3;
+                byte[] pixelData = new byte[pixels.Length * 4];
+                for (int y = 0; y < h; y++)
+                {
+                    int my = Mathf.Min(mh - 1, (int)((y + 0.5f) * mh / h));
+                    for (int x = 0; x < w; x++)
+                    {
+                        int i = y * w + x;
+                        var m = mask[my * mw + Mathf.Min(mw - 1, (int)((x + 0.5f) * mw / w))];
+                        float mr = m.r / 255f, mg = m.g / 255f, mb = m.b / 255f;
+                        float r = pixels[i].r / 255f, g = pixels[i].g / 255f, b = pixels[i].b / 255f;
+                        float tr = Mathf.Lerp(1f, c1.r, mr) * Mathf.Lerp(1f, c2.r, mg) * Mathf.Lerp(1f, c3.r, mb);
+                        float tg = Mathf.Lerp(1f, c1.g, mr) * Mathf.Lerp(1f, c2.g, mg) * Mathf.Lerp(1f, c3.g, mb);
+                        float tb = Mathf.Lerp(1f, c1.b, mr) * Mathf.Lerp(1f, c2.b, mg) * Mathf.Lerp(1f, c3.b, mb);
+                        pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r * tr) * 255f);
+                        pixelData[i * 4 + 1] = (byte)(Mathf.Clamp01(g * tg) * 255f);
+                        pixelData[i * 4 + 2] = (byte)(Mathf.Clamp01(b * tb) * 255f);
+                        pixelData[i * 4 + 3] = pixels[i].a;
+                    }
+                }
+
+                ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);
+                if (hash == 0) hash = 1;
+                if (verboseTextureLogging.Value)
+                    logger.LogInfo($"Computed colour-masked albedo for '{tex.name}' (mask '{colorMask.mask.name}'): 0x{hash:X16}");
+
+                lock (pendingTextureLock)
+                {
+                    pendingTextureUploads.Enqueue(new PendingTextureUpload
+                    {
+                        texId = -1,
+                        tintedCacheKey = cacheKey,
+                        pixelData = pixelData,
+                        hash = hash,
+                        width = (uint)w,
+                        height = (uint)h,
+                        mipLevels = 1,
+                        format = RemixAPI.remixapi_Format.REMIXAPI_FORMAT_R8G8B8A8_UNORM
+                    });
+                    pendingTintedKeys.Add(cacheKey);
+                    pendingTintedHashes[cacheKey] = hash;
+                }
+                return (new IntPtr((long)hash), hash);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Exception uploading colour-masked albedo '{tex.name}': {ex.Message}");
+                return (IntPtr.Zero, 0);
+            }
+        }
+
         private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap, Vector4? hsbc = null)
         {
             if (tex == null || createTextureFunc == null)

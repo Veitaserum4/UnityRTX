@@ -74,6 +74,36 @@ namespace UnityRemix.Games.Ultrakill
             albedoColor = UltrakillBloodStains.Tint;
         }
 
+        // Weapon colours (GunColorGetter): the weapon's materials are swapped for "colored" copies
+        // whose _IDTex marks, in red/green/blue, where _CustomColor1/2/3 (set through the
+        // renderer's property block; alpha is the metal amount, not applied) tint the albedo.
+        private static readonly int IDTex = Shader.PropertyToID("_IDTex");
+        private static readonly int[] CustomColors =
+        {
+            Shader.PropertyToID("_CustomColor1"), Shader.PropertyToID("_CustomColor2"), Shader.PropertyToID("_CustomColor3")
+        };
+
+        public override bool GetColorMask(Material material, MaterialPropertyBlock block, out RemixMaterialManager.ColorMask colorMask)
+        {
+            colorMask = default;
+            if (!material.HasProperty(IDTex) || !(material.GetTexture(IDTex) is Texture2D mask))
+                return false;
+            var colors = new Color[3];
+            bool tinted = false;
+            for (int i = 0; i < 3; i++)
+            {
+                Color c = block != null && !block.isEmpty ? block.GetColor(CustomColors[i]) : Color.clear;
+                if (c == Color.clear)
+                    c = material.HasProperty(CustomColors[i]) ? material.GetColor(CustomColors[i]) : Color.white;
+                colors[i] = c;
+                tinted |= c.r < 0.99f || c.g < 0.99f || c.b < 0.99f;
+            }
+            if (!tinted)
+                return false;
+            colorMask = new RemixMaterialManager.ColorMask { mask = mask, color1 = colors[0], color2 = colors[1], color3 = colors[2] };
+            return true;
+        }
+
         public override bool IsDynamicObject(MeshFilter filter, Renderer renderer)
         {
             if (dynamicTypes == null)

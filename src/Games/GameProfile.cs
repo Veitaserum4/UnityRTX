@@ -46,6 +46,15 @@ namespace UnityRemix.Games
         // however the material is first captured).
         public virtual void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor) { }
 
+        // A material the game recolours with player-chosen colours through a mask texture
+        // (block: the renderer's property block, empty when it has none): the mask and its
+        // colours, applied to the albedo by the material capture.
+        public virtual bool GetColorMask(Material material, MaterialPropertyBlock block, out RemixMaterialManager.ColorMask colorMask)
+        {
+            colorMask = default;
+            return false;
+        }
+
         // The camera the game draws its view models (weapons, arms) with, when it isn't the
         // world camera; null: the world camera's projection.
         public virtual Camera FindViewModelCamera(Camera worldCamera) => null;

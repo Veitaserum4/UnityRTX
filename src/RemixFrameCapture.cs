@@ -1600,6 +1600,13 @@ namespace UnityRemix
                         int emisInt = (e32.a << 24) | (e32.r << 16) | (e32.g << 8) | e32.b;
                         mpbHash = HashCombine(mpbHash, emisInt);
                     }
+                    // Recolour masks' colours (weapon colours set through the block).
+                    var blockMaterials = info.sharedMaterials;
+                    for (int m = 0; blockMaterials != null && m < blockMaterials.Length; m++)
+                    {
+                        if (blockMaterials[m] != null && Games.GameProfiles.GetColorMask(blockMaterials[m], sharedStaticMpb, out var blockMask))
+                            mpbHash = HashCombine(mpbHash, blockMask.Hash());
+                    }
                 }
 
                 int matSig = baseMatSig;
@@ -1772,8 +1779,9 @@ namespace UnityRemix
                                     }
                                 }
                                 catch { }
+                                var colorMask = ResolveColorMask(renderer, materials[m], ref matId);
                                 submeshMaterialIds.Add(matId);
-                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer);
+                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer, colorMask: colorMask);
                             }
                             else
                             {
@@ -2882,7 +2890,8 @@ namespace UnityRemix
                 else
                 {
                     matId = StaticGeometryDedupe.GetCanonicalMaterialId(mat);
-                    materialManager.CaptureMaterialTextures(mat, matId, renderer: r);
+                    var colorMask = ResolveColorMask(r, mat, ref matId);
+                    materialManager.CaptureMaterialTextures(mat, matId, renderer: r, colorMask: colorMask);
                 }
                 if (loggedPreviewRenderers.Add(rid))
                     logger.LogInfo($"[WorldScreen] live image model '{r.name}' ({r.GetType().Name}): {n} verts, {data.submeshes.Length} submeshes, material '{mat.name}' shader '{(mat.shader != null ? mat.shader.name : "-")}'");
@@ -5899,6 +5908,25 @@ namespace UnityRemix
         {
             unchecked { return a * 397 ^ b; }
         }
+
+        // The game's recolour mask for a renderer's material (GameProfile.GetColorMask), with
+        // its colours folded into the material id (a recolour is another Remix material).
+        private MaterialPropertyBlock colorMaskBlock;
+
+        private RemixMaterialManager.ColorMask? ResolveColorMask(Renderer renderer, Material material, ref int matId)
+        {
+            if (renderer == null || material == null)
+                return null;
+            if (colorMaskBlock == null)
+                colorMaskBlock = new MaterialPropertyBlock();
+            colorMaskBlock.Clear();
+            if (renderer.HasPropertyBlock())
+                renderer.GetPropertyBlock(colorMaskBlock);
+            if (!Games.GameProfiles.GetColorMask(material, colorMaskBlock, out var colorMask))
+                return null;
+            matId = HashCombine(matId, colorMask.Hash());
+            return colorMask;
+        }
         
         /// <summary>
         /// Resolve the best material for a skinned mesh renderer. Returns material instance ID.
@@ -6109,7 +6137,8 @@ namespace UnityRemix
                     catch { }
                 }
 
-                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor);
+                var colorMask = ResolveColorMask(skinned, bestMaterial, ref matId);
+                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask);
                 
 
             }

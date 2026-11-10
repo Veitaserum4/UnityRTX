@@ -96,6 +96,15 @@ namespace UnityRemix.Games
             albedoColor = color;
         }
 
+        public static bool GetColorMask(Material material, MaterialPropertyBlock block, out RemixMaterialManager.ColorMask colorMask)
+        {
+            bool found = false;
+            var mask = default(RemixMaterialManager.ColorMask);
+            Run(nameof(GetColorMask), p => found = p.GetColorMask(material, block, out mask));
+            colorMask = mask;
+            return found;
+        }
+
         public static Camera FindViewModelCamera(Camera worldCamera)
         {
             Camera camera = null;
