@@ -778,45 +778,6 @@ namespace UnityRemix
             return flags;
         }
 
-        private static Type[] _ignoredDynamicTypes;
-        private static bool _ignoredDynamicTypesSearched;
-
-        private static Type[] GetIgnoredDynamicTypes()
-        {
-            if (!_ignoredDynamicTypesSearched)
-            {
-                _ignoredDynamicTypesSearched = true;
-                var list = new List<Type>();
-                var targetNames = new HashSet<string>
-                {
-                    "EnemyIdentifier",
-                    "SpawnEffect",
-                    "SeasonalHats",
-                    "NewMovement",
-                    "PlayerTracker",
-                    "Projectile",
-                    "Coin",
-                    "Nail",
-                    "Grenade",
-                    "ItemIdentifier",
-                    "Skull",
-                    "BloodAbsorber"
-                };
-
-                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
-                {
-                    foreach (var name in targetNames)
-                    {
-                        var t = asm.GetType(name);
-                        if (t != null && !list.Contains(t))
-                            list.Add(t);
-                    }
-                }
-                _ignoredDynamicTypes = list.ToArray();
-            }
-            return _ignoredDynamicTypes;
-        }
-
         private static bool IsDynamicOrIgnored(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
         {
             if (isCombinedMesh)
@@ -826,54 +787,8 @@ namespace UnityRemix
             if (RemixScrollingTextureDetector.IsScrollingRenderer(renderer))
                 return true;
 
-            try
-            {
-                var types = GetIgnoredDynamicTypes();
-                if (types != null)
-                {
-                    for (int i = 0; i < types.Length; i++)
-                    {
-                        if (renderer.GetComponentInParent(types[i]) != null)
-                            return true;
-                    }
-                }
-            }
-            catch { }
-
-            try
-            {
-                string objName = filter.gameObject.name;
-                if (!string.IsNullOrEmpty(objName))
-                {
-                    if (objName.IndexOf("SpawnEffect", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        objName.IndexOf("SeasonalHats", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        objName.IndexOf("Pumpkin", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        objName.IndexOf("SantaHat", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                        objName.IndexOf("EasterBunny", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        return true;
-                    }
-                }
-
-                if (filter.transform.parent != null)
-                {
-                    string parentName = filter.transform.parent.name;
-                    if (!string.IsNullOrEmpty(parentName))
-                    {
-                        if (parentName.IndexOf("SpawnEffect", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            parentName.IndexOf("SeasonalHats", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            parentName.IndexOf("Halloween", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            parentName.IndexOf("Christmas", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                            parentName.IndexOf("Easter", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            return false;
+            // Objects the game moves, spawns or swaps (its GameProfile knows which)
+            return Games.GameProfiles.IsDynamicObject(filter, renderer);
         }
 
         private int ScanScene(Scene scene, bool logDiagnostics)

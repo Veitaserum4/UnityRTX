@@ -1,19 +1,17 @@
 using System;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using BepInEx.Logging;
 using HarmonyLib;
-using UnityEngine;
 using UnityEngine.SceneManagement;
 
-namespace UnityRemix
+namespace UnityRemix.Games.Ultrakill
 {
     /// <summary>
     /// Interacts with ULTRAKILL's GameStateManager to cleanly unlock/lock mouse cursor,
     /// player movement/shooting, and camera rotation when the RTX Remix menu (ImGui) opens and closes.
-    /// Uses reflection and Harmony so the bridge compiles and runs cleanly even if GameStateManager is absent.
+    /// Uses reflection so the bridge compiles without the game's assemblies.
     /// </summary>
-    public static class RemixGameStateHelper
+    internal static class UltrakillGameState
     {
         private static bool typesInitialized = false;
         private static Type gsmType;
@@ -34,15 +32,6 @@ namespace UnityRemix
         private static FieldInfo priorityField;
 
         private static bool isStateRegistered = false;
-        private static bool wasCursorLocked = true;
-        private static CursorLockMode previousLockMode = CursorLockMode.Locked;
-        private static bool previousCursorVisible = false;
-
-        [DllImport("user32.dll")]
-        private static extern bool ClipCursor(IntPtr lpRect);
-
-        [DllImport("user32.dll")]
-        private static extern bool ReleaseCapture();
 
         private static void InitializeTypes()
         {
@@ -87,14 +76,14 @@ namespace UnityRemix
                     var evalMethod = gsmType.GetMethod("EvaluateState", BindingFlags.NonPublic | BindingFlags.Instance);
                     if (evalMethod != null)
                     {
-                        var prefix = new HarmonyMethod(typeof(RemixGameStateHelper), nameof(EvaluateStatePrefix));
+                        var prefix = new HarmonyMethod(typeof(UltrakillGameState), nameof(EvaluateStatePrefix));
                         harmony.Patch(evalMethod, prefix: prefix);
-                        logger?.LogInfo("[RemixGameStateHelper] Successfully patched GameStateManager.EvaluateState with safe defaults prefix.");
+                        logger?.LogInfo("[UltrakillGameState] Successfully patched GameStateManager.EvaluateState with safe defaults prefix.");
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogWarning($"[RemixGameStateHelper] Failed to patch GameStateManager.EvaluateState: {ex.Message}");
+                    logger?.LogWarning($"[UltrakillGameState] Failed to patch GameStateManager.EvaluateState: {ex.Message}");
                 }
             }
         }
@@ -136,22 +125,14 @@ namespace UnityRemix
             return false;
         }
 
-        public static void SetRemixMenuState(bool open, ManualLogSource logger = null)
+        // Opening registers a 'RemixMenu' GameState (cursor unlocked, camera and player
+        // input locked); closing pops it and returns whether the cursor locks again.
+        public static bool? SetRemixMenuState(bool open, ManualLogSource logger)
         {
             InitializeTypes();
 
             if (open)
             {
-                wasCursorLocked = (Cursor.lockState == CursorLockMode.Locked);
-                previousLockMode = Cursor.lockState;
-                previousCursorVisible = Cursor.visible;
-
-                ClipCursor(IntPtr.Zero);
-                ReleaseCapture();
-                Cursor.lockState = CursorLockMode.None;
-                Cursor.visible = true;
-                RemixWindowManager.ResetUnityInputAxes();
-
                 if (!isStateRegistered && gsmType != null && gameStateType != null && gameStateCtor != null)
                 {
                     try
@@ -168,94 +149,85 @@ namespace UnityRemix
 
                             registerStateMethod?.Invoke(gsmInstance, new object[] { state });
                             isStateRegistered = true;
-                            logger?.LogInfo("[RemixGameStateHelper] Registered 'RemixMenu' GameState: cursor unlocked, camera & player input locked.");
+                            logger?.LogInfo("[UltrakillGameState] Registered 'RemixMenu' GameState: cursor unlocked, camera & player input locked.");
                         }
                     }
                     catch (Exception ex)
                     {
-                        logger?.LogWarning($"[RemixGameStateHelper] Failed to register GameState: {ex.Message}");
+                        logger?.LogWarning($"[UltrakillGameState] Failed to register GameState: {ex.Message}");
                     }
+                }
+                return null;
+            }
+
+            if (isStateRegistered && gsmType != null && popStateMethod != null)
+            {
+                try
+                {
+                    object gsmInstance = gsmInstanceProp?.Invoke(null, null);
+                    if (gsmInstance != null)
+                    {
+                        popStateMethod.Invoke(gsmInstance, new object[] { "RemixMenu" });
+                        isStateRegistered = false;
+                        logger?.LogInfo("[UltrakillGameState] Popped 'RemixMenu' GameState: game controls and cursor restored.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning($"[UltrakillGameState] Failed to pop GameState: {ex.Message}");
                 }
             }
-            else
+
+            bool inGameplay = IsInGameplay();
+            bool shouldLockCursor = inGameplay;
+            bool shouldLockCamera = false;
+            bool shouldLockPlayerInput = false;
+
+            // Inspect any remaining states in GameStateManager
+            if (gsmType != null)
             {
-                if (isStateRegistered && gsmType != null && popStateMethod != null)
+                try
                 {
-                    try
+                    object gsmInstance = gsmInstanceProp?.Invoke(null, null);
+                    if (gsmInstance != null)
                     {
-                        object gsmInstance = gsmInstanceProp?.Invoke(null, null);
-                        if (gsmInstance != null)
+                        var stateOrder = stateOrderField?.GetValue(gsmInstance) as System.Collections.IList;
+                        var activeStates = activeStatesField?.GetValue(gsmInstance) as System.Collections.IDictionary;
+
+                        if (stateOrder != null && activeStates != null && stateOrder.Count > 0)
                         {
-                            popStateMethod.Invoke(gsmInstance, new object[] { "RemixMenu" });
-                            isStateRegistered = false;
-                            logger?.LogInfo("[RemixGameStateHelper] Popped 'RemixMenu' GameState: game controls and cursor restored.");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger?.LogWarning($"[RemixGameStateHelper] Failed to pop GameState: {ex.Message}");
-                    }
-                }
-
-                bool inGameplay = IsInGameplay();
-                bool shouldLockCursor = inGameplay;
-                bool shouldLockCamera = false;
-                bool shouldLockPlayerInput = false;
-
-                // Inspect any remaining states in GameStateManager
-                if (gsmType != null)
-                {
-                    try
-                    {
-                        object gsmInstance = gsmInstanceProp?.Invoke(null, null);
-                        if (gsmInstance != null)
-                        {
-                            var stateOrder = stateOrderField?.GetValue(gsmInstance) as System.Collections.IList;
-                            var activeStates = activeStatesField?.GetValue(gsmInstance) as System.Collections.IDictionary;
-
-                            if (stateOrder != null && activeStates != null && stateOrder.Count > 0)
+                            for (int i = stateOrder.Count - 1; i >= 0; i--)
                             {
-                                for (int i = stateOrder.Count - 1; i >= 0; i--)
+                                object key = stateOrder[i];
+                                if (key != null && activeStates.Contains(key))
                                 {
-                                    object key = stateOrder[i];
-                                    if (key != null && activeStates.Contains(key))
+                                    object stateObj = activeStates[key];
+                                    if (stateObj != null)
                                     {
-                                        object stateObj = activeStates[key];
-                                        if (stateObj != null)
-                                        {
-                                            int cLock = Convert.ToInt32(cursorLockField?.GetValue(stateObj) ?? 0);
-                                            if (cLock != 0) shouldLockCursor = (cLock == 1);
+                                        int cLock = Convert.ToInt32(cursorLockField?.GetValue(stateObj) ?? 0);
+                                        if (cLock != 0) shouldLockCursor = (cLock == 1);
 
-                                            int pLock = Convert.ToInt32(playerInputLockField?.GetValue(stateObj) ?? 0);
-                                            if (pLock != 0) shouldLockPlayerInput = (pLock == 1);
+                                        int pLock = Convert.ToInt32(playerInputLockField?.GetValue(stateObj) ?? 0);
+                                        if (pLock != 0) shouldLockPlayerInput = (pLock == 1);
 
-                                            int camLock = Convert.ToInt32(cameraInputLockField?.GetValue(stateObj) ?? 0);
-                                            if (camLock != 0) shouldLockCamera = (camLock == 1);
-                                        }
+                                        int camLock = Convert.ToInt32(cameraInputLockField?.GetValue(stateObj) ?? 0);
+                                        if (camLock != 0) shouldLockCamera = (camLock == 1);
                                     }
                                 }
                             }
-
-                            // Write clean evaluated states directly into GameStateManager
-                            setCursorLockedMethod?.Invoke(gsmInstance, new object[] { shouldLockCursor });
-                            setPlayerInputLockedMethod?.Invoke(gsmInstance, new object[] { shouldLockPlayerInput });
-                            setCameraLockedMethod?.Invoke(gsmInstance, new object[] { shouldLockCamera });
                         }
+
+                        // Write clean evaluated states directly into GameStateManager
+                        setCursorLockedMethod?.Invoke(gsmInstance, new object[] { shouldLockCursor });
+                        setPlayerInputLockedMethod?.Invoke(gsmInstance, new object[] { shouldLockPlayerInput });
+                        setCameraLockedMethod?.Invoke(gsmInstance, new object[] { shouldLockCamera });
                     }
-                    catch { }
                 }
-
-                logger?.LogInfo($"[RemixGameStateHelper] Pop evaluated: inGameplay={inGameplay}, lockCursor={shouldLockCursor}, lockCam={shouldLockCamera}, lockPlayer={shouldLockPlayerInput}");
-
-                Cursor.lockState = shouldLockCursor ? CursorLockMode.Locked : CursorLockMode.None;
-                Cursor.visible = !shouldLockCursor;
-                if (!shouldLockCursor)
-                {
-                    ClipCursor(IntPtr.Zero);
-                }
-                ReleaseCapture();
-                RemixWindowManager.ResetUnityInputAxes();
+                catch { }
             }
+
+            logger?.LogInfo($"[UltrakillGameState] Pop evaluated: inGameplay={inGameplay}, lockCursor={shouldLockCursor}, lockCam={shouldLockCamera}, lockPlayer={shouldLockPlayerInput}");
+            return shouldLockCursor;
         }
     }
 }

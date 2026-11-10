@@ -841,6 +841,11 @@ namespace UnityRemix
                 matData.alphaMode = AlphaMode.Cutout;
                 matData.alphaCutoff = material.HasProperty("_AlphaClip") && material.GetFloat("_AlphaClip") > 0f ? material.GetFloat("_AlphaClip") : 0.5f;
             }
+            if (Games.GameProfiles.OverrideAlphaMode(material, out AlphaMode gameAlphaMode, out float gameAlphaCutoff))
+            {
+                matData.alphaMode = gameAlphaMode;
+                matData.alphaCutoff = gameAlphaCutoff;
+            }
 
             // Detect translucent kind (Water vs Glass vs None) for OpenRemix
             var (transKind, ior, dist, transColor, transReason) = DetectTranslucentKind(

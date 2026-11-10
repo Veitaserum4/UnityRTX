@@ -280,7 +280,7 @@ namespace UnityRemix
             }
             if (isEmbeddedStatic)
             {
-                RemixGameStateHelper.SetRemixMenuState(open, logger);
+                RemixMenuCursor.SetRemixMenuState(open);
             }
             RemixUIOverlay.Instance?.OnRemixUIStateChanged(open);
         }

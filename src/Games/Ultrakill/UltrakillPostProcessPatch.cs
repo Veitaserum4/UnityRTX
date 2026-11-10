@@ -3,7 +3,7 @@ using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
 
-namespace UnityRemix
+namespace UnityRemix.Games.Ultrakill
 {
     /// <summary>
     /// Game-specific patch for ULTRAKILL's PostProcessV2_Handler.
@@ -12,7 +12,7 @@ namespace UnityRemix
     /// This patch prevents PostProcessV2_Handler from overriding HUD Camera when SingleWindow UI
     /// overlay is active, ensuring HUD and Menu canvases render directly into the transparent UI target.
     /// </summary>
-    public static class UltrakillPostProcessPatch
+    internal static class UltrakillPostProcessPatch
     {
         private static bool applied = false;
         private static ManualLogSource logger;
@@ -27,7 +27,7 @@ namespace UnityRemix
                 var ppType = AccessTools.TypeByName("PostProcessV2_Handler");
                 if (ppType == null)
                 {
-                    logger?.LogInfo("[UltrakillPostProcessPatch] PostProcessV2_Handler not found (not ULTRAKILL or running in different game). Skipping.");
+                    logger?.LogInfo("[UltrakillPostProcessPatch] PostProcessV2_Handler not found. Skipping.");
                     return;
                 }
 

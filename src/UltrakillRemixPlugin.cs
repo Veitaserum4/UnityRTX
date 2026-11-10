@@ -21,6 +21,7 @@ namespace UnityRemix
         public const string PluginVersion = "1.0.0";
 
         // Configuration entries
+        private ConfigEntry<string> configGameProfile;
         private ConfigEntry<string> configCameraName;
         private ConfigEntry<string> configCameraTag;
         private ConfigEntry<bool> configListCameras;
@@ -141,14 +142,14 @@ namespace UnityRemix
             
             LogSource.LogInfo($"GameObject: {gameObject.name}, Active: {gameObject.activeSelf}, Enabled: {enabled}");
             
-            // Apply Harmony patches (e.g. MeshAccessPatch and UltrakillPostProcessPatch)
+            // Apply Harmony patches, then the game's own (Games/)
+            Games.GameProfiles.Detect(configGameProfile.Value, LogSource);
             try
             {
                 var harmony = new Harmony(PluginGUID);
                 MeshAccessPatch.Apply(harmony);
-                UltrakillPostProcessPatch.Apply(harmony, LogSource);
-                RemixGameStateHelper.Apply(harmony, LogSource);
                 RemixCameraViewportPatch.Apply(harmony, LogSource);
+                Games.GameProfiles.Apply(harmony);
             }
             catch (Exception ex)
             {
@@ -172,6 +173,12 @@ namespace UnityRemix
         
         private void InitializeConfig()
         {
+            var profiles = new List<string> { Games.GameProfiles.Auto, Games.GameProfiles.None };
+            profiles.AddRange(Games.GameProfiles.Names);
+            configGameProfile = Config.Bind("Game", "GameProfile", Games.GameProfiles.Auto,
+                new ConfigDescription("Game-specific patches: Auto picks them by the game's executable name; None turns them off. Restart the game after changing this setting.",
+                    new AcceptableValueList<string>(profiles.ToArray())));
+
             configNativeBackend = Config.Bind("Native", "Backend", "raster",
                 new ConfigDescription("openremix rendering backend. Restart the game after changing this setting.",
                     new AcceptableValueList<string>("raster", "pathtrace")));
@@ -390,6 +397,7 @@ namespace UnityRemix
                 lightConverter?.ClearCache();
                 sceneMeshScanner?.ClearData();
                 renderThread?.RequestClearRetainedSceneInstances();
+                Games.GameProfiles.OnSceneLoaded();
             }
             
             // Trigger scene scan
@@ -846,6 +854,7 @@ namespace UnityRemix
                     LogSource.LogError($"CaptureTrailRenderers exception: {ex}");
                 }
                 RemixProfiler.AddDetail(RemixProfiler.Detail.Trails, RemixProfiler.ElapsedMs(trailsStart));
+                Games.GameProfiles.CaptureFrame(materialManager, nextState, frameCount);
                 dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes
