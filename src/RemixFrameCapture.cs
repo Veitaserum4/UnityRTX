@@ -817,6 +817,9 @@ namespace UnityRemix
         private readonly Dictionary<int, CachedSkinnedRendererInfo> cachedSkinnedInfo = new Dictionary<int, CachedSkinnedRendererInfo>(128);
         private readonly HashSet<int> reusableValidSkinnedIds = new HashSet<int>();
         private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
+        // Skinned id (CachedSkinnedRendererInfo.hierarchyHash) -> the renderer holding it; kept
+        // across renderer cache refreshes so twins never swap ids, cleared on scene load.
+        private readonly Dictionary<int, SkinnedMeshRenderer> skinnedIdOwners = new Dictionary<int, SkinnedMeshRenderer>();
         private readonly List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)> reusableBakeFallbackQueue = new List<(int idx, SkinnedMeshRenderer smr, int skinnedId, Matrix4x4 matrix, int matId)>();
         private readonly List<int> reusableStaleSkinnedKeys = new List<int>();
         private Camera lastTrackedCamera;
@@ -969,10 +972,18 @@ namespace UnityRemix
                     }
                 }
 
+                // Clones under one parent share a hierarchy path: a second live renderer with
+                // the path gets an id of its own, or both share persistent data and one Remix
+                // instance (one enemy's pose drawn for both).
+                int hierarchyHash = HashUtils.GetHierarchyHashInt(tr);
+                if (skinnedIdOwners.TryGetValue(hierarchyHash, out var owner) && owner != null && owner != sr)
+                    hierarchyHash = unchecked((int)((uint)hierarchyHash ^ ((uint)id * 0x85EBCA6Bu)));
+                skinnedIdOwners[hierarchyHash] = sr;
+
                 info = new CachedSkinnedRendererInfo
                 {
                     rendererId = id,
-                    hierarchyHash = HashUtils.GetHierarchyHashInt(tr),
+                    hierarchyHash = hierarchyHash,
                     transform = tr,
                     gameObject = sr.gameObject,
                     animator = sr.GetComponentInParent<Animator>(),
@@ -1033,6 +1044,7 @@ namespace UnityRemix
             scrollingRendererIds.Clear();
             cachedScrollingRenderers.Clear();
             RemixScrollingTextureDetector.ClearCache();
+            skinnedIdOwners.Clear();
             lock (persistentStaticLock)
             {
                 persistentStaticInstances.Clear();
