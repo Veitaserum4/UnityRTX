@@ -1236,37 +1236,41 @@ namespace UnityRemix
                     }
                 }
                 
-                // TextMeshPro Distance Field: self-lit UI text — use _FaceColor as emissive tint.
-                // SDF atlases are typically Alpha8 format: after GPU readback the glyph shapes
-                // live in the alpha channel while RGB is black. We must convert alpha → RGB
-                // so Remix sees bright glyph pixels in the emissive texture.
-                // The albedo from Alpha8 readback is (0,0,0,A), so reflected light contributes
-                // nothing — emission is the only light source for these glyphs. Use a high
-                // intensity so text appears clearly self-lit in the path-traced scene.
-                if (!hasEmission && shaderName.Contains("TextMeshPro/Distance Field"))
+                // TextMeshPro Distance Field: self-lit UI text. The atlas holds a distance field
+                // (Alpha8: RGB black, the field in alpha; the glyph edge at 0.5): it is converted
+                // to white glyph shapes with that edge as their alpha, and alpha tested there.
+                // Otherwise each glyph's whole quad shows, filled with the field's soft spread.
+                // Colour: _FaceColor times the caller's colour (a UI graphic's vertex colour) as
+                // constants. Intensity: the caller's (UI screens), else bright self-lit text.
+                // This replaces any emission found above (a UI caller's colour override would
+                // otherwise emit the raw atlas, its quads as squares).
+                if (shaderName.Contains("TextMeshPro/Distance Field"))
                 {
                     Color faceColor = material.HasProperty("_FaceColor")
                         ? material.GetColor("_FaceColor")
                         : Color.white;
+                    if (mpbEmissiveColor.HasValue)
+                        faceColor *= mpbEmissiveColor.Value;
                     float maxCh = Mathf.Max(faceColor.r, Mathf.Max(faceColor.g, faceColor.b));
                     if (maxCh > 0f && albedoTex != null)
                     {
-                        var (emHandle, emHash) = UploadSDFEmissiveTexture(albedoTex, faceColor);
+                        var (emHandle, emHash) = UploadSDFEmissiveTexture(albedoTex, Color.white);
                         if (emHandle != IntPtr.Zero)
                         {
                             matData.emissiveColor = faceColor;
-                            matData.emissiveIntensity = 20.0f;
+                            matData.emissiveIntensity = mpbEmissiveIntensity ?? 20.0f;
                             matData.emissiveHandle = emHandle;
                             matData.emissiveTextureHash = emHash;
                             hasEmission = true;
-                            
-                            // Also replace albedo with the alpha→RGB texture so glyphs
-                            // are directly visible, not just in reflections. The original
-                            // Alpha8 readback produces (0,0,0,A) which renders as
-                            // transparent black in direct view.
+
+                            // The glyph shapes as albedo too (the readback is black).
                             matData.albedoHandle = emHandle;
                             matData.albedoTextureHash = emHash;
+                            Color linFace = QualitySettings.activeColorSpace == ColorSpace.Linear ? faceColor : faceColor.linear;
+                            matData.albedoColor = new Color(linFace.r, linFace.g, linFace.b, 1f);
                             matData.useEmissiveBlend = true;
+                            matData.alphaMode = AlphaMode.Cutout;
+                            matData.alphaCutoff = 0.5f;
                         }
                     }
                 }
@@ -2134,11 +2138,13 @@ namespace UnityRemix
                 byte[] pixelData = new byte[pixels.Length * 4];
                 for (int i = 0; i < pixels.Length; i++)
                 {
-                    byte lum = (byte)Mathf.Max(pixels[i].r, Mathf.Max(pixels[i].g, Mathf.Max(pixels[i].b, pixels[i].a)));
+                    // The distance field to glyph coverage: the edge at 0.5, a short ramp across it.
+                    float field = Mathf.Max(pixels[i].r, Mathf.Max(pixels[i].g, Mathf.Max(pixels[i].b, pixels[i].a))) / 255f;
+                    byte lum = (byte)(Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.42f, 0.58f, field)) * 255f);
                     pixelData[i * 4 + 0] = (byte)((lum * tR) / 255);
                     pixelData[i * 4 + 1] = (byte)((lum * tG) / 255);
                     pixelData[i * 4 + 2] = (byte)((lum * tB) / 255);
-                    pixelData[i * 4 + 3] = lum; // alpha = glyph shape for blending
+                    pixelData[i * 4 + 3] = lum; // alpha = glyph coverage, tested at 0.5
                 }
                 
                 ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);

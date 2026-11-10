@@ -2719,6 +2719,52 @@ namespace UnityRemix
         private readonly HashSet<int> loggedWorldCanvases = new HashSet<int>();
         private int worldCanvasRefreshFrame = -1000000;
         private const float WorldScreenMaxDistance = 80f;
+        // Screens in the level glow less than the small weapon screens: their large bright
+        // panels are also lit by the room, and drawn by Unity unlit at their plain colour.
+        private const float WorldScreenEmission = 0.5f;
+        private readonly HashSet<int> loggedPreviewImages = new HashSet<int>();
+
+        // Once per raw image shown on a screen: what it shows, and the cameras and models a
+        // shop window's item preview is made of (where they are relative to the image and to
+        // the player's camera), to tell how the game composites them.
+        private void LogPreviewImage(RawImage raw, Camera mainCam)
+        {
+            var rect = raw.rectTransform;
+            var tex = raw.texture;
+            var mat = raw.materialForRendering;
+            Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
+            logger.LogInfo($"[WorldScreen] raw image '{raw.name}' under '{(rect.parent != null ? rect.parent.name : "-")}': {size.x:F3} x {size.y:F3} m at {rect.position}, " +
+                           $"texture {(tex != null ? $"'{tex.name}' ({tex.GetType().Name} {tex.width}x{tex.height})" : "none")}, " +
+                           $"material '{(mat != null ? mat.name : "-")}' shader '{(mat != null && mat.shader != null ? mat.shader.name : "-")}' queue {(mat != null ? mat.renderQueue : 0)}, uvRect {raw.uvRect}");
+            var mainT = mainCam.transform;
+            logger.LogInfo($"[WorldScreen]   player camera at {mainT.position} fwd {mainT.forward} fov {mainCam.fieldOfView:F1}");
+            // The nearest ancestor holding a camera: the preview window.
+            Transform scope = rect.parent;
+            while (scope != null && scope.GetComponentInChildren<Camera>(true) == null)
+                scope = scope.parent;
+            if (scope == null)
+                return;
+            foreach (var cam in scope.GetComponentsInChildren<Camera>(true))
+            {
+                var t = cam.transform;
+                var target = cam.targetTexture;
+                logger.LogInfo($"[WorldScreen]   camera '{cam.name}' in '{scope.name}': active {cam.isActiveAndEnabled}, at {t.position} (image local {rect.InverseTransformPoint(t.position)}), fwd {t.forward}, " +
+                               $"{(cam.orthographic ? $"ortho size {cam.orthographicSize:F2}" : $"fov {cam.fieldOfView:F1}")}, near {cam.nearClipPlane:F2} far {cam.farClipPlane:F1}, depth {cam.depth}, rect {cam.rect}, " +
+                               $"clear {cam.clearFlags} {cam.backgroundColor}, mask 0x{GameCameraMasks.Get(cam):X} (now 0x{cam.cullingMask:X}), " +
+                               $"target {(target != null ? $"'{target.name}' {target.width}x{target.height}" : "screen")}");
+                var comps = cam.GetComponents<Component>();
+                var names = new List<string>();
+                foreach (var c in comps) if (c != null) names.Add(c.GetType().Name);
+                logger.LogInfo($"[WorldScreen]     components: {string.Join(", ", names)}");
+            }
+            int n = 0;
+            foreach (var r in scope.GetComponentsInChildren<Renderer>(true))
+            {
+                if (n++ >= 12) break;
+                var b = r.bounds;
+                logger.LogInfo($"[WorldScreen]   model '{r.name}' layer {r.gameObject.layer} active {r.gameObject.activeInHierarchy}: bounds centre {b.center} (image local {rect.InverseTransformPoint(b.center)}), size {b.size}");
+            }
+        }
 
         private void UncullWeaponScreens()
         {
@@ -3021,6 +3067,8 @@ namespace UnityRemix
                 return;
 
             Texture2D mainTex = g.mainTexture as Texture2D;
+            if (g is RawImage raw && loggedPreviewImages.Add(raw.GetInstanceID()))
+                LogPreviewImage(raw, mainCam);
 
             Color32 c32 = col;
             int qR = (c32.r >> 3);
@@ -3029,13 +3077,14 @@ namespace UnityRemix
             int qA = (c32.a >> 3);
             int colHash = (qA << 15) | (qR << 10) | (qG << 5) | qB;
             int texHash = mainTex != null ? mainTex.GetInstanceID() : 0;
-            int uiMatId = HashCombine(mat.GetInstanceID(), HashCombine(texHash, colHash));
+            float emission = onViewModel ? 1.0f : WorldScreenEmission;
+            int uiMatId = HashCombine(HashCombine(mat.GetInstanceID(), HashCombine(texHash, colHash)), onViewModel ? 1 : 2);
 
             materialManager.CaptureMaterialTextures(
                 mat,
                 uiMatId,
                 mpbEmissiveColor: col,
-                mpbEmissiveIntensity: 1.0f,
+                mpbEmissiveIntensity: emission,
                 mpbMainTex: mainTex,
                 mpbColor: col,
                 suppressLightGeneration: true
