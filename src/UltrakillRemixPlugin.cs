@@ -119,6 +119,7 @@ namespace UnityRemix
             LogSource.LogInfo($"Plugin {PluginName} v{PluginVersion} is loading!");
             RemixWatchdog.Start(LogSource);
             RemixProfiler.Logger = LogSource;
+            PrimitiveDiagnostics.Logger = LogSource;
             // Awake, not Start: some games destroy the plugin's GameObject before it starts.
             if (!beforeRenderHooked)
             {
@@ -398,6 +399,7 @@ namespace UnityRemix
                 sceneMeshScanner?.ClearData();
                 renderThread?.RequestClearRetainedSceneInstances();
                 Games.GameProfiles.OnSceneLoaded();
+                PrimitiveDiagnostics.Clear();
             }
             
             // Trigger scene scan

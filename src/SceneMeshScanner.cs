@@ -947,6 +947,7 @@ int queued = 0;
 
                 // Mark scanned before extraction — even if geometry is empty we won't retry
                 scannedFilterIds.Add(filterId);
+                PrimitiveDiagnostics.Note(renderer, mesh, "Scanner");
 
                 Vector3[] vertices = null;
                 Vector3[] normals = null;

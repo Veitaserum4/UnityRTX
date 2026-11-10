@@ -1523,6 +1523,7 @@ namespace UnityRemix
                     }
                     continue;
                 }
+                PrimitiveDiagnostics.Note(renderer, mesh, "Runtime");
 
                 Texture mpbMainTex = null;
                 Color? mpbColor = null;
