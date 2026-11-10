@@ -182,6 +182,8 @@ namespace UnityRemix
             public float emissiveIntensity;
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
+            public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
+            public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
             public TranslucentKind translucentKind;
@@ -662,6 +664,11 @@ namespace UnityRemix
         /// <summary>
         /// Capture textures from a Unity material, with optional per-renderer property overrides
         /// </summary>
+        // Materials registered as ray portals by id (RayPortalPair's own), else by game profile.
+        private readonly Dictionary<int, int> rayPortalIndices = new Dictionary<int, int>();
+
+        public void SetRayPortalIndex(int materialId, int index) => rayPortalIndices[materialId] = index;
+
         public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null)
         {
             if (material == null)
@@ -715,6 +722,9 @@ namespace UnityRemix
                 emissiveColor = Color.black,
                 emissiveIntensity = 0f,
                 suppressLightGeneration = autoSuppressLight,
+                rayPortalIndex = rayPortalIndices.TryGetValue(materialId, out int portalIndex) ? portalIndex
+                               : Games.GameProfiles.OpensViewPortal(material) ? RayPortalPair.EntranceIndex : -1,
+                rayPortalStandalone = rayPortalIndices.ContainsKey(materialId),
                 metallic = 0.0f,
                 roughness = 0.7f,
                 translucentKind = TranslucentKind.None,
@@ -3824,6 +3834,7 @@ namespace UnityRemix
                 GCHandle extHandle;
                 GCHandle emissionExtHandle = default;
                 GCHandle remapExtHandle = default;
+                GCHandle portalExtHandle = default;
                 IntPtr roughnessPathPtr = IntPtr.Zero, metallicPathPtr = IntPtr.Zero;
                 IntPtr extPtr;
                 IntPtr emissionExtPtr = IntPtr.Zero;
@@ -4031,8 +4042,26 @@ namespace UnityRemix
                         opaqueExt.pNext = remapExtHandle.AddrOfPinnedObject();
                     }
 
+                    // A ray portal: its surfaces open it; the opaque material is their look where
+                    // it doesn't open. A registered portal (RayPortalPair's own) stands alone:
+                    // its draw places the portal over the surfaces opening it.
+                    bool standalonePortal = matData.rayPortalIndex >= 0 && matData.rayPortalStandalone;
+                    if (matData.rayPortalIndex >= 0)
+                    {
+                        var portalExt = new RemixAPI.remixapi_MaterialInfoPortalEXT
+                        {
+                            sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_PORTAL_EXT,
+                            pNext = standalonePortal ? IntPtr.Zero : opaqueExt.pNext,
+                            rayPortalIndex = (byte)matData.rayPortalIndex,
+                            rotationSpeed = 0f
+                        };
+                        portalExtHandle = GCHandle.Alloc(portalExt, GCHandleType.Pinned);
+                        if (!standalonePortal)
+                            opaqueExt.pNext = portalExtHandle.AddrOfPinnedObject();
+                    }
+
                     extHandle = GCHandle.Alloc(opaqueExt, GCHandleType.Pinned);
-                    extPtr = extHandle.AddrOfPinnedObject();
+                    extPtr = standalonePortal ? portalExtHandle.AddrOfPinnedObject() : extHandle.AddrOfPinnedObject();
                 }
 
                 try
@@ -4096,6 +4125,7 @@ namespace UnityRemix
                 {
                     if (emissionExtHandle.IsAllocated) emissionExtHandle.Free();
                     if (remapExtHandle.IsAllocated) remapExtHandle.Free();
+                    if (portalExtHandle.IsAllocated) portalExtHandle.Free();
                     if (roughnessPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(roughnessPathPtr);
                     if (metallicPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(metallicPathPtr);
                     extHandle.Free();

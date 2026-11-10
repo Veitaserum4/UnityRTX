@@ -600,6 +600,19 @@ namespace UnityRemix
             public float scaleX, scaleY, offsetX, offsetY, velocityX, velocityY;
         }
 
+        /// <summary>
+        /// pNext on MaterialInfo (alone, or after OpaqueEXT for the look where it doesn't open):
+        /// a ray portal; portal i's partner is i ^ 1. 24 bytes on x64.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialInfoPortalEXT
+        {
+            public int sType;      // REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_PORTAL_EXT
+            public IntPtr pNext;
+            public byte rayPortalIndex;
+            public float rotationSpeed;
+        }
+
         /// <summary>Optional pNext on opaque MaterialInfo: remaps its roughness and metallic maps.</summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_MaterialPbrRemapEXT

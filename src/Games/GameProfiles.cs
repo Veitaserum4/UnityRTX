@@ -105,6 +105,22 @@ namespace UnityRemix.Games
             return found;
         }
 
+        public static bool GetRayPortalView(Camera worldCamera, out RayPortalView view)
+        {
+            bool found = false;
+            var result = default(RayPortalView);
+            Run(nameof(GetRayPortalView), p => found = p.GetRayPortalView(worldCamera, out result));
+            view = result;
+            return found;
+        }
+
+        public static bool OpensViewPortal(Material material)
+        {
+            bool opens = false;
+            Run(nameof(OpensViewPortal), p => opens = p.OpensViewPortal(material));
+            return opens;
+        }
+
         public static Camera FindViewModelCamera(Camera worldCamera)
         {
             Camera camera = null;

@@ -483,8 +483,13 @@ namespace UnityRemix
         /// active state, scale-zero, distance culling, and visibility culling,
         /// and dynamically updates transforms for moving non-combined objects.
         /// </summary>
+        // The game's view portal exit region this frame (main thread; GameProfile.GetRayPortalView):
+        // geometry seen through the portal, wherever the player is. Null without one.
+        public static Games.RayPortalView? PortalExitRegion;
+
         public void UpdateVisibility(Vector3 cameraPosition, bool useDistanceCulling, float maxRenderDistance, bool useVisibilityCulling)
         {
+            var portalExit = PortalExitRegion;
             lock (instanceLock)
             {
                 if (currentInstances.Count == 0)
@@ -657,8 +662,8 @@ namespace UnityRemix
                         }
                     }
 
-                    // Distance culling using up-to-date bounds center
-                    if (useDistanceCulling)
+                    // Distance culling using up-to-date bounds center (not what a view portal shows)
+                    if (useDistanceCulling && !(portalExit.HasValue && portalExit.Value.InExitRegion(instance.BoundsCenter)))
                     {
                         float sqrDist = (instance.BoundsCenter - cameraPosition).sqrMagnitude;
                         if (sqrDist > maxDistSqr)

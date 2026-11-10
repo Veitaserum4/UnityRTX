@@ -65,6 +65,74 @@ namespace UnityRemix.Games.Ultrakill
         public override bool IsHiddenMaterial(Material material) =>
             material.name.StartsWith("Default-Material", StringComparison.Ordinal);
 
+        // Limbo's TV-screen walls (LIMBO_WALLS) show _LimboSky in screen space (times their own
+        // texture, with glitches): the LimboSkybox camera's view of a miniature scene elsewhere
+        // in the level. That camera ("fakeCam") turns like the player's, at fakeCamStart +
+        // (player - playerStart) / 16 (y not below the start's with lockMinimumHeight): the
+        // walls are a view portal into the miniature at scale 1/16. The exit region: around
+        // fakeCamStart, within its camera's far plane and nearer it than the player's start.
+        public override bool OpensViewPortal(Material material) => material.IsKeywordEnabled("LIMBO_WALLS");
+
+        private Type limboType;
+        private bool limboTypeSearched;
+        private Behaviour limbo;
+        private int limboSearchFrame = int.MinValue / 2;
+        private System.Reflection.FieldInfo limboFakeCamStart, limboPlayerStartPos, limboLockMinimumHeight;
+        private int loggedLimbo;
+
+        public override bool GetRayPortalView(Camera worldCamera, out RayPortalView view)
+        {
+            view = default;
+            if (!limboTypeSearched)
+            {
+                limboTypeSearched = true;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    try { limboType = asm.GetType("LimboSkybox"); } catch { }
+                    if (limboType != null) break;
+                }
+                if (limboType != null)
+                {
+                    const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+                    limboFakeCamStart = limboType.GetField("fakeCamStart", all);
+                    limboPlayerStartPos = limboType.GetField("playerStartPos", all);
+                    limboLockMinimumHeight = limboType.GetField("lockMinimumHeight", all);
+                }
+            }
+            if (limboType == null || limboFakeCamStart == null || limboPlayerStartPos == null || worldCamera == null)
+                return false;
+            int frame = Time.frameCount;
+            if (limbo == null && frame - limboSearchFrame >= 120)
+            {
+                limboSearchFrame = frame;
+                limbo = UnityEngine.Object.FindObjectOfType(limboType) as Behaviour;
+            }
+            if (limbo == null || !limbo.isActiveAndEnabled)
+                return false;
+            var fakeCamStart = limboFakeCamStart.GetValue(limbo) as Transform;
+            if (fakeCamStart == null)
+                return false;
+            var playerStart = (Vector3)limboPlayerStartPos.GetValue(limbo);
+            bool lockHeight = limboLockMinimumHeight == null || (bool)limboLockMinimumHeight.GetValue(limbo);
+            Vector3 offset = (worldCamera.transform.position - playerStart) / 16f;
+            if (lockHeight)
+                offset.y = Mathf.Max(offset.y, 0f);
+            Vector3 centre = fakeCamStart.position;
+            var fakeCam = limbo.GetComponent<Camera>();
+            float far = fakeCam != null ? fakeCam.farClipPlane : 1000f;
+            view.exitCamera = centre + offset;
+            view.scale = 1f / 16f;
+            view.exitRegionCenter = centre;
+            view.exitRegionRadius = Mathf.Min(far, Vector3.Distance(centre, playerStart) * 0.5f);
+            if (loggedLimbo != limbo.GetInstanceID())
+            {
+                loggedLimbo = limbo.GetInstanceID();
+                Logger.LogInfo($"[Limbo] view portal '{limbo.name}': fake start {centre}, player start {playerStart}, far {far:F0}, " +
+                               $"exit region radius {view.exitRegionRadius:F1}, lock height {lockHeight}");
+            }
+            return true;
+        }
+
         public override void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
         {
             if (!bloodStains.IsStainMaterial(material))

@@ -321,6 +321,10 @@ namespace UnityRemix
         public int CachedStaticRendererCount => cachedRenderers.Count;
         public int CachedSkinnedRendererCount => cachedSkinnedRenderers.Count;
 
+        // A game's view portal as a Remix ray portal pair (drawn by the render thread).
+        private RayPortalPair rayPortals;
+        internal RayPortalPair RayPortals => rayPortals ?? (rayPortals = new RayPortalPair(logger));
+
         public void QueuePriorityMesh(PreparedMeshData data)
         {
             if (data == null) return;
@@ -674,6 +678,9 @@ namespace UnityRemix
             // GameProfile names one, else the world camera's.
             public Vector3 viewModelPosition, viewModelForward, viewModelUp, viewModelRight;
             public float viewModelFov, viewModelNearPlane, viewModelFarPlane;
+            // The game's view portal this frame (GameProfile.GetRayPortalView; RayPortalPair).
+            public bool portalActive;
+            public Games.RayPortalView portal;
         }
         
         public struct MeshInstanceData
@@ -1426,6 +1433,10 @@ namespace UnityRemix
                 state.camera.viewModelFov = vm.fieldOfView;
                 state.camera.viewModelNearPlane = vm.nearClipPlane;
                 state.camera.viewModelFarPlane = vm.farClipPlane;
+                state.camera.portalActive = Games.GameProfiles.GetRayPortalView(mainCam, out state.camera.portal);
+                SceneMeshScanner.PortalExitRegion = state.camera.portalActive ? state.camera.portal : (Games.RayPortalView?)null;
+                if (state.camera.portalActive)
+                    RayPortals.Ensure(this, materialManager);
 
                 // Update skybox state on main thread
                 skyboxManager?.UpdateSkybox(mainCam, frameCount);

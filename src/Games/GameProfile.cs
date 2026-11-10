@@ -10,6 +10,23 @@ namespace UnityRemix.Games
     /// picks the profile whose executable is running; the generic bridge calls the hooks
     /// below through GameProfiles, so a game without a profile pays nothing.
     /// </summary>
+    /// <summary>
+    /// A view portal: surfaces that show another part of the level as seen from a camera of
+    /// the game's own, which follows the player's at a scale (ULTRAKILL's Limbo walls; a
+    /// Source-style 3D skybox seen through windows). Camera rays meeting such a surface go on
+    /// from exitCamera + scale x (point - camera), in the same direction (RayPortalPair).
+    /// The exit region's geometry is drawn wherever the player is (never distance-culled).
+    /// </summary>
+    public struct RayPortalView
+    {
+        public Vector3 exitCamera;
+        public float scale;
+        public Vector3 exitRegionCenter;
+        public float exitRegionRadius;
+
+        public bool InExitRegion(Vector3 point) => (point - exitRegionCenter).sqrMagnitude <= exitRegionRadius * exitRegionRadius;
+    }
+
     public abstract class GameProfile
     {
         public abstract string Name { get; }
@@ -54,6 +71,17 @@ namespace UnityRemix.Games
             colorMask = default;
             return false;
         }
+
+        // The game's view portal this frame (worldCamera: the player's view), when it shows one.
+        public virtual bool GetRayPortalView(Camera worldCamera, out RayPortalView view)
+        {
+            view = default;
+            return false;
+        }
+
+        // A material whose surfaces open the view portal (they keep their look where it doesn't
+        // open: at their back, for rays other than the camera's).
+        public virtual bool OpensViewPortal(Material material) => false;
 
         // The camera the game draws its view models (weapons, arms) with, when it isn't the
         // world camera; null: the world camera's projection.
