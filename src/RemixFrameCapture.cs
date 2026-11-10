@@ -2354,7 +2354,7 @@ namespace UnityRemix
                 if (anim != null && anim.cullingMode != AnimatorCullingMode.AlwaysAnimate)
                     anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
-                if (IsLayerDisabled(go.layer) || IsRendererDisabled(skinnedId))
+                if (IsLayerDisabled(go.layer) || IsRendererDisabled(skinnedId) || previewRendererIds.Contains(skinned.GetInstanceID()))
                 {
                     skipLayer++;
                     continue;
@@ -2722,47 +2722,176 @@ namespace UnityRemix
         // Screens in the level glow less than the small weapon screens: their large bright
         // panels are also lit by the room, and drawn by Unity unlit at their plain colour.
         private const float WorldScreenEmission = 0.5f;
-        private readonly HashSet<int> loggedPreviewImages = new HashSet<int>();
 
-        // Once per raw image shown on a screen: what it shows, and the cameras and models a
-        // shop window's item preview is made of (where they are relative to the image and to
-        // the player's camera), to tell how the game composites them.
-        private void LogPreviewImage(RawImage raw, Camera mainCam)
+        // Live images: a raw image showing a camera's render texture (ULTRAKILL's shop item
+        // previews: SmileRenderer, an orthographic camera on the image that draws models
+        // placed just in front of it, at their true size, over a transparent background).
+        // The models that camera sees are drawn where they are, path traced; the image quad
+        // only when the camera clears to a visible colour. They are left out of the skinned
+        // capture (previewRendererIds), which would draw them again.
+        private readonly Dictionary<int, Camera> imageCameras = new Dictionary<int, Camera>();
+        private readonly HashSet<int> previewRendererIds = new HashSet<int>();
+        private readonly List<Renderer> imageSceneRenderers = new List<Renderer>();
+        private readonly Dictionary<int, Mesh> previewBakedMeshes = new Dictionary<int, Mesh>();
+        private readonly Dictionary<int, PreviewMesh> previewStaticMeshes = new Dictionary<int, PreviewMesh>();
+        private readonly HashSet<int> loggedPreviewRenderers = new HashSet<int>();
+
+        private sealed class PreviewMesh
         {
-            var rect = raw.rectTransform;
-            var tex = raw.texture;
-            var mat = raw.materialForRendering;
-            Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
-            logger.LogInfo($"[WorldScreen] raw image '{raw.name}' under '{(rect.parent != null ? rect.parent.name : "-")}': {size.x:F3} x {size.y:F3} m at {rect.position}, " +
-                           $"texture {(tex != null ? $"'{tex.name}' ({tex.GetType().Name} {tex.width}x{tex.height})" : "none")}, " +
-                           $"material '{(mat != null ? mat.name : "-")}' shader '{(mat != null && mat.shader != null ? mat.shader.name : "-")}' queue {(mat != null ? mat.renderQueue : 0)}, uvRect {raw.uvRect}");
-            var mainT = mainCam.transform;
-            logger.LogInfo($"[WorldScreen]   player camera at {mainT.position} fwd {mainT.forward} fov {mainCam.fieldOfView:F1}");
-            // The nearest ancestor holding a camera: the preview window.
-            Transform scope = rect.parent;
-            while (scope != null && scope.GetComponentInChildren<Camera>(true) == null)
-                scope = scope.parent;
-            if (scope == null)
-                return;
-            foreach (var cam in scope.GetComponentsInChildren<Camera>(true))
+            public Vector3[] vertices, normals;
+            public Vector2[] uvs;
+            public Color32[] colors;
+            public int[][] submeshes;
+        }
+
+        private Camera FindImageCamera(RawImage image, RenderTexture texture)
+        {
+            int id = image.GetInstanceID();
+            if (imageCameras.TryGetValue(id, out var cam) && cam != null && cam.targetTexture == texture)
+                return cam;
+            cam = image.GetComponent<Camera>();
+            if (cam == null || cam.targetTexture != texture)
             {
-                var t = cam.transform;
-                var target = cam.targetTexture;
-                logger.LogInfo($"[WorldScreen]   camera '{cam.name}' in '{scope.name}': active {cam.isActiveAndEnabled}, at {t.position} (image local {rect.InverseTransformPoint(t.position)}), fwd {t.forward}, " +
-                               $"{(cam.orthographic ? $"ortho size {cam.orthographicSize:F2}" : $"fov {cam.fieldOfView:F1}")}, near {cam.nearClipPlane:F2} far {cam.farClipPlane:F1}, depth {cam.depth}, rect {cam.rect}, " +
-                               $"clear {cam.clearFlags} {cam.backgroundColor}, mask 0x{GameCameraMasks.Get(cam):X} (now 0x{cam.cullingMask:X}), " +
-                               $"target {(target != null ? $"'{target.name}' {target.width}x{target.height}" : "screen")}");
-                var comps = cam.GetComponents<Component>();
-                var names = new List<string>();
-                foreach (var c in comps) if (c != null) names.Add(c.GetType().Name);
-                logger.LogInfo($"[WorldScreen]     components: {string.Join(", ", names)}");
+                cam = null;
+                foreach (var c in Camera.allCameras)
+                    if (c != null && c.targetTexture == texture) { cam = c; break; }
             }
-            int n = 0;
-            foreach (var r in scope.GetComponentsInChildren<Renderer>(true))
+            imageCameras[id] = cam;
+            return cam;
+        }
+
+        private void CaptureImageCameraScene(FrameState state, Camera cam, int frameCount)
+        {
+            int mask = GameCameraMasks.Get(cam);
+            var camT = cam.transform;
+            var root = camT.parent != null ? camT.parent : camT;
+            imageSceneRenderers.Clear();
+            root.GetComponentsInChildren(false, imageSceneRenderers);
+            Vector3 origin = camT.position, right = camT.right, up = camT.up, fwd = camT.forward;
+            float halfH = cam.orthographic ? cam.orthographicSize : float.MaxValue;
+            float halfW = cam.orthographic ? cam.orthographicSize * cam.aspect : float.MaxValue;
+            for (int i = 0; i < imageSceneRenderers.Count; i++)
             {
-                if (n++ >= 12) break;
+                var r = imageSceneRenderers[i];
+                if (r == null || !r.enabled || ((mask >> r.gameObject.layer) & 1) == 0)
+                    continue;
+                if (!(r is MeshRenderer) && !(r is SkinnedMeshRenderer))
+                    continue;
+                // In the camera's view volume.
                 var b = r.bounds;
-                logger.LogInfo($"[WorldScreen]   model '{r.name}' layer {r.gameObject.layer} active {r.gameObject.activeInHierarchy}: bounds centre {b.center} (image local {rect.InverseTransformPoint(b.center)}), size {b.size}");
+                float ext = b.extents.magnitude;
+                Vector3 d = b.center - origin;
+                float z = Vector3.Dot(d, fwd);
+                if (z < cam.nearClipPlane - ext || z > cam.farClipPlane + ext ||
+                    Mathf.Abs(Vector3.Dot(d, right)) > halfW + ext || Mathf.Abs(Vector3.Dot(d, up)) > halfH + ext)
+                    continue;
+                previewRendererIds.Add(r.GetInstanceID());
+                CapturePreviewRenderer(state, r, frameCount);
+            }
+        }
+
+        private void CapturePreviewRenderer(FrameState state, Renderer r, int frameCount)
+        {
+            int rid = r.GetInstanceID();
+            var t = r.transform;
+            PreviewMesh data;
+            Matrix4x4 localToWorld;
+            int bakeFrame;
+            var skinned = r as SkinnedMeshRenderer;
+            if (skinned != null)
+            {
+                if (skinned.sharedMesh == null)
+                    return;
+                if (!previewBakedMeshes.TryGetValue(rid, out var baked) || baked == null)
+                {
+                    baked = new Mesh();
+                    baked.MarkDynamic();
+                    previewBakedMeshes[rid] = baked;
+                }
+                skinned.BakeMesh(baked, true);
+                data = new PreviewMesh
+                {
+                    vertices = baked.vertices,
+                    normals = baked.normals,
+                    uvs = baked.uv,
+                    colors = baked.colors32,
+                    submeshes = new int[baked.subMeshCount][]
+                };
+                for (int sm = 0; sm < data.submeshes.Length; sm++)
+                    data.submeshes[sm] = baked.GetTriangles(sm);
+                localToWorld = Matrix4x4.TRS(t.position, t.rotation, Vector3.one);
+                bakeFrame = frameCount;
+            }
+            else
+            {
+                var filter = r.GetComponent<MeshFilter>();
+                var mesh = filter != null ? filter.sharedMesh : null;
+                if (mesh == null)
+                    return;
+                int meshKey = mesh.GetInstanceID();
+                if (!previewStaticMeshes.TryGetValue(meshKey, out data))
+                {
+                    data = new PreviewMesh();
+                    if (mesh.isReadable)
+                    {
+                        data.vertices = mesh.vertices;
+                        data.normals = mesh.normals;
+                        data.uvs = mesh.uv;
+                        data.colors = mesh.colors32;
+                        data.submeshes = new int[mesh.subMeshCount][];
+                        for (int sm = 0; sm < data.submeshes.Length; sm++)
+                            data.submeshes[sm] = mesh.GetTriangles(sm);
+                    }
+                    else if (!NativeMeshReader.ReadMeshFromGPU(mesh, out data.vertices, out data.normals, out data.uvs, out data.submeshes))
+                        data.vertices = null;
+                    previewStaticMeshes[meshKey] = data;
+                }
+                localToWorld = t.localToWorldMatrix;
+                bakeFrame = (meshKey & 0x7FFFFFFF) | 1;
+            }
+            if (data.vertices == null || data.vertices.Length == 0 || data.submeshes == null)
+                return;
+            int n = data.vertices.Length;
+            Vector3[] normals = data.normals != null && data.normals.Length == n ? data.normals : null;
+            Vector2[] uvs = data.uvs != null && data.uvs.Length == n ? data.uvs : null;
+            Color32[] colors = data.colors != null && data.colors.Length == n ? data.colors : null;
+
+            var mats = r.sharedMaterials;
+            for (int sub = 0; sub < data.submeshes.Length; sub++)
+            {
+                var tris = data.submeshes[sub];
+                if (tris == null || tris.Length == 0 || mats == null || mats.Length == 0)
+                    continue;
+                var mat = mats[Mathf.Min(sub, mats.Length - 1)];
+                if (mat == null)
+                    continue;
+                int matId;
+                if (skinned != null)
+                    matId = ResolveMaterial(skinned, mat);
+                else
+                {
+                    matId = StaticGeometryDedupe.GetCanonicalMaterialId(mat);
+                    materialManager.CaptureMaterialTextures(mat, matId, renderer: r);
+                }
+                if (loggedPreviewRenderers.Add(rid))
+                    logger.LogInfo($"[WorldScreen] live image model '{r.name}' ({r.GetType().Name}): {n} verts, {data.submeshes.Length} submeshes, material '{mat.name}' shader '{(mat.shader != null ? mat.shader.name : "-")}'");
+                state.skinned.Add(new SkinnedMeshData
+                {
+                    source = DynamicSource.MeshBaked,
+                    meshId = (int)((uint)rid ^ ((uint)sub * 0x9E3779B9u)),
+                    remixMeshHash = 0x4000000000000000UL | ((ulong)(uint)rid << 8) | (uint)sub,
+                    materialId = matId,
+                    vertices = data.vertices,
+                    normals = normals,
+                    uvs = uvs,
+                    colors = colors,
+                    triangles = tris,
+                    localToWorld = localToWorld,
+                    boneTransforms = null,
+                    skinningData = null,
+                    categoryFlags = 0,
+                    bakeFrame = bakeFrame
+                });
             }
         }
 
@@ -2956,6 +3085,18 @@ namespace UnityRemix
                 culledWeaponScreens.Add(screenRenderer);
             }
 
+            if (g is RawImage liveImage && liveImage.texture is RenderTexture liveTexture)
+            {
+                var liveCam = FindImageCamera(liveImage, liveTexture);
+                if (liveCam == null)
+                    return;
+                CaptureImageCameraScene(state, liveCam, frameCount);
+                Color clear = liveCam.backgroundColor;
+                if (liveCam.clearFlags != CameraClearFlags.SolidColor || clear.a <= 0.001f)
+                    return; // transparent: only its models show
+                col = new Color(clear.r, clear.g, clear.b, col.a * clear.a);
+            }
+
             Mesh mesh = null;
             try
             {
@@ -3067,8 +3208,9 @@ namespace UnityRemix
                 return;
 
             Texture2D mainTex = g.mainTexture as Texture2D;
-            if (g is RawImage raw && loggedPreviewImages.Add(raw.GetInstanceID()))
-                LogPreviewImage(raw, mainCam);
+            // TextMeshPro reports UnityWhite as its texture; its glyphs are in its material's atlas.
+            if (_tmpTextType != null && _tmpTextType.IsInstanceOfType(g) && mat.HasProperty("_MainTex") && mat.GetTexture("_MainTex") is Texture2D atlas)
+                mainTex = atlas;
 
             Color32 c32 = col;
             int qR = (c32.r >> 3);

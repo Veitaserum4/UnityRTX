@@ -658,7 +658,7 @@ namespace UnityRemix
             bool isParticleOrTrailRenderer = renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer;
             bool autoSuppressLight = suppressLightGeneration || isParticleOrTrailRenderer ||
                 shaderName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                shaderName.IndexOf("TextMeshPro/Distance Field", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                (shaderName.IndexOf("TextMeshPro", StringComparison.OrdinalIgnoreCase) >= 0 && shaderName.IndexOf("Distance Field", StringComparison.OrdinalIgnoreCase) >= 0) ||
                 (material.name != null && (material.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
                                            material.name.IndexOf("Trail", StringComparison.OrdinalIgnoreCase) >= 0));
 
@@ -1244,7 +1244,7 @@ namespace UnityRemix
                 // constants. Intensity: the caller's (UI screens), else bright self-lit text.
                 // This replaces any emission found above (a UI caller's colour override would
                 // otherwise emit the raw atlas, its quads as squares).
-                if (shaderName.Contains("TextMeshPro/Distance Field"))
+                if (shaderName.Contains("TextMeshPro") && shaderName.Contains("Distance Field"))
                 {
                     Color faceColor = material.HasProperty("_FaceColor")
                         ? material.GetColor("_FaceColor")
