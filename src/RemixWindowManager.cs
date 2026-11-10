@@ -1195,7 +1195,7 @@ namespace UnityRemix
             EnsureRemixWindowSubclassed();
             if (setConfigVariableFunc != null)
             {
-                string backend = configNativeBackend?.Value ?? "raster";
+                string backend = configNativeBackend?.Value ?? "pathtrace";
                 bool asyncPresent = configOpenRemixAsyncPresent?.Value ?? true;
                 bool shadowEarlyOut = configOpenRemixShadowEarlyOut?.Value ?? true;
                 bool keepCompressed = configOpenRemixKeepCompressed?.Value ?? true;
@@ -1227,7 +1227,7 @@ namespace UnityRemix
                     var res = setConfigVariableFunc(key, val);
                     logger.LogInfo($"[OpenRemix Config] {key} = {val} -> {res}");
                 }
-                logger.LogInfo("openremix settings: press F12 in the game or openremix window; choose Backend > Path trace.");
+                logger.LogInfo("openremix settings: press F12 in the game or openremix window.");
             }
             return true;
         }

@@ -181,7 +181,7 @@ namespace UnityRemix
                 new ConfigDescription("Game-specific patches: Auto picks them by the game's executable name; None turns them off. Restart the game after changing this setting.",
                     new AcceptableValueList<string>(profiles.ToArray())));
 
-            configNativeBackend = Config.Bind("Native", "Backend", "raster",
+            configNativeBackend = Config.Bind("Native", "Backend", "pathtrace",
                 new ConfigDescription("openremix rendering backend. Restart the game after changing this setting.",
                     new AcceptableValueList<string>("raster", "pathtrace", "forwardplus")));
 
