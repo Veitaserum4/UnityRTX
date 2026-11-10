@@ -52,9 +52,9 @@ namespace UnityRemix
             var shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color");
             for (int index = 0; index < SlotPairs * 2; index++)
             {
-                // Black, not emissive: seen only where a portal is drawn but does not open (camera
+                // Green, not emissive (diagnostic): seen only where a portal is drawn but does not open (camera
                 // rays only: OpenRemix leaves openings out of every other ray).
-                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.black };
+                var material = new Material(shader) { name = $"RemixRayPortal{index}", color = Color.green };
                 int materialId = MaterialIdBase - index;
                 materials.SetRayPortalIndex(materialId, index);
                 materials.CaptureMaterialTextures(material, materialId);
