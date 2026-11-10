@@ -2819,7 +2819,18 @@ namespace UnityRemix
                 };
                 for (int sm = 0; sm < data.submeshes.Length; sm++)
                     data.submeshes[sm] = baked.GetTriangles(sm);
-                localToWorld = Matrix4x4.TRS(t.position, t.rotation, Vector3.one);
+                // Whether the bake holds the renderer's scale varies (Unity version, scaled
+                // parents): the scale that matches Unity's own world bounds is applied. Wrong,
+                // a preview drawn at a canvas's tiny scale shows full size, and swings around
+                // its turntable's pivot instead of turning in place.
+                Vector3 ls = t.lossyScale;
+                float uniform = (Mathf.Abs(ls.x) + Mathf.Abs(ls.y) + Mathf.Abs(ls.z)) / 3f;
+                float bakedSize = baked.bounds.size.magnitude, worldSize = r.bounds.size.magnitude;
+                bool applyScale = bakedSize > 1e-6f && worldSize > 1e-6f && uniform > 1e-6f &&
+                    Mathf.Abs(Mathf.Log(worldSize / (bakedSize * uniform))) < Mathf.Abs(Mathf.Log(worldSize / bakedSize));
+                localToWorld = Matrix4x4.TRS(t.position, t.rotation, applyScale ? ls : Vector3.one);
+                if (!loggedPreviewRenderers.Contains(rid))
+                    logger.LogInfo($"[WorldScreen] live image model '{r.name}': baked {bakedSize:F3}, world bounds {worldSize:F3}, lossy scale {ls}, scale applied {applyScale}");
                 bakeFrame = frameCount;
             }
             else
