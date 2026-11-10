@@ -1055,71 +1055,25 @@ namespace UnityRemix
             for (int i = 0; i < allStatic.Length; i++)
             {
                 var r = allStatic[i];
-                if (r != null && !lowerLodRenderers.Contains(r.GetInstanceID()) && !SceneMeshScanner.IsRendererInvisible(r) &&
-                    cachedRendererIds.Add(r.GetInstanceID()))
-                {
-                    if (RemixScrollingTextureDetector.IsScrollingRenderer(r))
-                    {
-                        scrollingRendererIds.Add(r.GetInstanceID());
-                        cachedScrollingRenderers.Add(r);
-                    }
-                    cachedRenderers.Add(r);
-                    GetOrCreateStaticInfo(r);
-                }
+                if (r != null && !lowerLodRenderers.Contains(r.GetInstanceID()))
+                    TrackMeshRenderer(r);
             }
 
             var allSkinned = UnityCompat.FindSceneComponentsIncludingInactive<SkinnedMeshRenderer>();
             for (int i = 0; i < allSkinned.Length; i++)
             {
                 var sr = allSkinned[i];
-                if (sr != null && !lowerLodRenderers.Contains(sr.GetInstanceID()) && !SceneMeshScanner.IsRendererInvisible(sr) &&
-                    cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
-                {
-                    cachedSkinnedRenderers.Add(sr);
-                    if (!sr.updateWhenOffscreen)
-                        sr.updateWhenOffscreen = true;
-                    var info = GetOrCreateSkinnedInfo(sr);
-                    if (info.animator != null && info.animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
-                        info.animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
-                }
+                if (sr != null && !lowerLodRenderers.Contains(sr.GetInstanceID()))
+                    TrackSkinnedRenderer(sr);
             }
 
             var allParticles = UnityCompat.FindSceneComponentsIncludingInactive<ParticleSystemRenderer>();
             for (int i = 0; i < allParticles.Length; i++)
-            {
-                var pr = allParticles[i];
-                if (pr != null && trackedParticleSystemIds.Add(pr.GetInstanceID()))
-                {
-                    var ps = pr.GetComponent<ParticleSystem>();
-                    if (ps != null)
-                    {
-                        var main = ps.main;
-                        if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
-                            main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
-
-                        trackedParticleSystems.Add(new TrackedParticleSystem
-                        {
-                            renderer = pr,
-                            system = ps,
-                            id = pr.GetInstanceID()
-                        });
-                    }
-                }
-            }
+                TrackParticleRenderer(allParticles[i]);
 
             var allTrails = UnityCompat.FindSceneComponentsIncludingInactive<TrailRenderer>();
             for (int i = 0; i < allTrails.Length; i++)
-            {
-                var tr = allTrails[i];
-                if (tr != null && trackedTrailRendererIds.Add(tr.GetInstanceID()))
-                {
-                    trackedTrailRenderers.Add(new TrackedTrailRenderer
-                    {
-                        renderer = tr,
-                        id = tr.GetInstanceID()
-                    });
-                }
-            }
+                TrackTrailRenderer(allTrails[i]);
 
             // Ensure all scene Animators continue ticking when cameras have cullingMask = 0
             var allAnimators = UnityEngine.Object.FindObjectsOfType<Animator>();
@@ -1154,6 +1108,91 @@ namespace UnityRemix
             }
             
             RefreshRendererSnapshots();
+        }
+
+        private void TrackMeshRenderer(MeshRenderer r)
+        {
+            if (r == null || SceneMeshScanner.IsRendererInvisible(r) || !cachedRendererIds.Add(r.GetInstanceID()))
+                return;
+            if (RemixScrollingTextureDetector.IsScrollingRenderer(r))
+            {
+                scrollingRendererIds.Add(r.GetInstanceID());
+                cachedScrollingRenderers.Add(r);
+            }
+            cachedRenderers.Add(r);
+            GetOrCreateStaticInfo(r);
+        }
+
+        private void TrackSkinnedRenderer(SkinnedMeshRenderer sr)
+        {
+            if (sr == null || SceneMeshScanner.IsRendererInvisible(sr) || !cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
+                return;
+            cachedSkinnedRenderers.Add(sr);
+            if (!sr.updateWhenOffscreen)
+                sr.updateWhenOffscreen = true;
+            var info = GetOrCreateSkinnedInfo(sr);
+            if (info.animator != null && info.animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                info.animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+        }
+
+        private void TrackParticleRenderer(ParticleSystemRenderer pr)
+        {
+            if (pr == null || !trackedParticleSystemIds.Add(pr.GetInstanceID()))
+                return;
+            var ps = pr.GetComponent<ParticleSystem>();
+            if (ps == null)
+                return;
+            var main = ps.main;
+            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+            trackedParticleSystems.Add(new TrackedParticleSystem
+            {
+                renderer = pr,
+                system = ps,
+                id = pr.GetInstanceID()
+            });
+        }
+
+        private void TrackTrailRenderer(TrailRenderer tr)
+        {
+            if (tr == null || !trackedTrailRendererIds.Add(tr.GetInstanceID()))
+                return;
+            trackedTrailRenderers.Add(new TrackedTrailRenderer
+            {
+                renderer = tr,
+                id = tr.GetInstanceID()
+            });
+        }
+
+        // Objects spawned since the last frame (a GameProfile's spawn hooks): tracked
+        // right away instead of at the next renderer cache refresh.
+        private static readonly List<Component> spawnedObjects = new List<Component>();
+
+        public static void TrackSpawnedObject(Component root)
+        {
+            if (root == null) return;
+            lock (spawnedObjects)
+                spawnedObjects.Add(root);
+        }
+
+        private void TrackSpawnedObjects()
+        {
+            Component[] spawned;
+            lock (spawnedObjects)
+            {
+                if (spawnedObjects.Count == 0) return;
+                spawned = spawnedObjects.ToArray();
+                spawnedObjects.Clear();
+            }
+
+            foreach (var root in spawned)
+            {
+                if (root == null) continue;
+                foreach (var r in root.GetComponentsInChildren<MeshRenderer>(true)) TrackMeshRenderer(r);
+                foreach (var sr in root.GetComponentsInChildren<SkinnedMeshRenderer>(true)) TrackSkinnedRenderer(sr);
+                foreach (var pr in root.GetComponentsInChildren<ParticleSystemRenderer>(true)) TrackParticleRenderer(pr);
+                foreach (var tr in root.GetComponentsInChildren<TrailRenderer>(true)) TrackTrailRenderer(tr);
+            }
         }
         
         /// <summary>
@@ -1279,7 +1318,8 @@ namespace UnityRemix
             {
                 RefreshRendererCache(frameCount);
             }
-            
+            TrackSpawnedObjects();
+
             // Get camera
             Camera mainCam = cameraHandler.GetPreferredCamera();
             Vector3 camPos = mainCam != null ? mainCam.transform.position : Vector3.zero;

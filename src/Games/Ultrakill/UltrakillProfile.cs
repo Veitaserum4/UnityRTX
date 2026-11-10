@@ -27,6 +27,7 @@ namespace UnityRemix.Games.Ultrakill
         {
             UltrakillPostProcessPatch.Apply(harmony, Logger);
             UltrakillGameState.Apply(harmony, Logger);
+            UltrakillSpawnPatch.Apply(harmony, Logger);
         }
 
         public override bool? OnRemixMenu(bool open) => UltrakillGameState.SetRemixMenuState(open, Logger);
