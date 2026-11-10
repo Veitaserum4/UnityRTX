@@ -45,6 +45,9 @@ namespace UnityRemix
         public static RemixUIOverlay Instance { get; private set; }
         private readonly HashSet<Camera> managedCameras = new HashSet<Camera>();
 
+        /// <summary>Whether UI cameras are being rendered into the overlay.</summary>
+        public static bool CapturesUICameras => Instance != null && Instance.managedCameras.Count > 0;
+
         public static bool IsManagedUICamera(Camera cam)
         {
             if (cam == null || Instance == null) return false;

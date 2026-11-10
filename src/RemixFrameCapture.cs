@@ -2699,8 +2699,28 @@ namespace UnityRemix
         /// <summary>
         /// Captures world-space UI screens attached to viewmodels or camera hierarchy (e.g. digital ammo counters, holographic weapon displays).
         /// </summary>
+        // Weapon screens drawn path traced with the view models are culled from Unity's own
+        // canvas rendering while the UI overlay captures UI cameras, which would draw them a
+        // second time, flat over the image (their canvases are on the UI layer). The capture
+        // generates their meshes itself, so culling does not affect it.
+        private readonly HashSet<CanvasRenderer> culledWeaponScreens = new HashSet<CanvasRenderer>();
+
+        private void UncullWeaponScreens()
+        {
+            foreach (var cr in culledWeaponScreens)
+                if (cr != null)
+                    cr.cull = false;
+            culledWeaponScreens.Clear();
+        }
+
         private void CaptureWeaponCanvasScreens(FrameState state, int frameCount)
         {
+            bool cullScreens = RemixUIOverlay.CapturesUICameras;
+            if (!cullScreens && culledWeaponScreens.Count > 0)
+                UncullWeaponScreens();
+            else if (culledWeaponScreens.Count > 0)
+                culledWeaponScreens.RemoveWhere(cr => cr == null);
+
             Camera mainCam = cameraHandler?.GetPreferredCamera();
             if (mainCam == null)
                 return;
@@ -2732,6 +2752,16 @@ namespace UnityRemix
                 Color col = g.color;
                 if (col.a <= 0.001f)
                     continue;
+
+                if (cullScreens)
+                {
+                    var screenRenderer = g.canvasRenderer;
+                    if (screenRenderer != null && !screenRenderer.cull)
+                    {
+                        screenRenderer.cull = true;
+                        culledWeaponScreens.Add(screenRenderer);
+                    }
+                }
 
                 Mesh mesh = null;
                 try
