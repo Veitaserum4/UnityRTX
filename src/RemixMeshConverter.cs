@@ -447,6 +447,12 @@ namespace UnityRemix
         private readonly ConcurrentDictionary<IntPtr, byte> cameraOnlyMeshes = new ConcurrentDictionary<IntPtr, byte>();
         private static IntPtr cameraOnlyExt;
 
+        public void RegisterCameraOnly(IntPtr handle, string name)
+        {
+            cameraOnlyMeshes[handle] = 0;
+            logger.LogInfo($"[CameraOnly] mesh '{name}' (0x{handle.ToInt64():X}): only camera rays meet it");
+        }
+
         // InstanceInfo pNext for a retained instance of the mesh: the shared camera-only
         // extension (immutable, its pNext null), or none.
         public IntPtr CameraOnlyExtension(IntPtr meshHandle)
@@ -920,10 +926,7 @@ namespace UnityRemix
                 // Camera rays only: a panoramic sky backdrop. (Screens opening the view portal stay
                 // in bounce rays: OpenRemix carries light through them, rayPortalLightTeleports.)
                 if (data.CameraOnly)
-                {
-                    cameraOnlyMeshes[handle] = 0;
-                    logger.LogInfo($"[CameraOnly] mesh '{data.MeshName}' (0x{handle.ToInt64():X}): only camera rays meet it ({submeshMaterials[0]?.name})");
-                }
+                    RegisterCameraOnly(handle, data.MeshName);
                 logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
 
                 return handle;

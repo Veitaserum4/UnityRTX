@@ -71,6 +71,8 @@ namespace UnityRemix
             public Vector3 ObjectUp;
             // Its object's scale (quantized as in the shared hash): projected UVs repeat per world unit.
             public Vector3 ObjectScale;
+            // Only camera rays meet its instances (a panoramic sky; RemixMeshConverter.IsCameraOnly).
+            public bool CameraOnly;
         }
 
         public struct InstanceData
@@ -1079,6 +1081,19 @@ int queued = 0;
                 if (!valid)
                     continue;
 
+                // Panoramic skies take their UVs from their vertex directions, as Unity samples them
+                // (RemixMeshConverter.MapPanoramicSkies), before the mesh is hashed.
+                bool cameraOnly = RemixMeshConverter.IsCameraOnly(surfaceMaterials);
+                if (surfaceMaterials.Exists(RemixMaterialManager.IsPanoramicSky))
+                {
+                    var indices = new List<uint[]>(surfaces.Count);
+                    foreach (var surf in surfaces)
+                        indices.Add(Array.ConvertAll(surf.Indices, i => (uint)i));
+                    RemixMeshConverter.MapPanoramicSkies(ref vertices, ref normals, ref uvs, ref colors, indices, surfaceMaterials);
+                    for (int s = 0; s < surfaces.Count; s++)
+                        surfaces[s] = new SubMeshSurface { Indices = Array.ConvertAll(indices[s], i => (int)i), MaterialId = surfaces[s].MaterialId };
+                }
+
                 // Combined static-batch vertices are already in world space.
                 Vector3 objectUp = isCombinedMesh ? Vector3.up : filter.transform.InverseTransformDirection(Vector3.up);
                 bool projected = !isCombinedMesh && AnyProjection(surfaces);
@@ -1114,6 +1129,7 @@ int queued = 0;
                         UVs = uvs,
                         Colors = colors,
                         Surfaces = surfaces.ToArray(),
+                        CameraOnly = cameraOnly,
                         LocalToWorld = isCombinedMesh ? Matrix4x4.identity : filter.transform.localToWorldMatrix,
                         Layer = filter.gameObject.layer,
                         SourceRenderer = renderer,
@@ -1442,6 +1458,8 @@ int queued = 0;
                     return IntPtr.Zero;
                 }
                 meshConverter.SetBakeable(handle, bakeable);
+                if (data.CameraOnly)
+                    meshConverter.RegisterCameraOnly(handle, $"scanned 0x{data.MeshHash:X16}");
 
                 meshHandles[data.MeshHash] = handle;
                 return handle;
