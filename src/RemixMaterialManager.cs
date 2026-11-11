@@ -299,6 +299,16 @@ namespace UnityRemix
         /// Whether a Forward+ bake can hold a surface with this material: not blended and
         /// not water/glass transmission (unsupported bake coverage).
         /// </summary>
+        // Skybox/Panoramic in latitude-longitude layout on a mesh: Unity samples it by the
+        // direction of each object-space vertex position, never the mesh's UVs.
+        public static bool IsPanoramicSky(Material material)
+        {
+            if (material == null || material.shader == null || material.shader.name != "Skybox/Panoramic")
+                return false;
+            try { return !material.HasProperty("_Mapping") || Mathf.RoundToInt(material.GetFloat("_Mapping")) == 1; }
+            catch { return false; }
+        }
+
         public bool IsBakeableMaterial(int materialId)
         {
             return materialId == 0 || !materialTextureData.TryGetValue(materialId, out var data) ||
@@ -900,6 +910,14 @@ namespace UnityRemix
             var (transKind, ior, dist, transColor, transReason) = DetectTranslucentKind(
                 material, material.name, shaderName, renderer, matData.alphaMode, matData.albedoColor, matData.roughness, matData.suppressLightGeneration);
             matData.translucentKind = transKind;
+            // A skybox shader drawn on a mesh (a sky sphere around a diorama): the sky itself,
+            // opaque and unlit (its emission below; its UVs from the vertex directions,
+            // RemixMeshConverter.IsPanoramicSky).
+            if (IsPanoramicSky(material))
+            {
+                matData.alphaMode = AlphaMode.Opaque;
+                matData.translucentKind = TranslucentKind.None;
+            }
             // A surface opening a view portal over its own look (a screen showing the view): it
             // must stay on the opaque path, where the portal extension attaches (OpenRemix allows
             // a portal over an opaque material only), so blending becomes an alpha cutout (its
@@ -1249,6 +1267,21 @@ namespace UnityRemix
                     }
                 }
                 
+                // Skybox/Panoramic on a mesh: it shows its texture unlit, times _Tint (gamma, doubled:
+                // unity_ColorSpaceDouble) and _Exposure. Black albedo: nothing lights it.
+                if (!hasEmission && IsPanoramicSky(material) && matData.albedoHandle != IntPtr.Zero)
+                {
+                    Color tint = material.HasProperty("_Tint") ? material.GetColor("_Tint") : new Color(.5f, .5f, .5f, 1f);
+                    float exposure = material.HasProperty("_Exposure") ? material.GetFloat("_Exposure") : 1f;
+                    matData.emissiveColor = new Color(tint.r * 2f, tint.g * 2f, tint.b * 2f, 1f);
+                    matData.emissiveIntensity = exposure;
+                    matData.emissiveHandle = matData.albedoHandle;
+                    matData.emissiveTextureHash = matData.albedoTextureHash;
+                    matData.albedoColor = new Color(0f, 0f, 0f, 1f);
+                    matData.autoNormalScale = 0f;
+                    hasEmission = exposure > 0f;
+                }
+
                 // Generic custom shader path: _EmissionMultiplier + _Emission texture (e.g. Dark Machine/SHDR_Base)
                 // Requires an actual texture — the multiplier alone with default _EmissionColor is not
                 // a reliable gate since many shaders default _EmissionMultiplier to 1.0.

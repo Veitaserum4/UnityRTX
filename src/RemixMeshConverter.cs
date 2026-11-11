@@ -434,6 +434,78 @@ namespace UnityRemix
             return skinnedMeshHandles.TryGetValue(meshHash, out handle);
         }
         
+        // Submeshes drawn with Skybox/Panoramic (RemixMaterialManager.IsPanoramicSky): Unity
+        // samples the panorama by each vertex's object-space direction (ToRadialCoords, turned by
+        // _Rotation about Y), so their triangles get vertices of their own with those
+        // coordinates. A triangle across the seam has its low side carried past 1 (the texture
+        // repeats); a vertex at a pole takes the mean longitude of the other two.
+        public static void MapPanoramicSkies(ref Vector3[] vertices, ref Vector3[] normals, ref Vector2[] uvs, ref Color32[] colors,
+                                              List<uint[]> submeshIndices, List<Material> submeshMaterials)
+        {
+            List<Vector3> v = null, n = null;
+            List<Vector2> t = null;
+            List<Color32> c = null;
+            for (int s = 0; s < submeshIndices.Count; s++)
+            {
+                var material = s < submeshMaterials.Count ? submeshMaterials[s] : null;
+                if (!RemixMaterialManager.IsPanoramicSky(material))
+                    continue;
+                if (v == null)
+                {
+                    v = new List<Vector3>(vertices);
+                    n = normals != null && normals.Length == vertices.Length ? new List<Vector3>(normals) : null;
+                    t = new List<Vector2>(vertices.Length);
+                    for (int i = 0; i < vertices.Length; i++)
+                        t.Add(uvs != null && i < uvs.Length ? uvs[i] : Vector2.zero);
+                    c = colors != null && colors.Length == vertices.Length ? new List<Color32>(colors) : null;
+                }
+                float angle = (material.HasProperty("_Rotation") ? material.GetFloat("_Rotation") : 0f) * Mathf.Deg2Rad;
+                float cos = Mathf.Cos(angle), sin = Mathf.Sin(angle);
+                var tris = submeshIndices[s];
+                var mapped = new uint[tris.Length];
+                var u = new float[3];
+                var lat = new float[3];
+                var pole = new bool[3];
+                for (int i = 0; i + 2 < tris.Length; i += 3)
+                {
+                    for (int k = 0; k < 3; k++)
+                    {
+                        Vector3 p = vertices[tris[i + k]];
+                        var d = new Vector3(cos * p.x - sin * p.z, p.y, sin * p.x + cos * p.z).normalized;
+                        lat[k] = Mathf.Acos(Mathf.Clamp(d.y, -1f, 1f));
+                        pole[k] = Mathf.Abs(d.y) > 0.9999f;
+                        u[k] = 0.5f - Mathf.Atan2(d.z, d.x) * (0.5f / Mathf.PI);
+                    }
+                    float lo = float.MaxValue, hi = float.MinValue;
+                    for (int k = 0; k < 3; k++)
+                        if (!pole[k]) { lo = Mathf.Min(lo, u[k]); hi = Mathf.Max(hi, u[k]); }
+                    if (hi - lo > 0.5f)
+                        for (int k = 0; k < 3; k++)
+                            if (!pole[k] && u[k] < 0.5f) u[k] += 1f;
+                    float sum = 0f; int count = 0;
+                    for (int k = 0; k < 3; k++)
+                        if (!pole[k]) { sum += u[k]; count++; }
+                    for (int k = 0; k < 3; k++)
+                    {
+                        if (pole[k] && count > 0) u[k] = sum / count;
+                        int source = (int)tris[i + k];
+                        mapped[i + k] = (uint)v.Count;
+                        v.Add(vertices[source]);
+                        n?.Add(normals[source]);
+                        c?.Add(colors[source]);
+                        t.Add(new Vector2(u[k], 1f - lat[k] / Mathf.PI));
+                    }
+                }
+                submeshIndices[s] = mapped;
+            }
+            if (v == null)
+                return;
+            vertices = v.ToArray();
+            normals = n?.ToArray();
+            uvs = t.ToArray();
+            colors = c?.ToArray();
+        }
+
         public IntPtr CreateRemixMeshFromUnity(Mesh mesh, Material material)
         {
             return CreateRemixMeshFromUnity(mesh, material != null ? new Material[] { material } : null);
@@ -510,6 +582,8 @@ namespace UnityRemix
 
             if (vertices == null || vertices.Length == 0 || submeshIndices.Count == 0)
                 return IntPtr.Zero;
+
+            MapPanoramicSkies(ref vertices, ref normals, ref uvs, ref colors, submeshIndices, submeshMaterials);
 
             int totalIndices = 0;
             foreach (var sIdx in submeshIndices) totalIndices += sIdx.Length;

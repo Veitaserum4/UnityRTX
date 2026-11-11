@@ -1749,6 +1749,8 @@ namespace UnityRemix
                         continue;
                     }
 
+                    RemixMeshConverter.MapPanoramicSkies(ref vertices, ref normals, ref uvs, ref colors, submeshIndices, submeshMaterials);
+
                     int totalIndices = 0;
                     foreach (var sIdx in submeshIndices) totalIndices += sIdx.Length;
                     ulong meshHash = RemixMeshConverter.GenerateMeshHash(mesh.name, vertices.Length, totalIndices, matSig);
