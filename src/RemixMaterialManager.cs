@@ -910,14 +910,6 @@ namespace UnityRemix
             var (transKind, ior, dist, transColor, transReason) = DetectTranslucentKind(
                 material, material.name, shaderName, renderer, matData.alphaMode, matData.albedoColor, matData.roughness, matData.suppressLightGeneration);
             matData.translucentKind = transKind;
-            // A skybox shader drawn on a mesh (a sky sphere around a diorama): the sky itself,
-            // opaque and unlit (its emission below; its UVs from the vertex directions,
-            // RemixMeshConverter.IsPanoramicSky).
-            if (IsPanoramicSky(material))
-            {
-                matData.alphaMode = AlphaMode.Opaque;
-                matData.translucentKind = TranslucentKind.None;
-            }
             // A surface opening a view portal over its own look (a screen showing the view): it
             // must stay on the opaque path, where the portal extension attaches (OpenRemix allows
             // a portal over an opaque material only), so blending becomes an alpha cutout (its
@@ -1267,8 +1259,12 @@ namespace UnityRemix
                     }
                 }
                 
-                // Skybox/Panoramic on a mesh: it shows its texture unlit, times _Tint (gamma, doubled:
-                // unity_ColorSpaceDouble) and _Exposure. Black albedo: nothing lights it.
+                // Skybox/Panoramic on a mesh (a sky sphere around a diorama; its UVs from the
+                // vertex directions, RemixMeshConverter.MapPanoramicSkies): it shows its texture
+                // unlit, times _Tint (gamma, doubled: unity_ColorSpaceDouble) and _Exposure. Black
+                // albedo: nothing lights it. It is no light either, and keeps its blending (a
+                // queue-3001 sheet): the sun and sky still reach what it surrounds, as when Unity
+                // draws it behind everything.
                 if (!hasEmission && IsPanoramicSky(material) && matData.albedoHandle != IntPtr.Zero)
                 {
                     Color tint = material.HasProperty("_Tint") ? material.GetColor("_Tint") : new Color(.5f, .5f, .5f, 1f);
@@ -1279,6 +1275,7 @@ namespace UnityRemix
                     matData.emissiveTextureHash = matData.albedoTextureHash;
                     matData.albedoColor = new Color(0f, 0f, 0f, 1f);
                     matData.autoNormalScale = 0f;
+                    matData.suppressLightGeneration = true;
                     hasEmission = exposure > 0f;
                 }
 
