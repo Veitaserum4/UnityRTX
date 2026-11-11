@@ -900,6 +900,23 @@ namespace UnityRemix
             var (transKind, ior, dist, transColor, transReason) = DetectTranslucentKind(
                 material, material.name, shaderName, renderer, matData.alphaMode, matData.albedoColor, matData.roughness, matData.suppressLightGeneration);
             matData.translucentKind = transKind;
+            // A surface opening a view portal over its own look (a screen showing the view): it
+            // must stay on the opaque path, where the portal extension attaches (OpenRemix allows
+            // a portal over an opaque material only), so blending becomes an alpha cutout (its
+            // shape kept) and translucency is dropped.
+            if (matData.rayPortalIndex >= 0 && !matData.rayPortalStandalone)
+            {
+                var capturedAlpha = matData.alphaMode;
+                var capturedTranslucent = matData.translucentKind;
+                if (matData.alphaMode == AlphaMode.Blend)
+                {
+                    matData.alphaMode = AlphaMode.Cutout;
+                    matData.alphaCutoff = 0.5f;
+                }
+                matData.translucentKind = TranslucentKind.None;
+                logger.LogInfo($"[Portal] '{material.name}' ({shaderName}) opens the view portal: captured alpha {capturedAlpha}, translucent {capturedTranslucent}; " +
+                               $"drawn {matData.alphaMode}, opaque, without emission");
+            }
             matData.refractiveIndex = ior;
             matData.transmittanceDistance = dist;
             matData.transmittanceColor = transColor;
@@ -1343,6 +1360,11 @@ namespace UnityRemix
                     }
                 }
                 
+                // A view portal's screen emits nothing of its own: where it opens the view replaces
+                // it, and its emission stayed added over the view (a white haze, its texture's dots).
+                if (matData.rayPortalIndex >= 0 && !matData.rayPortalStandalone)
+                    hasEmission = false;
+
                 // Safety net: if no path confirmed real emission, ensure emissive state is clean.
                 // Prevents stale values from a path that read properties but decided not to emit.
                 if (!hasEmission)
