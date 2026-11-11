@@ -470,7 +470,7 @@ namespace UnityRemix
         // Main thread: whether only camera rays should meet a mesh drawn with these materials.
         public static bool IsCameraOnly(List<Material> materials) =>
             materials != null && materials.Count > 0 &&
-            materials.TrueForAll(m => RemixMaterialManager.IsPanoramicSky(m) || (m != null && Games.GameProfiles.OpensViewPortal(m)));
+            materials.TrueForAll(RemixMaterialManager.IsPanoramicSky);
 
         public static void MapPanoramicSkies(ref Vector3[] vertices, ref Vector3[] normals, ref Vector2[] uvs, ref Color32[] colors,
                                               List<uint[]> submeshIndices, List<Material> submeshMaterials)
@@ -917,8 +917,8 @@ namespace UnityRemix
 
                 meshCache[meshKey] = handle;
                 SetBakeable(handle, bakeable);
-                // Camera rays only: a panoramic sky backdrop, or screens opening the view portal
-                // (Unity's lights pass them: the room they surround stays lit, as in the game).
+                // Camera rays only: a panoramic sky backdrop. (Screens opening the view portal stay
+                // in bounce rays: OpenRemix carries light through them, rayPortalLightTeleports.)
                 if (data.CameraOnly)
                 {
                     cameraOnlyMeshes[handle] = 0;

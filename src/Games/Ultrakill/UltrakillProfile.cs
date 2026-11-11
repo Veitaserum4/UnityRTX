@@ -379,6 +379,19 @@ namespace UnityRemix.Games.Ultrakill
                     Logger.LogInfo($"[Limbo] fake camera: culling mask 0x{fakeCam.cullingMask:X8}, clear {fakeCam.clearFlags}, near {fakeCam.nearClipPlane}, " +
                                    $"skybox {(sky != null && sky.material != null ? sky.material.name : "none")}, scene skybox {(RenderSettings.skybox != null ? RenderSettings.skybox.name : "none")}");
                 }
+                // Diagnostic: every renderer about 100 m on each axis (a 50 m shell like the sky
+                // sphere), whatever its material.
+                foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                {
+                    var e = r.bounds.extents;
+                    if (Mathf.Min(e.x, Mathf.Min(e.y, e.z)) < 40f || Mathf.Max(e.x, Mathf.Max(e.y, e.z)) > 60f)
+                        continue;
+                    var m = r.sharedMaterial;
+                    string mf = r.GetComponent<MeshFilter>()?.sharedMesh?.name ?? "?";
+                    Logger.LogInfo($"[Limbo] 50 m shell '{r.name}' ({r.GetType().Name}, mesh '{mf}') layer {r.gameObject.layer}, enabled {r.enabled}, " +
+                                   $"centre {r.bounds.center}, material '{m?.name}' shader '{m?.shader?.name}' queue {m?.renderQueue}, " +
+                                   $"keywords [{(m != null ? string.Join(" ", m.shaderKeywords) : "")}]");
+                }
                 // Diagnostic: the sky meshes of the diorama (where they stand against its camera).
                 foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
                 {
