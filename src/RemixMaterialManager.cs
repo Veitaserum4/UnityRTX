@@ -227,6 +227,13 @@ namespace UnityRemix
         // Auto PBR & Normal Map Generation (Experimental)
         public BepInEx.Configuration.ConfigEntry<bool> ConfigAutoPBR { get; private set; }
         public BepInEx.Configuration.ConfigEntry<bool> ConfigAutoNormalMaps { get; private set; }
+        // Lighting/IntensityMultiplier (RemixLightConverter): Unity lights reach Remix scaled by it.
+        public static BepInEx.Configuration.ConfigEntry<float> LightIntensityMultiplier;
+
+        // The Remix radiance of what Unity shows unlit at 1: a white diffuse surface lit head-on
+        // by a Unity light of intensity 1 shows 1 in Unity, and in Remix (the light's radiance its
+        // irradiance, times albedo / pi) the multiplier over pi.
+        public static float UnlitRadianceScale => (LightIntensityMultiplier != null ? LightIntensityMultiplier.Value : 1f) / Mathf.PI;
         public BepInEx.Configuration.ConfigEntry<float> ConfigAutoNormalStrength { get; private set; }
         private int autoPbrMaterialCount = 0;
         private int autoNormalMapCount = 0;
@@ -1270,7 +1277,7 @@ namespace UnityRemix
                     Color tint = material.HasProperty("_Tint") ? material.GetColor("_Tint") : new Color(.5f, .5f, .5f, 1f);
                     float exposure = material.HasProperty("_Exposure") ? material.GetFloat("_Exposure") : 1f;
                     matData.emissiveColor = new Color(tint.r * 2f, tint.g * 2f, tint.b * 2f, 1f);
-                    matData.emissiveIntensity = exposure;
+                    matData.emissiveIntensity = exposure * UnlitRadianceScale;
                     matData.emissiveHandle = matData.albedoHandle;
                     matData.emissiveTextureHash = matData.albedoTextureHash;
                     matData.albedoColor = new Color(0f, 0f, 0f, 1f);

@@ -268,6 +268,7 @@ namespace UnityRemix
             configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 1.0f,
                 new ConfigDescription("Global multiplier for all light intensities.",
                     new AcceptableValueRange<float>(0.01f, 100f)));
+            RemixMaterialManager.LightIntensityMultiplier = configLightIntensityMultiplier;
             
             // Performance Settings
             configTargetFPS = Config.Bind("Performance", "TargetFPS", 0,
