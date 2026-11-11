@@ -229,6 +229,7 @@ namespace UnityRemix
         public BepInEx.Configuration.ConfigEntry<bool> ConfigAutoNormalMaps { get; private set; }
         // Lighting/IntensityMultiplier (RemixLightConverter): Unity lights reach Remix scaled by it.
         public static BepInEx.Configuration.ConfigEntry<float> LightIntensityMultiplier;
+        public static BepInEx.Configuration.ConfigEntry<bool> EmissionInLightUnits;
 
         // The Remix radiance of what Unity shows unlit at 1: a white diffuse surface lit head-on
         // by a Unity light of intensity 1 shows 1 in Unity, and in Remix (the light's radiance its
@@ -271,6 +272,9 @@ namespace UnityRemix
 
             if (config != null)
             {
+                EmissionInLightUnits = config.Bind("Materials", "EmissionInLightUnits", true,
+                    "Scale emission into the units Unity lights reach Remix in (Lighting/IntensityMultiplier over pi): " +
+                    "an emissive surface then stands against lit ones as it does in Unity. Off: Unity's emission values as Remix radiance (about 3x brighter).");
                 ConfigAutoPBR = config.Bind("Materials", "AutoPBR", false,
                     "Infer PBR metallic and roughness from material/texture names for non-PBR materials (Experimental).");
                 ConfigAutoNormalMaps = config.Bind("Materials", "AutoNormalMaps", false,
@@ -1277,7 +1281,7 @@ namespace UnityRemix
                     Color tint = material.HasProperty("_Tint") ? material.GetColor("_Tint") : new Color(.5f, .5f, .5f, 1f);
                     float exposure = material.HasProperty("_Exposure") ? material.GetFloat("_Exposure") : 1f;
                     matData.emissiveColor = new Color(tint.r * 2f, tint.g * 2f, tint.b * 2f, 1f);
-                    matData.emissiveIntensity = exposure * UnlitRadianceScale;
+                    matData.emissiveIntensity = exposure;
                     matData.emissiveHandle = matData.albedoHandle;
                     matData.emissiveTextureHash = matData.albedoTextureHash;
                     matData.albedoColor = new Color(0f, 0f, 0f, 1f);
@@ -4134,6 +4138,9 @@ namespace UnityRemix
 
                     float emMaxCh = Mathf.Max(emR, Mathf.Max(emG, emB));
                     float emCombinedIntensity = emMaxCh > 0f ? emIntensity * emMaxCh : emIntensity;
+                    // Unity's emission is what it shows unlit; Remix radiance in the scene's light units.
+                    if (EmissionInLightUnits == null || EmissionInLightUnits.Value)
+                        emCombinedIntensity *= UnlitRadianceScale;
                     if (!IsFinite(emCombinedIntensity) || emCombinedIntensity < 0f) emCombinedIntensity = 0f;
                     
                     var materialInfo = new RemixAPI.remixapi_MaterialInfo
