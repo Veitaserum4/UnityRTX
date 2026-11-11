@@ -25,6 +25,8 @@ namespace UnityRemix
         public Color32[] Colors;
         public List<uint[]> SubmeshIndices;
         public List<Material> SubmeshMaterials;
+        // Only camera rays meet its instances (IsCameraOnly; set on the main thread).
+        public bool CameraOnly;
         public List<int> SubmeshMaterialIds;
         // World up in the mesh's space (of the object it was prepared for): which faces are "top".
         public Vector3 ObjectUp = Vector3.up;
@@ -465,6 +467,11 @@ namespace UnityRemix
             return cameraOnlyExt;
         }
 
+        // Main thread: whether only camera rays should meet a mesh drawn with these materials.
+        public static bool IsCameraOnly(List<Material> materials) =>
+            materials != null && materials.Count > 0 &&
+            materials.TrueForAll(m => RemixMaterialManager.IsPanoramicSky(m) || (m != null && Games.GameProfiles.OpensViewPortal(m)));
+
         public static void MapPanoramicSkies(ref Vector3[] vertices, ref Vector3[] normals, ref Vector2[] uvs, ref Color32[] colors,
                                               List<uint[]> submeshIndices, List<Material> submeshMaterials)
         {
@@ -628,7 +635,8 @@ namespace UnityRemix
                 UVs = uvs,
                 Colors = colors,
                 SubmeshIndices = submeshIndices,
-                SubmeshMaterials = submeshMaterials
+                SubmeshMaterials = submeshMaterials,
+                CameraOnly = IsCameraOnly(submeshMaterials)
             };
 
             return CreateRemixMeshFromPrepared(prepared);
@@ -909,8 +917,13 @@ namespace UnityRemix
 
                 meshCache[meshKey] = handle;
                 SetBakeable(handle, bakeable);
-                if (submeshMaterials != null && submeshMaterials.Count > 0 && submeshMaterials.TrueForAll(RemixMaterialManager.IsPanoramicSky))
+                // Camera rays only: a panoramic sky backdrop, or screens opening the view portal
+                // (Unity's lights pass them: the room they surround stays lit, as in the game).
+                if (data.CameraOnly)
+                {
                     cameraOnlyMeshes[handle] = 0;
+                    logger.LogInfo($"[CameraOnly] mesh '{data.MeshName}' (0x{handle.ToInt64():X}): only camera rays meet it ({submeshMaterials[0]?.name})");
+                }
                 logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
 
                 return handle;

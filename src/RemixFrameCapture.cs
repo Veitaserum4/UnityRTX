@@ -1824,6 +1824,7 @@ namespace UnityRemix
                         Colors = colors,
                         SubmeshIndices = submeshIndices,
                         SubmeshMaterials = submeshMaterials,
+                        CameraOnly = RemixMeshConverter.IsCameraOnly(submeshMaterials),
                         SubmeshMaterialIds = submeshMaterialIds,
                         ObjectUp = renderer.transform.InverseTransformDirection(Vector3.up),
                         ObjectScale = renderer.transform.lossyScale
