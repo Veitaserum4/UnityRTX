@@ -373,6 +373,23 @@ namespace UnityRemix.Games.Ultrakill
                 loggedLimbo = limbo.GetInstanceID();
                 Logger.LogInfo($"[Limbo] view portal '{limbo.name}': fake start {centre}, player start {playerStart}, far {far:F0}, " +
                                $"exit region radius {view.exitRegionRadius:F1}, lock height {lockHeight}");
+                if (fakeCam != null)
+                {
+                    var sky = fakeCam.GetComponent<Skybox>();
+                    Logger.LogInfo($"[Limbo] fake camera: culling mask 0x{fakeCam.cullingMask:X8}, clear {fakeCam.clearFlags}, near {fakeCam.nearClipPlane}, " +
+                                   $"skybox {(sky != null && sky.material != null ? sky.material.name : "none")}, scene skybox {(RenderSettings.skybox != null ? RenderSettings.skybox.name : "none")}");
+                }
+                // Diagnostic: the sky meshes of the diorama (where they stand against its camera).
+                foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                {
+                    var m = r.sharedMaterial;
+                    if (m == null || m.shader == null || !m.shader.name.StartsWith("Skybox/"))
+                        continue;
+                    var b = r.bounds;
+                    Logger.LogInfo($"[Limbo] sky mesh '{r.name}' ({m.name}, {m.shader.name}) layer {r.gameObject.layer}, enabled {r.enabled}: " +
+                                   $"bounds centre {b.center}, extents {b.extents}, camera {Vector3.Distance(b.center, centre):F1} m from its centre, " +
+                                   $"position {r.transform.position}, scale {r.transform.lossyScale}");
+                }
             }
             return true;
         }

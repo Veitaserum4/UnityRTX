@@ -439,6 +439,32 @@ namespace UnityRemix
         // _Rotation about Y), so their triangles get vertices of their own with those
         // coordinates. A triangle across the seam has its low side carried past 1 (the texture
         // repeats); a vertex at a pole takes the mean longitude of the other two.
+        // Meshes drawn wholly with Skybox/Panoramic (a sky sphere around a diorama): their
+        // instances carry remixapi_InstanceInfoCameraOnlyEXT, so the camera sees the sky while the
+        // sun and sky still reach what it surrounds (Unity draws it as a backdrop, lighting nothing).
+        private readonly ConcurrentDictionary<IntPtr, byte> cameraOnlyMeshes = new ConcurrentDictionary<IntPtr, byte>();
+        private static IntPtr cameraOnlyExt;
+
+        // InstanceInfo pNext for a retained instance of the mesh: the shared camera-only
+        // extension (immutable, its pNext null), or none.
+        public IntPtr CameraOnlyExtension(IntPtr meshHandle)
+        {
+            if (!cameraOnlyMeshes.ContainsKey(meshHandle))
+                return IntPtr.Zero;
+            if (cameraOnlyExt == IntPtr.Zero)
+            {
+                var ext = new RemixAPI.remixapi_InstanceInfoCameraOnlyEXT
+                {
+                    sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_ONLY_EXT,
+                    pNext = IntPtr.Zero
+                };
+                var p = Marshal.AllocHGlobal(Marshal.SizeOf<RemixAPI.remixapi_InstanceInfoCameraOnlyEXT>());
+                Marshal.StructureToPtr(ext, p, false);
+                cameraOnlyExt = p;
+            }
+            return cameraOnlyExt;
+        }
+
         public static void MapPanoramicSkies(ref Vector3[] vertices, ref Vector3[] normals, ref Vector2[] uvs, ref Color32[] colors,
                                               List<uint[]> submeshIndices, List<Material> submeshMaterials)
         {
@@ -883,6 +909,8 @@ namespace UnityRemix
 
                 meshCache[meshKey] = handle;
                 SetBakeable(handle, bakeable);
+                if (submeshMaterials != null && submeshMaterials.Count > 0 && submeshMaterials.TrueForAll(RemixMaterialManager.IsPanoramicSky))
+                    cameraOnlyMeshes[handle] = 0;
                 logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
 
                 return handle;
@@ -1275,10 +1303,15 @@ namespace UnityRemix
                     offsetY = uvTransform.HasValue ? uvTransform.Value.w : 0f
                 };
 
+                var cameraOnly = new RemixAPI.remixapi_InstanceInfoCameraOnlyEXT
+                {
+                    sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_ONLY_EXT,
+                    pNext = uvTransform.HasValue ? (IntPtr)(&texcoordExt) : (IntPtr)(&objectPickingExt)
+                };
                 var instanceInfo = new RemixAPI.remixapi_InstanceInfo
                 {
                     sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
-                    pNext = uvTransform.HasValue ? (IntPtr)(&texcoordExt) : (IntPtr)(&objectPickingExt),
+                    pNext = cameraOnlyMeshes.ContainsKey(meshHandle) ? (IntPtr)(&cameraOnly) : cameraOnly.pNext,
                     categoryFlags = categoryFlags,
                     mesh = meshHandle,
                     transform = transform,

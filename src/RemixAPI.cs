@@ -613,6 +613,19 @@ namespace UnityRemix
             public float rotationSpeed;
         }
 
+        /// <summary>
+        /// pNext on InstanceInfo (OpenRemix remix_native_ext.h): only camera rays meet the instance
+        /// (and theirs through portals); shadow, light, bounce and reflection rays pass it.
+        /// </summary>
+        public const int REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_ONLY_EXT = 0x7fff1077;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_InstanceInfoCameraOnlyEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+        }
+
         /// <summary>Optional pNext on opaque MaterialInfo: remaps its roughness and metallic maps.</summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_MaterialPbrRemapEXT
