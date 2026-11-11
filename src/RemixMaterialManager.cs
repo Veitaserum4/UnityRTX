@@ -181,6 +181,7 @@ namespace UnityRemix
             public Color emissiveColor;    // HDR emission color (can exceed 1.0)
             public float emissiveIntensity;
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
+            public bool emissionAsShown;  // a backdrop (panoramic sky): its emission is what Unity shows, not scaled to light units
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
             public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
@@ -1287,6 +1288,7 @@ namespace UnityRemix
                     matData.albedoColor = new Color(0f, 0f, 0f, 1f);
                     matData.autoNormalScale = 0f;
                     matData.suppressLightGeneration = true;
+                    matData.emissionAsShown = true;
                     hasEmission = exposure > 0f;
                 }
 
@@ -4139,7 +4141,9 @@ namespace UnityRemix
                     float emMaxCh = Mathf.Max(emR, Mathf.Max(emG, emB));
                     float emCombinedIntensity = emMaxCh > 0f ? emIntensity * emMaxCh : emIntensity;
                     // Unity's emission is what it shows unlit; Remix radiance in the scene's light units.
-                    if (EmissionInLightUnits == null || EmissionInLightUnits.Value)
+                    // A backdrop (a panoramic sky) keeps the value Unity shows: it lights nothing, and the
+                    // game shows it as drawn whatever the scene's light.
+                    if ((EmissionInLightUnits == null || EmissionInLightUnits.Value) && !matData.emissionAsShown)
                         emCombinedIntensity *= UnlitRadianceScale;
                     if (!IsFinite(emCombinedIntensity) || emCombinedIntensity < 0f) emCombinedIntensity = 0f;
                     
