@@ -470,6 +470,17 @@ namespace UnityRemix.Games.Ultrakill
 
         public override void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
         {
+            // Limbo's virtual trees' leaves (M_VirtualTree): ULTRAKILL/Master's TRANSPARENCY at
+            // _Opacity 0.81, no depth writes. Blended, they are missing from the runtime's view
+            // depth, so in front of a TV wall the replayed wall (ShaderPassThrough) takes them for
+            // what it shows and shifts their colours; opaque, they occlude the wall as in the game,
+            // where they draw after it. Their texture has no alpha.
+            if (material.name.StartsWith("M_VirtualTree", StringComparison.Ordinal))
+            {
+                alphaMode = RemixMaterialManager.AlphaMode.Opaque;
+                albedoColor.a = 1f;
+                return;
+            }
             if (!bloodStains.IsStainMaterial(material))
                 return;
             alphaMode = RemixMaterialManager.AlphaMode.Blend;
