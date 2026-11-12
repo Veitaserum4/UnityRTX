@@ -931,6 +931,8 @@ namespace UnityRemix
         private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
         // The player's body (GameProfile.IsPlayerBody, asked once per renderer): reflection-only.
         private readonly HashSet<int> playerBodySkinnedIds = new HashSet<int>();
+        // Debug toggles (F3): leave out the player's body, or the view-model skinned meshes.
+        public static bool DebugHidePlayerBody, DebugHideViewModelSkinned, DebugHideWeaponScreens, DebugHideScanner;
         private readonly Dictionary<int, bool> playerBodyRenderers = new Dictionary<int, bool>();
         // Skinned id (CachedSkinnedRendererInfo.hierarchyHash) -> the renderer holding it; kept
         // across renderer cache refreshes so twins never swap ids, cleared on scene load.
@@ -1602,6 +1604,8 @@ namespace UnityRemix
                 bool playerBody = IsPlayerBodyRenderer(renderer);
                 if (!playerBody && IsLayerDisabled(layer))
                     continue;
+                if (previewRendererIds.Contains(info.rendererId))
+                    continue; // a live image's model (CaptureImageCameraScene)
 
                 int rendererInstanceId = info.rendererId;
                 if (IsRendererDisabled(rendererInstanceId))
@@ -1744,6 +1748,8 @@ namespace UnityRemix
                 }
                 if (playerBody)
                     categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY;
+                if (playerBody && DebugHidePlayerBody)
+                    continue;
                 
                 // Queue mesh for creation if not cached, not already queued, and not previously failed
                 bool needsQueue;
@@ -2761,6 +2767,9 @@ namespace UnityRemix
                 if (validSkinnedIds.Contains(entry.meshId))
                 {
                     var submitted = entry;
+                    if ((DebugHidePlayerBody && playerBodySkinnedIds.Contains(entry.meshId)) ||
+                        (DebugHideViewModelSkinned && viewModelSkinnedIds.Contains(entry.meshId)))
+                        continue;
                     if (viewModelSkinnedIds.Contains(entry.meshId))
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
                     if (playerBodySkinnedIds.Contains(entry.meshId))
@@ -2905,7 +2914,8 @@ namespace UnityRemix
             return cam;
         }
 
-        private void CaptureImageCameraScene(FrameState state, Camera cam, int frameCount)
+        // draw false: only marks the models (previewRendererIds) so no other capture draws them.
+        private void CaptureImageCameraScene(FrameState state, Camera cam, int frameCount, bool draw = true)
         {
             int mask = GameCameraMasks.Get(cam);
             var camT = cam.transform;
@@ -2931,7 +2941,8 @@ namespace UnityRemix
                     Mathf.Abs(Vector3.Dot(d, right)) > halfW + ext || Mathf.Abs(Vector3.Dot(d, up)) > halfH + ext)
                     continue;
                 previewRendererIds.Add(r.GetInstanceID());
-                CapturePreviewRenderer(state, r, frameCount);
+                if (draw)
+                    CapturePreviewRenderer(state, r, frameCount);
             }
         }
 
@@ -3248,7 +3259,11 @@ namespace UnityRemix
                 var liveCam = FindImageCamera(liveImage, liveTexture);
                 if (liveCam == null)
                     return;
-                CaptureImageCameraScene(state, liveCam, frameCount);
+                // A shop preview's models sit just in front of its image, at their true size:
+                // drawn where they are. A held weapon's display (ULTRAKILL's shotgun charge,
+                // the jackhammer's gauge) films models placed elsewhere near the gun: drawn
+                // where they are, they float in the view, so only the image's quad is drawn.
+                CaptureImageCameraScene(state, liveCam, frameCount, draw: !onViewModel);
                 Color clear = liveCam.backgroundColor;
                 if (liveCam.clearFlags != CameraClearFlags.SolidColor || clear.a <= 0.001f)
                     return; // transparent: only its models show
@@ -3413,6 +3428,8 @@ namespace UnityRemix
                                $"texture {(shownTex != null ? $"'{shownTex.name}' ({shownTex.GetType().Name})" : "none")}");
             }
 
+            if (onViewModel && DebugHideWeaponScreens)
+                return;
             state.skinned.Add(new SkinnedMeshData
             {
                 source = DynamicSource.WorldUI,

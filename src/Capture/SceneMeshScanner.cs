@@ -481,7 +481,7 @@ namespace UnityRemix
             DrainStreamingBatch();
 
             var snapshot = Volatile.Read(ref visibleSnapshot);
-            if (snapshot != null && snapshot.Count > 0)
+            if (snapshot != null && snapshot.Count > 0 && !RemixFrameCapture.DebugHideScanner)
             {
                 count = snapshot.Count;
                 return snapshot.Buffer;
