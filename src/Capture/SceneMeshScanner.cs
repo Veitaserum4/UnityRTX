@@ -156,6 +156,8 @@ namespace UnityRemix
 
         /// <summary>Layers only the game's view-model camera draws (set by RemixFrameCapture each frame).</summary>
         public static int ViewModelLayers;
+        /// <summary>The game camera: what is under it is a view model (set by RemixFrameCapture each frame).</summary>
+        public static Transform ViewModelRoot;
 
         // Per frame: also the layers no game camera draws and the user's disabled layers,
         // which can change while the instance stays scanned.
@@ -588,6 +590,17 @@ namespace UnityRemix
                         {
                             instance.Flags &= ~(InstanceFlags.WasInactive | InstanceFlags.AncestorDisabled);
                             currentInstances[i] = instance;
+                        }
+
+                        // 5b. A moving object now held by the camera or on a view-model layer (an
+                        // item picked up, a weapon's part): the frame capture draws it as a view
+                        // model; this scanned copy would follow it in the world, a second one.
+                        if ((instance.Flags & InstanceFlags.HasMoved) != 0 &&
+                            ((ViewModelLayers & (1 << go.layer)) != 0 ||
+                             (ViewModelRoot != null && refObj.Transform.IsChildOf(ViewModelRoot))))
+                        {
+                            culledLayer++;
+                            continue;
                         }
 
                         // 6. Visibility culling (only if enabled in config)

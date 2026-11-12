@@ -375,6 +375,7 @@ namespace UnityRemix
                 ? GameCameraMasks.Get(viewModelCam) & ~GameCameraMasks.Get(mainCam)
                 : 0;
             SceneMeshScanner.ViewModelLayers = viewModelLayers;
+            SceneMeshScanner.ViewModelRoot = mainCam != null ? mainCam.transform : null;
             if (viewModelLayers == loggedViewModelLayers)
                 return;
             loggedViewModelLayers = viewModelLayers;
