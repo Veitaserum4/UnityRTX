@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
+# Builds UnityRTX (Linux, for games run through Proton) and, with --deploy,
+# installs it into the game:
+#
+#   <game>/BepInEx/plugins/UnityRTX/
+#     UnityRemix.dll, UnityRTXHostPass.dll   the plugin and its D3D11 capture
+#     openremix/                             OpenRemix's runtime (package-runtime.py's bundle)
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd -- "$script_dir/.." && pwd)"
+src="$root/src"
 unity_path="$HOME/.local/share/Steam/steamapps/common/ULTRAKILL"
-openremix_path="$script_dir/../../openremix"
+openremix_path="$root/../openremix"
+openremix_build="_work/build/windows-cross"
 deploy=false
 plugin_only=false
 
 usage() {
     cat <<EOF
-Usage: $(basename -- "$0") [--unity-path PATH] [--openremix-path PATH] [--deploy [--plugin-only]]
+Usage: $(basename -- "$0") [--unity-path PATH] [--openremix-path PATH] [--openremix-build DIR] [--deploy [--plugin-only]]
 
-Copy game references and build the Unity RTX Remix plugin in Release mode.
+Copy the game's references and build the UnityRTX plugin in Release mode.
 
-  --unity-path PATH      Unity game directory (default: $unity_path)
-  --openremix-path PATH  OpenRemix checkout (default: ../openremix beside UnityRTX)
-  --deploy              Deploy the plugin and existing OpenRemix Windows binaries
-  --plugin-only         With --deploy, update only the plugin
-  -h, --help            Show this help
+  --unity-path PATH       Unity game directory (default: $unity_path)
+  --openremix-path PATH   OpenRemix checkout (default: ../openremix beside UnityRTX)
+  --openremix-build DIR   Its Windows build, relative to the checkout (default: $openremix_build)
+  --deploy                Install the plugin and OpenRemix's packaged runtime
+  --plugin-only           With --deploy, install only the plugin
+  -h, --help              Show this help
 
 Build OpenRemix first with scripts/linux/build-windows-remix.py in its checkout.
-Changed destination files are backed up under BepInEx/UnityRTX-backups/.
+Replaced files are backed up under BepInEx/UnityRTX-backups/.
 EOF
 }
 
@@ -33,29 +43,17 @@ while (($#)); do
     case "$1" in
         --unity-path)
             [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "--unity-path requires a directory."
-            unity_path="$2"
-            shift 2
-            ;;
-        --deploy)
-            deploy=true
-            shift
-            ;;
+            unity_path="$2"; shift 2 ;;
         --openremix-path)
             [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "--openremix-path requires a directory."
-            openremix_path="$2"
-            shift 2
-            ;;
-        --plugin-only)
-            plugin_only=true
-            shift
-            ;;
-        -h|--help)
-            usage
-            exit 0
-            ;;
-        *)
-            fail "Unknown argument: $1. Use --help for usage."
-            ;;
+            openremix_path="$2"; shift 2 ;;
+        --openremix-build)
+            [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || fail "--openremix-build requires a directory."
+            openremix_build="$2"; shift 2 ;;
+        --deploy) deploy=true; shift ;;
+        --plugin-only) plugin_only=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) fail "Unknown argument: $1. Use --help for usage." ;;
     esac
 done
 
@@ -66,67 +64,35 @@ command -v dotnet >/dev/null 2>&1 || fail "Install the .NET SDK first (on Arch: 
 [[ -d "$unity_path" ]] || fail "Unity game directory not found: $unity_path. Set --unity-path PATH."
 unity_path="$(cd -- "$unity_path" && pwd)"
 
-runtime_sources=()
-runtime_targets=()
-if [[ "$deploy" == true && "$plugin_only" == false ]]; then
-    [[ -d "$openremix_path" ]] || fail "OpenRemix checkout not found: $openremix_path. Set --openremix-path PATH, or use --deploy --plugin-only."
-    openremix_path="$(cd -- "$openremix_path" && pwd)"
-    runtime_sources+=("$openremix_path/_work/build/windows-cross/src/native/remix.dll")
-    runtime_targets+=("d3d9.dll")
-    for name in SDL3.dll libwinpthread-1.dll libgcc_s_seh-1.dll libstdc++-6.dll; do
-        runtime_sources+=("$openremix_path/_work/deps/windows/prefix/bin/$name")
-        runtime_targets+=("$name")
-    done
-    missing=false
-    for source in "${runtime_sources[@]}"; do
-        if [[ ! -f "$source" ]]; then
-            printf 'Missing OpenRemix binary: %s\n' "$source" >&2
-            missing=true
-        fi
-    done
-    [[ "$missing" == false ]] || fail "Build OpenRemix with scripts/linux/build-windows-remix.py first. No game files were deployed."
-    printf 'Using OpenRemix Windows build: %s\n' "$openremix_path"
-fi
-
 managed_dir=""
 for candidate in "$unity_path"/*_Data/Managed; do
     [[ -d "$candidate" ]] || continue
-    [[ -z "$managed_dir" ]] || fail "Multiple *_Data/Managed directories found in $unity_path. Use a game directory containing only one."
+    [[ -z "$managed_dir" ]] || fail "Multiple *_Data/Managed directories found in $unity_path."
     managed_dir="$candidate"
 done
 [[ -n "$managed_dir" ]] || fail "No *_Data/Managed directory found in $unity_path. A Unity Mono game is required."
-
 bepinex_core="$unity_path/BepInEx/core"
 [[ -d "$bepinex_core" ]] || fail "BepInEx/core not found in $unity_path. Install BepInEx 5.x in the game first."
 
-# Keep these in sync with the references in UltrakillRemix.csproj.
-references=(
-    "$bepinex_core/BepInEx.dll"
-    "$bepinex_core/0Harmony.dll"
-    "$managed_dir/UnityEngine.dll"
-    "$managed_dir/UnityEngine.CoreModule.dll"
-    "$managed_dir/UnityEngine.InputLegacyModule.dll"
-    "$managed_dir/UnityEngine.UIModule.dll"
-    "$managed_dir/UnityEngine.UI.dll"
-)
-
-# Validate everything before replacing any existing development references.
-missing=false
-for reference in "${references[@]}"; do
-    if [[ ! -f "$reference" ]]; then
-        printf 'Missing reference: %s\n' "$reference" >&2
-        missing=true
+# The project's references (src/UnityRTX.csproj); modules a game lacks are skipped.
+mkdir -p -- "$src/lib"
+for reference in "$bepinex_core/BepInEx.dll" "$bepinex_core/0Harmony.dll"; do
+    [[ -f "$reference" ]] || fail "Missing reference: $reference"
+    cp -- "$reference" "$src/lib/"
+done
+for module in UnityEngine UnityEngine.CoreModule UnityEngine.UIModule UnityEngine.UI \
+              UnityEngine.AnimationModule UnityEngine.ParticleSystemModule UnityEngine.TerrainModule; do
+    if [[ -f "$managed_dir/$module.dll" ]]; then
+        cp -- "$managed_dir/$module.dll" "$src/lib/"
+    else
+        printf 'Reference not in this game: %s\n' "$module.dll" >&2
     fi
 done
-[[ "$missing" == false ]] || fail "Required game assemblies are missing. Check the Unity game and BepInEx installation."
-
 printf 'Using Unity game: %s\n' "$unity_path"
-mkdir -p -- "$script_dir/lib"
-cp -- "${references[@]}" "$script_dir/lib/"
 
-git_hash="$(git -C "$script_dir" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
-cat > "$script_dir/BuildInfo.cs" <<EOF
-// Auto-generated file - do not edit manually
+git_hash="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+cat > "$src/BuildInfo.cs" <<EOF
+// Auto-generated by scripts/build.sh - do not edit
 namespace UnityRemix
 {
     public static class BuildInfo
@@ -136,50 +102,53 @@ namespace UnityRemix
 }
 EOF
 
-# Resolve project files relative to this script, regardless of the caller's cwd.
-cd -- "$script_dir"
-dotnet build UltrakillRemix.csproj --configuration Release
+dotnet build "$src/UnityRTX.csproj" --configuration Release
 
-dll_source="$script_dir/bin/Release/netstandard2.1/UnityRemix.dll"
-printf '\nPlugin built at: %s\n' "$dll_source"
+framework=netstandard2.1
+[[ -f "$managed_dir/netstandard.dll" ]] || framework=net472
+plugin_dir="$src/bin/Release/$framework"
+printf '\nPlugin built at: %s/UnityRemix.dll\n' "$plugin_dir"
+[[ "$deploy" == true ]] || exit 0
 
-if [[ "$deploy" == true ]]; then
-    sources=("$dll_source" "${runtime_sources[@]}")
-    targets=("BepInEx/plugins/UnityRemix.dll" "${runtime_targets[@]}")
-    staging_dir="$(mktemp -d "$unity_path/.unityrtx-deploy.XXXXXX")"
-    trap 'rm -rf -- "$staging_dir"' EXIT
-    backup_dir=""
-    changed_targets=()
-
-    # Stage the complete update and preserve existing files before replacing any.
-    for i in "${!sources[@]}"; do
-        relative="${targets[$i]}"
-        destination="$unity_path/$relative"
-        if cmp -s -- "${sources[$i]}" "$destination"; then
-            printf 'Already up to date: %s\n' "$destination"
-            continue
-        fi
-        [[ ! -d "$destination" ]] || fail "Deployment destination is a directory: $destination"
-        mkdir -p -- "$(dirname -- "$staging_dir/$relative")" "$(dirname -- "$destination")"
-        cp -p -- "${sources[$i]}" "$staging_dir/$relative"
-        if [[ -e "$destination" ]]; then
-            if [[ -z "$backup_dir" ]]; then
-                mkdir -p -- "$unity_path/BepInEx/UnityRTX-backups"
-                backup_dir="$(mktemp -d "$unity_path/BepInEx/UnityRTX-backups/$(date -u +%Y%m%d-%H%M%S).XXXXXX")"
-                printf 'Previous files backed up to: %s\n' "$backup_dir"
-            fi
-            mkdir -p -- "$(dirname -- "$backup_dir/$relative")"
-            cp -p -- "$destination" "$backup_dir/$relative"
-        fi
-        changed_targets+=("$relative")
-    done
-
-    # Rename staged DLLs instead of truncating files that a running game may use.
-    for relative in "${changed_targets[@]}"; do
-        mv -fT -- "$staging_dir/$relative" "$unity_path/$relative"
-        printf 'Deployed: %s\n' "$unity_path/$relative"
-    done
-    if ((${#changed_targets[@]})); then
-        printf 'Restart the game to load the deployed binaries.\n'
-    fi
+# Everything to install, staged as it will be laid out under the plugin folder.
+staging_dir="$(mktemp -d)"
+trap 'rm -rf -- "$staging_dir"' EXIT
+cp -p -- "$plugin_dir/UnityRemix.dll" "$staging_dir/"
+[[ ! -f "$root/native/_build/hostpass11/UnityRTXHostPass.dll" ]] ||
+    cp -p -- "$root/native/_build/hostpass11/UnityRTXHostPass.dll" "$staging_dir/"
+if [[ "$plugin_only" == false ]]; then
+    [[ -d "$openremix_path" ]] || fail "OpenRemix checkout not found: $openremix_path. Set --openremix-path PATH, or use --deploy --plugin-only."
+    openremix_path="$(cd -- "$openremix_path" && pwd)"
+    python3 "$openremix_path/scripts/windows/package-runtime.py" \
+        --build "$openremix_path/$openremix_build" \
+        --sdl "$openremix_path/_work/deps/windows/prefix/bin/SDL3.dll" \
+        --output "$staging_dir/openremix" ||
+        fail "Packaging OpenRemix's runtime failed. Build it with scripts/linux/build-windows-remix.py first. No game files were deployed."
 fi
+
+destination_root="$unity_path/BepInEx/plugins/UnityRTX"
+backup_dir=""
+changed=0
+while IFS= read -r -d '' staged; do
+    relative="${staged#"$staging_dir"/}"
+    destination="$destination_root/$relative"
+    if cmp -s -- "$staged" "$destination"; then
+        continue
+    fi
+    mkdir -p -- "$(dirname -- "$destination")"
+    if [[ -e "$destination" ]]; then
+        if [[ -z "$backup_dir" ]]; then
+            mkdir -p -- "$unity_path/BepInEx/UnityRTX-backups"
+            backup_dir="$(mktemp -d "$unity_path/BepInEx/UnityRTX-backups/$(date -u +%Y%m%d-%H%M%S).XXXXXX")"
+            printf 'Previous files backed up to: %s\n' "$backup_dir"
+        fi
+        mkdir -p -- "$(dirname -- "$backup_dir/$relative")"
+        cp -p -- "$destination" "$backup_dir/$relative"
+    fi
+    # Rename into place rather than truncate a DLL a running game may hold.
+    cp -p -- "$staged" "$destination.unityrtx-new"
+    mv -fT -- "$destination.unityrtx-new" "$destination"
+    changed=$((changed + 1))
+done < <(find "$staging_dir" -type f -print0)
+printf 'Deployed %d changed files to %s\n' "$changed" "$destination_root"
+((changed == 0)) || printf 'Restart the game to load the deployed binaries.\n'

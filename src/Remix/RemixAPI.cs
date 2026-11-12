@@ -1324,55 +1324,24 @@ namespace UnityRemix
             return remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS;
         }
 
+        private const uint LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008;
+
+        /// <summary>
+        /// Loads remix.dll from its own directory, which holds its dependencies (SDL3, USD,
+        /// oneTBB): its static imports resolve there (LOAD_WITH_ALTERED_SEARCH_PATH), and the
+        /// directory stays in the process's DLL search path for what remix.dll and USD's plugins
+        /// load by name later.
+        /// </summary>
         private static IntPtr LoadRemixLibrary(string dllPath)
         {
-            IntPtr hModule = LoadLibraryW(dllPath);
-            if (HasInitializeLibraryExport(hModule))
-            {
-                return hModule;
-            }
-
-            hModule = LoadLibraryExW(
-                dllPath,
-                IntPtr.Zero,
-                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            if (HasInitializeLibraryExport(hModule))
-            {
-                return hModule;
-            }
-
             string fullPath = GetAbsolutePath(dllPath);
             if (fullPath == null)
-            {
                 return IntPtr.Zero;
-            }
-
-            string parentDir = Path.GetDirectoryName(fullPath);
-            if (string.IsNullOrEmpty(parentDir))
-            {
-                return IntPtr.Zero;
-            }
-
-            string previousDllDirectory = GetCurrentDllDirectory();
-            if (!SetDllDirectoryW(parentDir))
-            {
-                return IntPtr.Zero;
-            }
-
-            try
-            {
-                hModule = LoadLibraryW(fullPath);
-                if (HasInitializeLibraryExport(hModule))
-                {
-                    return hModule;
-                }
-            }
-            finally
-            {
-                SetDllDirectoryW(previousDllDirectory);
-            }
-
-            return IntPtr.Zero;
+            string directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directory))
+                SetDllDirectoryW(directory);
+            IntPtr hModule = LoadLibraryExW(fullPath, IntPtr.Zero, LOAD_WITH_ALTERED_SEARCH_PATH);
+            return HasInitializeLibraryExport(hModule) ? hModule : IntPtr.Zero;
         }
 
         private static bool HasInitializeLibraryExport(IntPtr hModule)

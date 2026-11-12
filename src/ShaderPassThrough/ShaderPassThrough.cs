@@ -23,6 +23,7 @@ namespace UnityRemix
         private const string Dll = "UnityRTXHostPass";
         private const int BeginEvent = 0x55520000, EndEvent = 0x5552ffff;
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr LoadLibraryW(string path);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Install(IntPtr device);
         [DllImport(Dll)] private static extern IntPtr UnityRTXHostPass_RenderEvent();
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Report(StringBuilder buffer, int bytes);
@@ -62,6 +63,13 @@ namespace UnityRemix
             logger = log;
             if (installed || SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
                 return;
+            // Loaded by path (the plugin folder's): the P/Invokes then bind to it by name.
+            string library = InstallLayout.NativeLibrary(Dll + ".dll");
+            if (library == null || LoadLibraryW(library) == IntPtr.Zero)
+            {
+                log.LogInfo($"[ShaderPassThrough] {Dll}.dll not found in {InstallLayout.PluginDirectory}: shader pass-through off");
+                return;
+            }
             try
             {
                 // Any texture's native pointer is an ID3D11Resource: ID3D11DeviceChild::GetDevice (slot 3).

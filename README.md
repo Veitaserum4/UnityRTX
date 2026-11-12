@@ -1,141 +1,113 @@
 # UnityRTX
-A BepInEx plugin that brings NVIDIA RTX Remix path tracing to most modern Unity games.
 
-| Supported Features |   |
-|--------------------|---|
-| Skinned meshes     |✅|
-| Remix Replacements |✅|
-| Basic textures     |✅|
-| Point and spot lights (that are not baked) |✅|
-| Directional lights |✅|
-| Particle systems |✅|
-| GPU-Instanced / Statically Batched Geometry |✅|
-| Hardware Skinning |✅|
+A BepInEx plugin that path-traces Unity games with [OpenRemix](https://github.com/Veitaserum4/OpenRemix-J).
+It reads each frame's scene from Unity (meshes, skinned meshes, particles, materials, lights, sky,
+terrain, water, fog) and submits it to OpenRemix, which renders it in place of the game's own
+cameras.
+
+## Features
+
+- Static, skinned, GPU-instanced and statically batched geometry; particle systems and trails
+- Materials and textures, including scrolling UVs and layered stylized shaders
+- Point, spot and directional lights; procedural and panoramic skies; fog
+- Ray portals (a game's portals, and screens that show another view)
+- Shader pass-through: a game's own D3D11 shaders replayed over the path-traced frame (screen
+  effects such as a TV wall's distortion), the way SourcePT does for Source
+- Game profiles for game-specific behaviour (`src/Games/<Game>/`, picked by executable name)
 
 ## Requirements
 
-- BepInEx 5.x
-- A Unity 2019+ game that uses MonoBleedingEdge
-<img width="600" alt="image" src="https://github.com/user-attachments/assets/421d12cb-e19d-40bb-89ec-69da1370e653" />
-
+- Windows (or Proton), a Vulkan ray-tracing GPU
+- A Unity 2019+ game on Mono (not IL2CPP), D3D11
+- [BepInEx 5](https://github.com/BepInEx/BepInEx/releases)
+- An OpenRemix Windows runtime
 
 ## Installation
-1. Download the latest [release](https://github.com/sambow23/UnityRTX/releases/latest)
-2. Extract to the root of your Unity game
 
-OR
+Install BepInEx 5 in the game, then put UnityRTX in its plugin folder:
 
-1. Install BepInEx in your Unity game
-2. Place all dlls inside the `.trex` folder of the remix archive in the game's root folder (next to the .exe)
-3. Copy `UnityRemix.dll` to `BepInEx/plugins/`
-4. Launch the game
+```
+<game>/
+  <game>.exe, winhttp.dll, doorstop_config.ini     BepInEx's loader
+  BepInEx/plugins/UnityRTX/
+    UnityRemix.dll                                 the plugin
+    UnityRTXHostPass.dll                           shader pass-through's D3D11 capture
+    openremix/                                     OpenRemix's runtime: remix.dll, SDL3.dll,
+                                                   usd_*.dll, usd/, plugin/, dlss/, ...
+```
 
-## Configuration
+`openremix/` is the folder OpenRemix's `scripts/windows/package-runtime.py` produces. OpenRemix
+keeps its own data in the game folder: `openremix/` (profiles, caches) and `rtx-remix/` (captures,
+mods). A `remix.dll` in the game folder itself (the previous layout) is still used when the plugin
+folder has none.
 
-Edit `BepInEx/config/com.Unity.remix.cfg`:
+Shader pass-through needs Unity's graphics jobs off; for games whose profile uses it, UnityRTX
+turns them off in `<game>_Data/boot.config` (backed up as `boot.config.unityrtx-backup`) and it
+takes effect from the next launch.
+
+Press **F12** (or Alt+X) in game for OpenRemix's settings, including the plugin's own tab.
+Plugin settings are also in `BepInEx/config/com.Unity.remix.cfg`.
+
+## Repository layout
+
+```
+src/                     the plugin (C#, src/UnityRTX.csproj)
+  Core/                  plugin entry point, render thread, install layout
+  Remix/                 OpenRemix API bindings, ImGui, native log forwarding
+  Capture/               reading the scene: frame capture, scene scan, mesh readers
+  Conversion/            meshes, materials, textures, lights to OpenRemix
+  Scene/                 sky, terrain, water, fog, camera, ray portals
+  Bake/                  baked scene for OpenRemix's Forward+ renderer
+  Presentation/          window, single-window presentation, UI capture
+  UI/                    settings tab, debug HUD, menu cursor
+  ShaderPassThrough/     replaying the game's own shaders (with native/hostpass11)
+  Diagnostics/           profiler, Tracy, watchdog, diagnostic logs
+  Util/                  hashing, Unity version compatibility
+  Games/                 game profiles (GameProfile, and one folder per game)
+native/                  native code (Meson, clang-cl)
+  hostpass11/            UnityRTXHostPass.dll: D3D11 capture and host-pass replay
+  deps/dxbc/             DXVK's DXBC to SPIR-V compiler, standalone
+scripts/                 build and deploy (build.ps1 for Windows, build.sh for Linux/Proton)
+tests/                   API compatibility checks
+tools/investigation/     one-off scripts from investigating games' assets and code
+```
 
 ## Building
 
-Requirements: a .NET SDK capable of targeting .NET Standard 2.1, BepInEx 5.x installed to a game, and the game's Unity Mono managed assemblies.
+### Windows
 
-### Linux
+Requirements: the .NET SDK, Visual Studio's C++ tools with clang-cl, Meson and Ninja (for
+`native/`), the Vulkan SDK's `glslangValidator`, Python 3 (to package OpenRemix's runtime).
 
-On Arch Linux, install the build tools:
+```powershell
+# Plugin only (copies the game's assemblies into src/lib for the build)
+.\scripts\build.ps1 -GamePath "C:\...\ULTRAKILL"
+
+# Build and install the plugin and UnityRTXHostPass.dll
+.\scripts\build.ps1 -GamePath "C:\...\ULTRAKILL" -Deploy -Native
+
+# Also package and install OpenRemix's runtime from a built checkout
+.\scripts\build.ps1 -GamePath "C:\...\ULTRAKILL" -Deploy -Native `
+    -OpenRemix "C:\...\OpenRemix" -OpenRemixBuild _work\build\windows-usd
+```
+
+### Linux (Proton)
 
 ```bash
-sudo pacman -Syu --needed dotnet-sdk netstandard-targeting-pack
+sudo pacman -Syu --needed dotnet-sdk netstandard-targeting-pack   # Arch
+
+./scripts/build.sh                                  # build only
+./scripts/build.sh --deploy                         # plugin and OpenRemix's runtime
+./scripts/build.sh --deploy --plugin-only           # plugin only
+./scripts/build.sh --unity-path "/path/to/game" --openremix-path "/path/to/openremix" --deploy
 ```
 
-From the repository root:
-
-```bash
-# Copy references from the default ULTRAKILL installation and build
-./src/build.sh
-
-# Build and deploy UnityRemix.dll plus the existing OpenRemix Windows build
-./src/build.sh --deploy
-
-# Use an OpenRemix checkout in another location
-./src/build.sh --deploy --openremix-path "/path/to/openremix"
-
-# Update just UnityRemix.dll while keeping the installed renderer
-./src/build.sh --deploy --plugin-only
-
-# Use another Unity Mono game installation
-./src/build.sh --unity-path "/path/to/Unity game" --deploy
-```
-
-The default game directory is `$HOME/.local/share/Steam/steamapps/common/ULTRAKILL`
-(`/home/cr/.local/share/Steam/steamapps/common/ULTRAKILL` for user `cr`).
-The script works from any working directory, copies the required assemblies into
-`src/lib/`, generates `src/BuildInfo.cs`, and builds
-`src/bin/Release/netstandard2.1/UnityRemix.dll`. PowerShell is not required.
-Deployment only happens with `--deploy`. By default it also copies the Windows
-build from the sibling `../openremix` checkout: `remix.dll` becomes `d3d9.dll` in
-the game root, alongside `SDL3.dll`, `libwinpthread-1.dll`, `libgcc_s_seh-1.dll`
-and `libstdc++-6.dll`. All required runtime files must exist before deployment.
-The script copies an existing OpenRemix build; it does not rebuild the renderer.
-Changed destination files are backed up under `BepInEx/UnityRTX-backups/` with
-their relative game paths preserved. Identical files are left in place.
-The plugin still uses Windows APIs and requires the Windows game environment
-and a compatible renderer at runtime.
-
-`--unity-path` also selects the game's Unity assemblies for compilation.
-Unity 2019 uses a fallback to find inactive renderers in loaded scenes and
-the existing UI geometry fallback when `CanvasRenderer.GetMesh` is unavailable.
-Newer Unity versions use those APIs when present.
-
-The plugin supports openremix API `0.1003.0`, Remix Plus API `0.1000.0`, and the
-API `0.6.1` runtime bundled with UnityRTX v0.2. Its selected API is logged in
-`BepInEx/LogOutput.log`. Other `0.6.x` interface layouts are not supported.
-
-### Using openremix under Proton
-
-Build the Windows x64 runtime from the sibling openremix repository using
-`python3 scripts/linux/build-windows-remix.py` there. Its platform guide lists
-the Clang/MinGW, CMake, Meson, Ninja and Wine prerequisites.
-
-Then run `./src/build.sh --deploy` from this repository. It copies openremix's
-`_work/build/windows-cross/src/native/remix.dll` and the required DLLs from
-`_work/deps/windows/prefix/bin/`, along with the rebuilt UnityRTX plugin.
-Restart the Windows game through Proton as usual. UnityRTX loads the runtime explicitly and adapts
-openremix's API table, event pumping and render-thread shutdown.
-
-openremix is a separate SDL3/Vulkan renderer with different rendering features.
-Press **F12** with either the game or openremix window focused to show or hide
-its settings panel. Select **Backend > Path trace** to enable the ray-query
-backend for the current session. Alt+X in the game also opens this panel.
-
-It starts with its raster backend. To request its ray-query backend at startup, edit
-`BepInEx/config/com.Unity.remix.cfg` after the first launch and restart:
-
-```ini
-[Native]
-Backend = pathtrace
-```
-
-Use `Backend = raster` to switch back. The log records both the selected API
-and the backend selection result; unsupported path tracing leaves raster active.
-The original RTX Remix ImGui overlay is not used with openremix.
+Build OpenRemix's Windows runtime first with `scripts/linux/build-windows-remix.py` in its
+checkout. Replaced files are backed up under `BepInEx/UnityRTX-backups/`. `native/` is built on
+Windows; a `native/_build/hostpass11/UnityRTXHostPass.dll` that exists is deployed too.
 
 ### API compatibility checks
 
-The API compatibility checks run with .NET 10:
-
 ```bash
 dotnet run --project tests/RemixApiCompatibility
-# Optionally verify the ABI against an existing v0.2 release plugin
-dotnet run --project tests/RemixApiCompatibility -- "/path/to/unityrtx-v0.2/BepInEx/plugins/UnityRemix.dll"
-```
-
-### Windows / PowerShell
-
-```powershell
-cd src
-
-# Setup references
-.\setup-references.ps1 -UnityPath "F:\Program Files (x86)\Steam\steamapps\common\ULTRAKILL"
-
-# Build
-.\build.ps1 -Deploy -UnityPath "F:\Program Files (x86)\Steam\steamapps\common\ULTRAKILL"
 ```

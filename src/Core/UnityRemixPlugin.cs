@@ -441,17 +441,14 @@ namespace UnityRemix
         {
             LogSource.LogInfo("Loading Remix API interface...");
             
-            string gameDir = System.IO.Path.GetDirectoryName(Application.dataPath);
-            string dllPath = System.IO.Path.Combine(gameDir, "remix.dll");
-            
-            LogSource.LogInfo($"Looking for Remix DLL at: {dllPath}");
-            
-            if (!System.IO.File.Exists(dllPath))
+            string dllPath = InstallLayout.RemixDll;
+            if (dllPath == null)
             {
-                LogSource.LogError($"Remix DLL not found at {dllPath}");
-                LogSource.LogInfo("Please place OpenRemix's remix.dll in the game root folder.");
+                LogSource.LogError($"OpenRemix's remix.dll not found: install its runtime in {InstallLayout.RuntimeDirectory}");
                 return;
             }
+            LogSource.LogInfo($"Loading OpenRemix from {dllPath}" +
+                              (InstallLayout.IsLegacyRuntime ? " (the game folder: the old layout; UnityRTX now keeps it in " + InstallLayout.RuntimeDirectory + ")" : ""));
             
             // Load API
             var result = RemixAPI.InitializeRemixAPI(dllPath, out remixInterface, out remixDll);

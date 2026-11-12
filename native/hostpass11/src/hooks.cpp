@@ -502,8 +502,21 @@ namespace urtx {
   uint64_t rehooks() { return g_rehooks; }
 
   void log(const char *format, ...) {
-    if (!g_log)
-      g_log = std::fopen("UnityRTXHostPass.log", "w");
+    if (!g_log) {
+      // Beside this DLL (the plugin folder), not in the game's working directory.
+      HMODULE self = nullptr;
+      wchar_t path[MAX_PATH] = L"UnityRTXHostPass.log";
+      if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                             reinterpret_cast<LPCWSTR>(&log), &self)) {
+        const DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
+        if (n && n < MAX_PATH - 4) {
+          wchar_t *dot = wcsrchr(path, L'.');
+          if (dot)
+            wcscpy(dot, L".log");
+        }
+      }
+      g_log = _wfopen(path, L"w");
+    }
     if (!g_log)
       return;
     va_list args;
