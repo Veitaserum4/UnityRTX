@@ -642,8 +642,7 @@ namespace UnityRemix
                 // sanitize its elements to UI layer so the UI camera captures it cleanly without capturing 3D viewmodels.
                 if (canvas.renderMode == RenderMode.WorldSpace)
                 {
-                    bool isCameraAttached = canvas.GetComponentInParent<Camera>() != null || HasCameraOrHUDInParent(canvas.transform);
-                    if (isCameraAttached)
+                    if (IsHudCanvas(canvas.transform))
                     {
                         SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
                         if (loggedSanitizedCanvases.Add(canvas.GetInstanceID()))
@@ -744,6 +743,23 @@ namespace UnityRemix
             {
                 logger?.LogWarning($"[RemixUIDetector] Failed to route VideoPlayers: {ex.Message}");
             }
+        }
+
+        // A world-space canvas the UI cameras draw as HUD: under a HUD object or a camera other
+        // than the main (world) one (ULTRAKILL's GunCanvas under its HUD Camera). One under the
+        // main camera with no HUD between them is a screen on a held weapon (the jackhammer's
+        // gauge): it stays in 3D, where the frame capture draws it with the view model.
+        private static bool IsHudCanvas(Transform t)
+        {
+            for (var cur = t; cur != null; cur = cur.parent)
+            {
+                if (cur.name.IndexOf("hud", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+                var cam = cur.GetComponent<Camera>();
+                if (cam != null)
+                    return !cam.CompareTag("MainCamera");
+            }
+            return HasCameraOrHUDInParent(t);
         }
 
         private static bool HasCameraOrHUDInParent(Transform t)

@@ -370,8 +370,33 @@ namespace UnityRemix
             return path;
         }
 
+        // Diagnostics: every renderer under the game camera or the player's body, once each.
+        private readonly HashSet<int> loggedHeldRenderers = new HashSet<int>();
+        private void LogHeldRenderers(Camera mainCam)
+        {
+            if (mainCam == null || Time.frameCount % 120 != 0 || loggedHeldRenderers.Count > 600)
+                return;
+            foreach (var r in mainCam.GetComponentsInChildren<Renderer>(false))
+                LogHeldRenderer(r, "camera");
+            var player = mainCam.transform.root;
+            foreach (var r in player.GetComponentsInChildren<Renderer>(false))
+                if (IsPlayerBodyRenderer(r))
+                    LogHeldRenderer(r, "body");
+        }
+        private void LogHeldRenderer(Renderer r, string where)
+        {
+            if (r == null || !loggedHeldRenderers.Add(r.GetInstanceID()))
+                return;
+            string mesh = r is MeshRenderer ? (r.GetComponent<MeshFilter>()?.sharedMesh?.name ?? "none")
+                        : r is SkinnedMeshRenderer smr ? (smr.sharedMesh != null ? smr.sharedMesh.name : "none") : "-";
+            string mode = r is ParticleSystemRenderer psr ? $" mode {psr.renderMode}" + (psr.mesh != null ? $" mesh '{psr.mesh.name}'" : "") : "";
+            logger.LogInfo($"[Held] {where}: {r.GetType().Name} '{GetHierarchyPath(r.transform)}' layer {r.gameObject.layer} ({LayerMask.LayerToName(r.gameObject.layer)}), " +
+                           $"enabled {r.enabled}, mesh '{mesh}'{mode}, material '{(r.sharedMaterial != null ? r.sharedMaterial.name : "none")}', body {IsPlayerBodyRenderer(r)}");
+        }
+
         private void UpdateViewModelLayers(Camera mainCam, Camera viewModelCam)
         {
+            LogHeldRenderers(mainCam);
             viewModelLayers = viewModelCam != null && viewModelCam != mainCam
                 ? GameCameraMasks.Get(viewModelCam) & ~GameCameraMasks.Get(mainCam)
                 : 0;
@@ -2553,6 +2578,8 @@ namespace UnityRemix
                 }
 
                 var bones = info.bones;
+                if (skinData != null && viewModel && frameCount % 300 == 0)
+                    DiagnoseSkinning(skinned, sharedMesh, skinData, bones);
                 if (skinData != null && bones != null && bones.Length > 0)
                 {
                     // Compute bone transforms for Remix GPU skinning using double-buffered array
@@ -5483,6 +5510,37 @@ namespace UnityRemix
         // Skins the data on the CPU as the renderer will on the GPU (bones relative to the
         // unscaled renderer transform, blendshapes at the current weights) and compares with
         // BakeMesh of the same pose. False also when the data cannot be compared.
+        // Diagnostics: the cached skinning against BakeMesh in the current pose, per bone.
+        private void DiagnoseSkinning(SkinnedMeshRenderer skinned, Mesh mesh, CachedSkinningData data, Transform[] bones)
+        {
+            bool ok = ValidateGpuSkinning(skinned, mesh, data, out float error, out float tolerance);
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"[SkinCheck] '{mesh.name}' now: max error {error:G3} (tolerance {tolerance:G3}) {(ok ? "ok" : "MISMATCH")}; rootBone '{(skinned.rootBone != null ? skinned.rootBone.name : "none")}', bones:");
+            var tr = skinned.transform;
+            for (int b = 0; b < data.boneCount; b++)
+            {
+                var bone = bones != null && b < bones.Length ? bones[b] : null;
+                if (bone == null) { sb.Append($" [{b} null]"); continue; }
+                var local = tr.InverseTransformPoint(bone.position);
+                sb.Append($" [{b} {bone.name} at {local.x:F3},{local.y:F3},{local.z:F3} scale {bone.lossyScale.x:F2},{bone.lossyScale.y:F2},{bone.lossyScale.z:F2} active {bone.gameObject.activeInHierarchy}]");
+            }
+            // Vertices per bone (their largest weight).
+            var counts = new int[data.boneCount];
+            for (int v = 0; v < data.bindVertices.Length; v++)
+            {
+                int best = 0; float bw = -1;
+                for (int k = 0; k < data.bonesPerVertex; k++)
+                {
+                    float w = data.blendWeights[v * data.bonesPerVertex + k];
+                    if (w > bw) { bw = w; best = (int)data.blendIndices[v * data.bonesPerVertex + k]; }
+                }
+                if (best < counts.Length) counts[best]++;
+            }
+            sb.Append(" | vertices by bone:");
+            for (int b = 0; b < counts.Length; b++) sb.Append($" {b}:{counts[b]}");
+            logger.LogInfo(sb.ToString());
+        }
+
         private bool ValidateGpuSkinning(SkinnedMeshRenderer skinned, Mesh mesh, CachedSkinningData data, out float error, out float tolerance)
         {
             error = float.PositiveInfinity;
