@@ -154,11 +154,18 @@ namespace UnityRemix
             set => scanActiveOnly = value;
         }
 
+        /// <summary>Layers only the game's view-model camera draws (set by RemixFrameCapture each frame).</summary>
+        public static int ViewModelLayers;
+
         // Per frame: also the layers no game camera draws and the user's disabled layers,
         // which can change while the instance stays scanned.
         public bool IsLayerExcluded(int layer)
         {
             if (isLayerDisabled != null && isLayerDisabled(layer))
+                return true;
+            // View-model layers (RemixFrameCapture.IsViewModel): the frame capture draws what is
+            // on them from the view-model camera; a scanned copy would be in the world.
+            if ((ViewModelLayers & (1 << layer)) != 0)
                 return true;
             return IsLayerNeverRendered(layer);
         }

@@ -340,6 +340,68 @@ namespace UnityRemix
             }
         }
 
+        // Layers only the game's view-model camera draws (ULTRAKILL's HUD Camera; 0 without
+        // one), from the masks the game set (GameCameraMasks). What is on them the game draws
+        // from that camera over the scene, wherever it sits in the hierarchy: a held item, a
+        // weapon's gauge, ejected shells. Main thread, set each frame in CaptureStaticMeshes.
+        private int viewModelLayers;
+        private int loggedViewModelLayers = -1;
+        private readonly HashSet<int> loggedLayerViewModels = new HashSet<int>();
+
+        // Drawn as a view model: under the game camera, or on a layer only the view-model
+        // camera draws.
+        private bool IsViewModel(Transform tr, int layer, Transform mainCamTransform, string kind)
+        {
+            if (mainCamTransform != null && tr.IsChildOf(mainCamTransform))
+                return true;
+            if ((viewModelLayers & (1 << layer)) == 0)
+                return false;
+            if (loggedLayerViewModels.Add(tr.GetInstanceID()) && loggedLayerViewModels.Count <= 100)
+                logger.LogInfo($"[ViewModel] {kind} '{GetHierarchyPath(tr)}' on layer {layer} ({LayerMask.LayerToName(layer)}): a view model by its layer, not under the camera");
+            return true;
+        }
+
+        private static string GetHierarchyPath(Transform t)
+        {
+            var path = t.name;
+            for (var p = t.parent; p != null; p = p.parent)
+                path = p.name + "/" + path;
+            return path;
+        }
+
+        private void UpdateViewModelLayers(Camera mainCam, Camera viewModelCam)
+        {
+            viewModelLayers = viewModelCam != null && viewModelCam != mainCam
+                ? GameCameraMasks.Get(viewModelCam) & ~GameCameraMasks.Get(mainCam)
+                : 0;
+            SceneMeshScanner.ViewModelLayers = viewModelLayers;
+            if (viewModelLayers == loggedViewModelLayers)
+                return;
+            loggedViewModelLayers = viewModelLayers;
+            var names = new List<string>();
+            for (int l = 0; l < 32; l++)
+                if ((viewModelLayers & (1 << l)) != 0)
+                    names.Add($"{l} {LayerMask.LayerToName(l)}");
+            logger.LogInfo($"[ViewModel] layers only '{(viewModelCam != null ? viewModelCam.name : "none")}' draws: {(names.Count > 0 ? string.Join(", ", names) : "none")}");
+            // Diagnostics: what else is on them (particles are not marked view models yet).
+            if (viewModelLayers == 0)
+                return;
+            int listed = 0;
+            foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+            {
+                if (r == null || (viewModelLayers & (1 << r.gameObject.layer)) == 0 || listed >= 60)
+                    continue;
+                if (r is ParticleSystemRenderer || r is TrailRenderer || r is LineRenderer)
+                {
+                    listed++;
+                    logger.LogInfo($"[ViewModel] {r.GetType().Name} '{GetHierarchyPath(r.transform)}' on layer {r.gameObject.layer}");
+                }
+            }
+            foreach (var c in UnityEngine.Object.FindObjectsOfType<Canvas>())
+                if (c != null && c.isRootCanvas && (viewModelLayers & (1 << c.gameObject.layer)) != 0 && listed++ < 60)
+                    logger.LogInfo($"[ViewModel] Canvas '{GetHierarchyPath(c.transform)}' ({c.renderMode}) on layer {c.gameObject.layer}");
+        }
+
         private bool ShouldPreferSceneScan(MeshRenderer renderer, Mesh mesh)
         {
             if (renderer == null || mesh == null)
@@ -1430,6 +1492,7 @@ namespace UnityRemix
                     valid = true
                 };
                 var viewModelCam = Games.GameProfiles.FindViewModelCamera(mainCam);
+                UpdateViewModelLayers(mainCam, viewModelCam);
                 var vm = viewModelCam != null ? viewModelCam : mainCam;
                 var vt = vm.transform;
                 state.camera.viewModelPosition = vt.position;
@@ -1634,7 +1697,7 @@ namespace UnityRemix
                     matSig = HashCombine(matSig, mpbHash);
                 }
                 ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
-                bool isViewModel = mainCamTransform != null && tr.IsChildOf(mainCamTransform);
+                bool isViewModel = IsViewModel(tr, layer, mainCamTransform, "mesh");
                 uint categoryFlags = 0;
                 if (isViewModel)
                 {
@@ -2414,8 +2477,8 @@ namespace UnityRemix
                 }
                 
                 validSkinnedIds.Add(skinnedId);
-                // Held by the camera (arms, weapons): drawn as view models.
-                bool viewModel = mainCamTransform != null && tr.IsChildOf(mainCamTransform);
+                // Held by the camera (arms, weapons) or on a view-model layer: drawn as view models.
+                bool viewModel = IsViewModel(tr, go.layer, mainCamTransform, "skinned mesh");
                 if (viewModel)
                     viewModelSkinnedIds.Add(skinnedId);
                 if (playerBody)
@@ -3029,7 +3092,8 @@ namespace UnityRemix
                 // Only canvases on the UI layer are also drawn by the overlay's UI cameras.
                 bool cull = cullScreens && canvas.gameObject.layer == uiLayer;
                 for (int i = 0; i < worldCanvasGraphics.Count; i++)
-                    CaptureCanvasGraphic(state, worldCanvasGraphics[i], mainCam, frameCount, onViewModel: false, cull: cull);
+                    CaptureCanvasGraphic(state, worldCanvasGraphics[i], mainCam, frameCount,
+                                         onViewModel: (viewModelLayers & (1 << canvas.gameObject.layer)) != 0, cull: cull);
             }
         }
 
