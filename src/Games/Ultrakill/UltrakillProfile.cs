@@ -78,6 +78,8 @@ namespace UnityRemix.Games.Ultrakill
         private readonly List<Renderer> limboWalls = new List<Renderer>();
         private int limboWallsFrame = -1000;
 
+        public override bool UsesShaderPassThrough => true;
+
         public override void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers)
         {
             if (Time.frameCount - limboWallsFrame >= 120)

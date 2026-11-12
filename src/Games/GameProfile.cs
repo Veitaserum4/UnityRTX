@@ -113,6 +113,10 @@ namespace UnityRemix.Games
         // drawn by Unity from the game camera's view each frame and replayed over the path-traced frame.
         public virtual void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers) { }
 
+        // Whether GetPassThroughRenderers ever returns any: shader pass-through then needs
+        // Unity's graphics jobs off (ShaderPassThrough.RequireImmediateRendering).
+        public virtual bool UsesShaderPassThrough => false;
+
         // The chromatic aberration of what such a material shows (its red right and blue left of
         // green), a fraction of the screen's width; 0 none. Main thread.
         public virtual float ViewChromaticAberration(Material material) => 0f;

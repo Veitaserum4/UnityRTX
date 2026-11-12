@@ -74,6 +74,48 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// The capture hooks see the immediate context's draws only: with graphics jobs on, Unity
+        /// records draws on worker threads' deferred contexts. Turns them off in the game's
+        /// boot.config (backed up once as boot.config.unityrtx-backup); Unity reads it at
+        /// startup, so a change takes effect from the next launch.
+        /// </summary>
+        public static void RequireImmediateRendering(ManualLogSource log)
+        {
+            string path = System.IO.Path.Combine(Application.dataPath, "boot.config");
+            try
+            {
+                if (!System.IO.File.Exists(path))
+                    return;
+                var lines = System.IO.File.ReadAllLines(path);
+                bool changed = false;
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    int eq = lines[i].IndexOf('=');
+                    if (eq < 0)
+                        continue;
+                    string key = lines[i].Substring(0, eq).Trim();
+                    if ((key == "gfx-enable-gfx-jobs" || key == "gfx-enable-native-gfx-jobs") && lines[i].Substring(eq + 1).Trim() != "0")
+                    {
+                        lines[i] = key + "=0";
+                        changed = true;
+                    }
+                }
+                if (!changed)
+                    return;
+                string backup = path + ".unityrtx-backup";
+                if (!System.IO.File.Exists(backup))
+                    System.IO.File.Copy(path, backup);
+                System.IO.File.WriteAllText(path, string.Join("\n", lines) + "\n");
+                log.LogWarning("[ShaderPassThrough] turned Unity's graphics jobs off in boot.config (backup: boot.config.unityrtx-backup); " +
+                               "shader pass-through works from the next launch");
+            }
+            catch (Exception e)
+            {
+                log.LogWarning($"[ShaderPassThrough] could not turn graphics jobs off in {path}: {e.Message}; shader pass-through will capture nothing while they are on");
+            }
+        }
+
+        /// <summary>
         /// Main thread, once a frame: renders the profile's pass-through renderers from the
         /// game camera's view, through the hooks' capture window.
         /// </summary>

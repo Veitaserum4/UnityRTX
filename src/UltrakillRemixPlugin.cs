@@ -148,6 +148,8 @@ namespace UnityRemix
             
             // Apply Harmony patches, then the game's own (Games/)
             Games.GameProfiles.Detect(configGameProfile.Value, LogSource);
+            if (Games.GameProfiles.Active?.UsesShaderPassThrough == true)
+                ShaderPassThrough.RequireImmediateRendering(LogSource);
             try
             {
                 var harmony = new Harmony(PluginGUID);
