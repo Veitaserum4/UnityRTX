@@ -134,6 +134,13 @@ namespace UnityRemix.Games
             return opens;
         }
 
+        public static float ViewChromaticAberration(Material material)
+        {
+            float aberration = 0f;
+            Run(nameof(ViewChromaticAberration), p => aberration = p.ViewChromaticAberration(material));
+            return aberration;
+        }
+
         public static Camera FindViewModelCamera(Camera worldCamera)
         {
             Camera camera = null;

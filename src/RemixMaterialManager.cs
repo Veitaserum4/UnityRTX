@@ -184,6 +184,7 @@ namespace UnityRemix
             public bool emissionAsShown;  // a backdrop (panoramic sky): its emission is what Unity shows, not scaled to light units
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
+            public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
             public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
@@ -747,6 +748,7 @@ namespace UnityRemix
                 rayPortalIndex = rayPortalIndices.TryGetValue(materialId, out int portalIndex) ? portalIndex
                                : Games.GameProfiles.OpensViewPortal(material) ? RayPortals.EntranceIndex : -1,
                 rayPortalStandalone = rayPortalIndices.ContainsKey(materialId),
+                viewChromaticAberration = Games.GameProfiles.ViewChromaticAberration(material),
                 metallic = 0.0f,
                 roughness = 0.7f,
                 translucentKind = TranslucentKind.None,
@@ -3900,6 +3902,7 @@ namespace UnityRemix
                 GCHandle emissionExtHandle = default;
                 GCHandle remapExtHandle = default;
                 GCHandle portalExtHandle = default;
+                GCHandle viewEffectsHandle = default;
                 IntPtr roughnessPathPtr = IntPtr.Zero, metallicPathPtr = IntPtr.Zero;
                 IntPtr extPtr;
                 IntPtr emissionExtPtr = IntPtr.Zero;
@@ -4111,6 +4114,18 @@ namespace UnityRemix
                     // it doesn't open. A registered portal (RayPortals' own) stands alone:
                     // its draw places the portal over the surfaces opening it.
                     bool standalonePortal = matData.rayPortalIndex >= 0 && matData.rayPortalStandalone;
+                    // What a view portal's screen shows takes the game shader's effects.
+                    if (matData.viewChromaticAberration > 0f && !standalonePortal)
+                    {
+                        var viewEffects = new RemixAPI.remixapi_MaterialInfoViewEffectsEXT
+                        {
+                            sType = RemixAPI.REMIXAPI_STRUCT_TYPE_MATERIAL_VIEW_EFFECTS_EXT,
+                            pNext = opaqueExt.pNext,
+                            chromaticAberration = Mathf.Min(matData.viewChromaticAberration, 1f / 240f)
+                        };
+                        viewEffectsHandle = GCHandle.Alloc(viewEffects, GCHandleType.Pinned);
+                        opaqueExt.pNext = viewEffectsHandle.AddrOfPinnedObject();
+                    }
                     if (matData.rayPortalIndex >= 0)
                     {
                         var portalExt = new RemixAPI.remixapi_MaterialInfoPortalEXT
@@ -4196,6 +4211,7 @@ namespace UnityRemix
                     if (emissionExtHandle.IsAllocated) emissionExtHandle.Free();
                     if (remapExtHandle.IsAllocated) remapExtHandle.Free();
                     if (portalExtHandle.IsAllocated) portalExtHandle.Free();
+                    if (viewEffectsHandle.IsAllocated) viewEffectsHandle.Free();
                     if (roughnessPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(roughnessPathPtr);
                     if (metallicPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(metallicPathPtr);
                     extHandle.Free();

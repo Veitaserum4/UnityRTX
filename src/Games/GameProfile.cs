@@ -109,6 +109,10 @@ namespace UnityRemix.Games
         // open: at their back, for rays other than the camera's).
         public virtual bool OpensViewPortal(Material material) => false;
 
+        // The chromatic aberration of what such a material shows (its red right and blue left of
+        // green), a fraction of the screen's width; 0 none. Main thread.
+        public virtual float ViewChromaticAberration(Material material) => 0f;
+
         // The camera the game draws its view models (weapons, arms) with, when it isn't the
         // world camera; null: the world camera's projection.
         public virtual Camera FindViewModelCamera(Camera worldCamera) => null;

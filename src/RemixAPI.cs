@@ -601,6 +601,21 @@ namespace UnityRemix
         }
 
         /// <summary>
+        /// pNext on opaque MaterialInfo (OpenRemix remix_native_ext.h): the effects of what a screen or a
+        /// portal over an opaque surface shows. chromaticAberration: red right and blue left of green, as a
+        /// fraction of the output's width (at most 1/240).
+        /// </summary>
+        public const int REMIXAPI_STRUCT_TYPE_MATERIAL_VIEW_EFFECTS_EXT = 0x7fff1078;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialInfoViewEffectsEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+            public float chromaticAberration;
+        }
+
+        /// <summary>
         /// pNext on MaterialInfo (alone, or after OpaqueEXT for the look where it doesn't open):
         /// a ray portal; portal i's partner is i ^ 1. 24 bytes on x64.
         /// </summary>

@@ -73,6 +73,29 @@ namespace UnityRemix.Games.Ultrakill
         // fakeCamStart, within its camera's far plane and nearer it than the player's start.
         public override bool OpensViewPortal(Material material) => material.IsKeywordEnabled("LIMBO_WALLS");
 
+        // LIMBO_WALLS samples the sky's red at +_ChromaticAberration / _LimboSkyWidth and its blue at
+        // minus that, in screen UV: the sky is rendered at the screen's width over the skybox's
+        // downscaleFactor (2), so the shift is _ChromaticAberration x 2 screen pixels.
+        public override float ViewChromaticAberration(Material material)
+        {
+            if (!material.IsKeywordEnabled("LIMBO_WALLS") || !material.HasProperty("_ChromaticAberration"))
+                return 0f;
+            // LimboSkybox.downscaleFactor (2 in the game's levels), read from the skybox the view
+            // portal found (GetRayPortalView).
+            float downscale = 2f;
+            if (limbo != null && limboType != null)
+            {
+                try
+                {
+                    var field = limboType.GetField("downscaleFactor");
+                    if (field != null && field.GetValue(limbo) is float value && value > 0f)
+                        downscale = value;
+                }
+                catch { }
+            }
+            return material.GetFloat("_ChromaticAberration") * downscale / Mathf.Max(1, Screen.width);
+        }
+
         // V1's body (Player/GroundCheck/v1_combined: v1_mdl and the held weapons' models), on the
         // Portal layer (30), which only mirror and portal views draw.
         public override bool IsPlayerBody(Renderer renderer)
