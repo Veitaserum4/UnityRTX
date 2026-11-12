@@ -18,8 +18,10 @@
 #include <unordered_set>
 #include <windows.h>
 
+#include "fill.frag.inc"
 #include "frame_depth.frag.inc"
 #include "fullscreen.vert.inc"
+#include "wall_mask.frag.inc"
 
 namespace urtx {
   namespace {
@@ -29,6 +31,9 @@ namespace urtx {
     PFN_remixapi_GetHostPassStatisticsEXT g_statistics = nullptr;
 
     constexpr remixapi_HostTargetHandleEXT kFrameCopy = 0x5552000000000001ull;
+    // What is behind the walls: the frame where they show, holes (where
+    // something stands in front of them) filled from beside (ping-pong).
+    constexpr remixapi_HostTargetHandleEXT kBehind[2] = {0x5552000000000002ull, 0x5552000000000003ull};
     constexpr uint32_t kVkR32G32Sfloat = 103;
     constexpr uint32_t kCompareLessOrEqual = 3, kCompareGreaterOrEqual = 6, kCompareAlways = 7; // VkCompareOp
 
@@ -47,7 +52,7 @@ namespace urtx {
     // Registered shaders, by the capture's shader identity.
     std::unordered_map<const Shader *, remixapi_HostShaderHandleEXT> g_handles;
     std::unordered_set<const Shader *> g_failed;
-    remixapi_HostShaderHandleEXT g_fullscreenVs = 0, g_frameDepthFs = 0;
+    remixapi_HostShaderHandleEXT g_fullscreenVs = 0, g_frameDepthFs = 0, g_maskFs = 0, g_fillFs = 0;
     bool g_depthFailed = false;
 
     std::string g_lastSubmit = "nothing submitted yet";
@@ -89,7 +94,7 @@ namespace urtx {
     bool depthShaders() {
       if (g_depthFailed)
         return false;
-      if (g_fullscreenVs && g_frameDepthFs)
+      if (g_fullscreenVs && g_frameDepthFs && g_maskFs && g_fillFs)
         return true;
       remixapi_HostShaderInfoEXT info{};
       info.sType = REMIXAPI_STRUCT_TYPE_HOST_SHADER_INFO_EXT;
@@ -108,6 +113,24 @@ namespace urtx {
       info.bindings = &sampler;
       info.bindingCount = 1;
       if (g_register(&info, &g_frameDepthFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_depthFailed = true;
+        return false;
+      }
+      const remixapi_HostShaderBindingEXT two[2] = {{0, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+                                                   {1, REMIXAPI_HOST_BINDING_SAMPLER_EXT}};
+      info.bindings = two;
+      info.bindingCount = 2;
+      info.code = wall_mask_frag;
+      info.codeBytes = sizeof(wall_mask_frag);
+      info.pushConstantBytes = 0;
+      if (g_register(&info, &g_maskFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_depthFailed = true;
+        return false;
+      }
+      info.code = fill_frag;
+      info.codeBytes = sizeof(fill_frag);
+      info.pushConstantBytes = 12;
+      if (g_register(&info, &g_fillFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
         g_depthFailed = true;
         return false;
       }
@@ -172,20 +195,33 @@ namespace urtx {
       }
     };
 
-    // A captured draw as a pass on the frame; false when it can't be (why in `why`).
-    bool drawPass(const Draw &d, void *frameTexture, uint32_t depthTest, Pass &pass, std::string &why) {
-      const auto vs = handleOf(*d.vs), ps = handleOf(*d.ps);
+    // A captured draw as a pass on the frame, sampling `frameTarget` for the
+    // frame texture; or (mask) its geometry only, with wall_mask.frag, into
+    // kBehind[0]. False when it can't be (why in `why`).
+    bool drawPass(const Draw &d, void *frameTexture, remixapi_HostTargetHandleEXT frameTarget, uint32_t depthTest,
+                  bool mask, Pass &pass, std::string &why) {
+      const auto vs = handleOf(*d.vs), ps = mask ? g_maskFs : handleOf(*d.ps);
       if (!vs || !ps) {
         why = "shaders not compiled or registered";
         return false;
       }
       auto &info = pass.info;
       info.kind = REMIXAPI_HOST_PASS_DRAW_EXT;
-      info.target = 0; // the frame
-      info.depth = depthTest;
+      info.target = mask ? kBehind[0] : 0; // else the frame
+      if (mask) {
+        info.targetWidth = uint32_t(d.viewport.Width);
+        info.targetHeight = uint32_t(d.viewport.Height);
+      }
+      info.depth = mask ? 0 : depthTest;
       info.vertexShader = vs;
       info.fragmentShader = ps;
+      if (mask) {
+        pass.samplers.push_back({0, kFrameCopy, 0, 1, 1});
+        pass.samplers.push_back({1, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
+      }
       for (const auto *shader : {d.vs.get(), d.ps.get()}) {
+        if (mask && !shader->vertex)
+          continue;
         const auto &constants = shader->vertex ? d.vsConstants : d.psConstants;
         for (const auto &r : shader->resources) {
           if (r.type == 0) {
@@ -218,7 +254,7 @@ namespace urtx {
             }
             remixapi_HostTargetHandleEXT target = 0;
             if (t->resource == frameTexture)
-              target = kFrameCopy;
+              target = frameTarget;
             else if (uploaded(t->resource))
               target = reinterpret_cast<remixapi_HostTargetHandleEXT>(t->resource);
             else {
@@ -285,6 +321,27 @@ namespace urtx {
         std::memcpy(pass.push.data(), &samples, std::min<size_t>(4, pushBytes));
       }
       return true;
+    }
+    Pass fullScreen(remixapi_HostShaderHandleEXT fragment, remixapi_HostTargetHandleEXT target, uint32_t width,
+                    uint32_t height, const void *push, size_t pushBytes) {
+      Pass pass;
+      auto &info = pass.info;
+      info.kind = REMIXAPI_HOST_PASS_DRAW_EXT;
+      info.target = target;
+      info.targetWidth = width;
+      info.targetHeight = height;
+      info.vertexShader = g_fullscreenVs;
+      info.fragmentShader = fragment;
+      info.srcColorBlend = info.srcAlphaBlend = 1;
+      info.colorWriteMask = 0xf;
+      const float triangle[6] = {-1, -1, 3, -1, -1, 3};
+      pass.vertexData.emplace_back(reinterpret_cast<const uint8_t *>(triangle),
+                                   reinterpret_cast<const uint8_t *>(triangle) + sizeof(triangle));
+      pass.vertexBindings.push_back({nullptr, sizeof(triangle), 8});
+      pass.attributes.push_back({0, 0, kVkR32G32Sfloat, 0});
+      pass.indices = {0, 1, 2};
+      pass.push.assign(static_cast<const uint8_t *>(push), static_cast<const uint8_t *>(push) + pushBytes);
+      return pass;
     }
   } // namespace
 
@@ -385,37 +442,60 @@ namespace urtx {
       passes.push_back(std::move(copy));
       // The frame's depth, in the capture camera's projection.
       uint32_t depthTest = 0;
+      remixapi_HostTargetHandleEXT frameTarget = kFrameCopy;
       if (projection[0] != 0.f && depthShaders()) {
-        Pass fill;
-        auto &fi = fill.info;
-        fi.kind = REMIXAPI_HOST_PASS_DRAW_EXT;
-        fi.target = REMIXAPI_HOST_TARGET_FRAME_DEPTH_EXT;
-        fi.depth = (kCompareAlways + 1) | REMIXAPI_HOST_DEPTH_WRITE_EXT;
-        fi.vertexShader = g_fullscreenVs;
-        fi.fragmentShader = g_frameDepthFs;
-        fi.srcColorBlend = fi.srcAlphaBlend = 1;
-        fi.colorWriteMask = 0;
-        const float triangle[6] = {-1, -1, 3, -1, -1, 3};
-        fill.vertexData.emplace_back(reinterpret_cast<const uint8_t *>(triangle),
-                                     reinterpret_cast<const uint8_t *>(triangle) + sizeof(triangle));
-        fill.vertexBindings.push_back({nullptr, sizeof(triangle), 8});
-        fill.attributes.push_back({0, 0, kVkR32G32Sfloat, 0});
-        fill.indices = {0, 1, 2};
-        fill.samplers.push_back({0, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
         const float push[3] = {-projection[0], projection[1], reversedZ ? 0.f : 1.f};
-        fill.push.assign(reinterpret_cast<const uint8_t *>(push), reinterpret_cast<const uint8_t *>(push) + sizeof(push));
+        Pass fill = fullScreen(g_frameDepthFs, REMIXAPI_HOST_TARGET_FRAME_DEPTH_EXT, 0, 0, push, sizeof(push));
+        fill.info.depth = (kCompareAlways + 1) | REMIXAPI_HOST_DEPTH_WRITE_EXT;
+        fill.info.colorWriteMask = 0;
+        fill.samplers.push_back({0, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
         passes.push_back(std::move(fill));
         depthTest = (reversedZ ? kCompareGreaterOrEqual : kCompareLessOrEqual) + 1;
+
+        // What is behind the walls, for their shader to sample in place of
+        // the frame: it samples around each pixel (chromatic aberration,
+        // noise jitter), and the frame has what stands in front of the walls
+        // there. The walls' pixels, then holes filled sideways (out to 511
+        // pixels) and a little vertically (31), the rest from the frame.
+        Pass clear;
+        clear.info.kind = REMIXAPI_HOST_PASS_CLEAR_EXT;
+        clear.info.target = kBehind[0];
+        clear.info.targetWidth = width;
+        clear.info.targetHeight = height;
+        passes.push_back(std::move(clear));
+        for (const auto &d : draws) {
+          Pass pass;
+          std::string why;
+          if (drawPass(d, frameTexture, 0, 0, true, pass, why))
+            passes.push_back(std::move(pass));
+        }
+        std::vector<std::pair<int, int>> steps;
+        for (int step = 1; step <= 256; step *= 2)
+          steps.push_back({step, 0});
+        for (int step = 1; step <= 16; step *= 2)
+          steps.push_back({0, step});
+        int current = 0;
+        for (size_t i = 0; i < steps.size(); ++i) {
+          const int push[3] = {steps[i].first, steps[i].second, i + 1 == steps.size() ? 1 : 0};
+          Pass step = fullScreen(g_fillFs, kBehind[1 - current], width, height, push, sizeof(push));
+          step.samplers.push_back({0, kBehind[current], 0, 1, 1});
+          step.samplers.push_back({1, kFrameCopy, 0, 1, 1});
+          passes.push_back(std::move(step));
+          current = 1 - current;
+        }
+        frameTarget = kBehind[current];
       }
+      size_t replayed = 0;
       for (const auto &d : draws) {
         Pass pass;
         std::string why;
-        if (drawPass(d, frameTexture, depthTest, pass, why))
+        if (drawPass(d, frameTexture, frameTarget, depthTest, false, pass, why)) {
           passes.push_back(std::move(pass));
-        else if (skipped.empty())
+          ++replayed;
+        } else if (skipped.empty())
           skipped = "draw tag " + std::to_string(d.tag) + ": " + why;
       }
-      if (passes.size() == size_t(depthTest ? 2 : 1))
+      if (!replayed)
         passes.clear(); // no draw made it: nothing to replay
     }
     std::vector<remixapi_HostPassEXT> list;
