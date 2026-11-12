@@ -16,10 +16,15 @@ void main() {
   const ivec2 depthSize = textureSize(viewDepth, 0);
   const ivec2 center = ivec2(uv * vec2(depthSize));
   const float wall = 1.0 / gl_FragCoord.w; // clip w: the distance along the camera's axis
+  // Nearer than the wall by more than rounding, allowing for the wall's own
+  // depth changing over the window (a wall seen at a glancing angle): objects
+  // just in front of a wall are not taken for it.
+  const float pixelsPerTexel = float(textureSize(frame, 0).x) / float(depthSize.x);
+  const float tolerance = wall * 0.002 + fwidth(wall) * (2.5 * pixelsPerTexel + 1.0);
   for (int y = -2; y <= 2; ++y)
     for (int x = -2; x <= 2; ++x) {
       const float scene = texelFetch(viewDepth, clamp(center + ivec2(x, y), ivec2(0), depthSize - 1), 0).r;
-      if (scene < wall * 0.98)
+      if (scene < wall - tolerance)
         discard;
     }
   color = vec4(texelFetch(frame, pixel, 0).rgb, 1);
