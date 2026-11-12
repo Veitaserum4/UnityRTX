@@ -5,7 +5,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/RemixAPI.cs" Link="RemixAPI.cs" />
-    <Compile Include="../../src/RemixAPI.Interface.cs" Link="RemixAPI.Interface.cs" />
+    <Compile Include="../../src/Remix/RemixAPI.cs" Link="RemixAPI.cs" />
+    <Compile Include="../../src/Remix/RemixAPI.Interface.cs" Link="RemixAPI.Interface.cs" />
   </ItemGroup>
 </Project>

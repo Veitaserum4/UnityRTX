@@ -3,19 +3,11 @@
   <PropertyGroup>
     <TargetFrameworks>netstandard2.1;net472</TargetFrameworks>
     <AssemblyName>UnityRemix</AssemblyName>
-    <Description>RTX Remix integration for Unity</Description>
+    <Description>OpenRemix path tracing for Unity games</Description>
     <Version>1.0.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
   </PropertyGroup>
-
-  <ItemGroup>
-    <!-- Exclude template/documentation files from build -->
-    <Compile Remove="MIGRATION_TEMPLATE.cs" />
-    <Compile Remove="UltrakillRemixPlugin-backup.cs" />
-    <Compile Remove="UltrakillRemixPlugin.cs.backup" />
-    <Compile Remove="**\*backup*.cs" />
-  </ItemGroup>
 
   <ItemGroup>
     <!-- BepInEx reference - will be provided by the game at runtime -->
