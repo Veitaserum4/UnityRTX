@@ -345,6 +345,7 @@ namespace UnityRemix
         // from that camera over the scene, wherever it sits in the hierarchy: a held item, a
         // weapon's gauge, ejected shells. Main thread, set each frame in CaptureStaticMeshes.
         private int viewModelLayers;
+        private Func<Renderer, bool> isPlayerBodyRenderer;
         private int loggedViewModelLayers = -1;
         private readonly HashSet<int> loggedLayerViewModels = new HashSet<int>();
 
@@ -376,6 +377,7 @@ namespace UnityRemix
                 : 0;
             SceneMeshScanner.ViewModelLayers = viewModelLayers;
             SceneMeshScanner.ViewModelRoot = mainCam != null ? mainCam.transform : null;
+            SceneMeshScanner.IsPlayerBody = isPlayerBodyRenderer ??= IsPlayerBodyRenderer;
             if (viewModelLayers == loggedViewModelLayers)
                 return;
             loggedViewModelLayers = viewModelLayers;
@@ -401,6 +403,15 @@ namespace UnityRemix
             foreach (var c in UnityEngine.Object.FindObjectsOfType<Canvas>())
                 if (c != null && c.isRootCanvas && (viewModelLayers & (1 << c.gameObject.layer)) != 0 && listed++ < 60)
                     logger.LogInfo($"[ViewModel] Canvas '{GetHierarchyPath(c.transform)}' ({c.renderMode}) on layer {c.gameObject.layer}");
+        }
+
+        // GameProfile.IsPlayerBody, asked once per renderer.
+        private bool IsPlayerBodyRenderer(Renderer renderer)
+        {
+            int id = renderer.GetInstanceID();
+            if (!playerBodyRenderers.TryGetValue(id, out bool body))
+                playerBodyRenderers[id] = body = Games.GameProfiles.IsPlayerBody(renderer);
+            return body;
         }
 
         private bool ShouldPreferSceneScan(MeshRenderer renderer, Mesh mesh)
@@ -1562,7 +1573,9 @@ namespace UnityRemix
                     continue;
 
                 int layer = go.layer;
-                if (IsLayerDisabled(layer))
+                // The player's body (its held weapons' parts too): reflection-only, whatever its layer.
+                bool playerBody = IsPlayerBodyRenderer(renderer);
+                if (!playerBody && IsLayerDisabled(layer))
                     continue;
 
                 int rendererInstanceId = info.rendererId;
@@ -1698,12 +1711,14 @@ namespace UnityRemix
                     matSig = HashCombine(matSig, mpbHash);
                 }
                 ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
-                bool isViewModel = IsViewModel(tr, layer, mainCamTransform, "mesh");
+                bool isViewModel = !playerBody && IsViewModel(tr, layer, mainCamTransform, "mesh");
                 uint categoryFlags = 0;
                 if (isViewModel)
                 {
                     categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
                 }
+                if (playerBody)
+                    categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY;
                 
                 // Queue mesh for creation if not cached, not already queued, and not previously failed
                 bool needsQueue;
@@ -2450,8 +2465,7 @@ namespace UnityRemix
                     anim.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
                 int rendererId = skinned.GetInstanceID();
-                if (!playerBodyRenderers.TryGetValue(rendererId, out bool playerBody))
-                    playerBodyRenderers[rendererId] = playerBody = Games.GameProfiles.IsPlayerBody(skinned);
+                bool playerBody = IsPlayerBodyRenderer(skinned);
                 if ((!playerBody && IsLayerDisabled(go.layer)) || IsRendererDisabled(skinnedId) || previewRendererIds.Contains(rendererId))
                 {
                     skipLayer++;

@@ -158,6 +158,8 @@ namespace UnityRemix
         public static int ViewModelLayers;
         /// <summary>The game camera: what is under it is a view model (set by RemixFrameCapture each frame).</summary>
         public static Transform ViewModelRoot;
+        /// <summary>GameProfile.IsPlayerBody, cached (set by RemixFrameCapture): the frame capture draws the body, reflection-only.</summary>
+        public static Func<Renderer, bool> IsPlayerBody;
 
         // Per frame: also the layers no game camera draws and the user's disabled layers,
         // which can change while the instance stays scanned.
@@ -597,7 +599,8 @@ namespace UnityRemix
                         // model; this scanned copy would follow it in the world, a second one.
                         if ((instance.Flags & InstanceFlags.HasMoved) != 0 &&
                             ((ViewModelLayers & (1 << go.layer)) != 0 ||
-                             (ViewModelRoot != null && refObj.Transform.IsChildOf(ViewModelRoot))))
+                             (ViewModelRoot != null && refObj.Transform.IsChildOf(ViewModelRoot)) ||
+                             (IsPlayerBody != null && IsPlayerBody(renderer))))
                         {
                             culledLayer++;
                             continue;
