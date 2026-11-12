@@ -4121,6 +4121,9 @@ namespace UnityRemix
                         {
                             sType = RemixAPI.REMIXAPI_STRUCT_TYPE_MATERIAL_VIEW_EFFECTS_EXT,
                             pNext = opaqueExt.pNext,
+                            tint = new RemixAPI.remixapi_Float3D(1f, 1f, 1f),
+                            saturation = 1f,
+                            contrast = 0f,
                             chromaticAberration = Mathf.Min(matData.viewChromaticAberration, 1f / 240f)
                         };
                         viewEffectsHandle = GCHandle.Alloc(viewEffects, GCHandleType.Pinned);

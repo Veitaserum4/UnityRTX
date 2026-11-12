@@ -602,8 +602,9 @@ namespace UnityRemix
 
         /// <summary>
         /// pNext on opaque MaterialInfo (OpenRemix remix_native_ext.h): the effects of what a screen or a
-        /// portal over an opaque surface shows. chromaticAberration: red right and blue left of green, as a
-        /// fraction of the output's width (at most 1/240).
+        /// portal over an opaque surface shows, as a game's screen shader applies them: tint (each channel
+        /// 0..1), saturation (mix(mean, c, s); 1 none), contrast (mix(c, c*c, k); 0 none), and
+        /// chromaticAberration (red right and blue left of green, a fraction of the output's width, at most 1/240).
         /// </summary>
         public const int REMIXAPI_STRUCT_TYPE_MATERIAL_VIEW_EFFECTS_EXT = 0x7fff1078;
 
@@ -612,6 +613,9 @@ namespace UnityRemix
         {
             public int sType;
             public IntPtr pNext;
+            public remixapi_Float3D tint;
+            public float saturation;
+            public float contrast;
             public float chromaticAberration;
         }
 
