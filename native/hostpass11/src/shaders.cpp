@@ -8,6 +8,7 @@
 #include "dxbc/dxbc_reader.h"
 #include "dxbc/dxbc_util.h"
 #include <remix/remix_native_ext.h>
+#include <algorithm>
 #include <cstring>
 
 namespace urtx {
@@ -66,6 +67,56 @@ namespace urtx {
         s.resources.push_back(std::move(res));
       }
     }
+    // Without RDEF (Unity strips it from built shaders): the resources the
+    // shader program declares (SHDR/SHEX dcl_constantbuffer, dcl_resource,
+    // dcl_sampler), named by register (cb0, t0, s0). The textures' identities
+    // the capture keeps let the plugin match them to material properties.
+    void parseDeclarations(Shader &s) {
+      size_t at = 0, size = 0;
+      if (!chunk(s.dxbc, "SHEX", at, size) && !chunk(s.dxbc, "SHDR", at, size))
+        return;
+      if (((read<uint32_t>(s.dxbc, at) >> 4) & 0xf) == 5 && (read<uint32_t>(s.dxbc, at) & 0xf) == 1)
+        return; // shader model 5.1 declares ranges differently; Unity's D3D11 shaders are 5.0 at most
+      const size_t end = at + std::min<size_t>(size, size_t(read<uint32_t>(s.dxbc, at + 4)) * 4);
+      const auto stage = s.vertex ? dxvk::DxbcProgramType::VertexShader : dxvk::DxbcProgramType::PixelShader;
+      for (size_t i = at + 8; i + 4 <= end;) {
+        const uint32_t token = read<uint32_t>(s.dxbc, i), opcode = token & 0x7ff;
+        uint32_t length = (token >> 24) & 0x7f;
+        if (opcode == 0x35) // customdata: the length follows
+          length = read<uint32_t>(s.dxbc, i + 4);
+        if (!length)
+          break;
+        // 0x59 dcl_constantbuffer, 0x58 dcl_resource, 0x5a dcl_sampler: the
+        // operand's first index (an immediate) is the register.
+        if (opcode == 0x59 || opcode == 0x58 || opcode == 0x5a) {
+          size_t o = i + 4;
+          // Extended tokens, each flagging (bit 31) whether another follows.
+          for (bool more = token & 0x80000000u; more && o + 4 <= end; o += 4)
+            more = read<uint32_t>(s.dxbc, o) & 0x80000000u;
+          const uint32_t operand = read<uint32_t>(s.dxbc, o);
+          o += 4;
+          for (bool more = operand & 0x80000000u; more && o + 4 <= end; o += 4)
+            more = read<uint32_t>(s.dxbc, o) & 0x80000000u;
+          ShaderResource res;
+          res.bindPoint = read<uint32_t>(s.dxbc, o);
+          if (opcode == 0x59) {
+            res.type = 0;
+            res.name = "cb" + std::to_string(res.bindPoint);
+            res.binding = dxvk::computeConstantBufferBinding(stage, res.bindPoint);
+          } else if (opcode == 0x58) {
+            res.type = 2;
+            res.name = "t" + std::to_string(res.bindPoint);
+            res.binding = dxvk::computeSrvBinding(stage, res.bindPoint);
+          } else {
+            res.type = 3;
+            res.name = "s" + std::to_string(res.bindPoint);
+            res.binding = dxvk::computeSamplerBinding(stage, res.bindPoint);
+          }
+          s.resources.push_back(std::move(res));
+        }
+        i += size_t(length) * 4;
+      }
+    }
     // ISGN: semantic, index and register of each input.
     void parseInputs(Shader &s) {
       size_t at = 0, size = 0;
@@ -98,6 +149,8 @@ namespace urtx {
       shader->hash = hash;
       shader->dxbc.assign(b, b + bytes);
       parseResources(*shader);
+      if (shader->resources.empty())
+        parseDeclarations(*shader);
       if (vertex)
         parseInputs(*shader);
     }

@@ -39,6 +39,7 @@ namespace UnityRemix
         private static readonly List<Renderer> renderers = new List<Renderer>();
         private static int lastReportFrame = -100000;
         private static int lastDrawCount = -1;
+        private static int reports;
 
         /// <summary>Hooks Unity's D3D11 device, before the game creates the shaders it passes through.</summary>
         public static void Install(ManualLogSource log)
@@ -141,8 +142,9 @@ namespace UnityRemix
             var text = new StringBuilder(1 << 16);
             UnityRTXHostPass_Report(text, text.Capacity);
             var report = text.ToString();
+            // The first reports always (diagnostics), then only when the draws change.
             int draws = report.Split('\n').Length;
-            if (draws == lastDrawCount && frame > 600)
+            if (++reports > 5 && draws == lastDrawCount)
                 return;
             lastDrawCount = draws;
             logger?.LogInfo($"[ShaderPassThrough] {renderers.Count} renderers passed through; capture:\n{report}");

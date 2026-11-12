@@ -31,6 +31,8 @@ namespace urtx {
   } // namespace
 
   void beginCapture(uint32_t tag) {
+    ++counters().begins;
+    repatchContexts();
     std::lock_guard l(lock());
     if (!g_capturing)
       g_draws.clear();
@@ -38,6 +40,7 @@ namespace urtx {
     g_tag = tag;
   }
   void endCapture() {
+    ++counters().ends;
     std::lock_guard l(lock());
     if (!g_capturing)
       return;
@@ -152,8 +155,15 @@ namespace urtx {
     std::lock_guard l(lock());
     std::string out;
     char line[512];
-    std::snprintf(line, sizeof(line), "%llu captures; the last: %zu draws\n", (unsigned long long)g_captures,
-                  g_last.size());
+    const auto &c = counters();
+    std::snprintf(line, sizeof(line),
+                  "%llu captures; the last: %zu draws | events: %llu begins, %llu ends | draws in the window: %llu "
+                  "immediate, %llu other contexts | all draws: %llu immediate, %llu other contexts | hooked calls %llu, draw "
+                  "rehooks %llu\n",
+                  (unsigned long long)g_captures, g_last.size(), (unsigned long long)c.begins,
+                  (unsigned long long)c.ends, (unsigned long long)c.windowImmediate, (unsigned long long)c.windowOther,
+                  (unsigned long long)c.drawsImmediate, (unsigned long long)c.drawsOther,
+                  (unsigned long long)stateCalls(), (unsigned long long)rehooks());
     out += line;
     for (const auto &d : g_last) {
       std::snprintf(line, sizeof(line),

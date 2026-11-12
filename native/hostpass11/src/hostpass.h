@@ -5,7 +5,7 @@
 // a tag per draw, end), and the hooks record the draws inside it with the
 // state they were drawn with. Shaders keep their DXBC (from creation) and
 // compile to SPIR-V with the standalone dxbc on first capture.
-#include <d3d11.h>
+#include <d3d11_4.h>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -126,7 +126,16 @@ namespace urtx {
   // updates), read back on demand for vertex and index buffers.
   bool bufferData(ID3D11DeviceContext *context, ID3D11Buffer *buffer, std::vector<uint8_t> &out);
 
+  // Diagnostics: plugin events and draws the hooks saw.
+  struct Counters {
+    uint64_t begins = 0, ends = 0, windowImmediate = 0, windowOther = 0, drawsImmediate = 0, drawsOther = 0;
+  };
+  Counters &counters();
+  uint64_t stateCalls(); // every call through a hooked context slot
+  uint64_t rehooks();    // draw slots d3d11 rewrote and the hooks took back
+
   bool install(ID3D11Device *device);
+  void repatchContexts(); // render thread: patch the context's current vtable if new
   void log(const char *format, ...);
 
 } // namespace urtx
