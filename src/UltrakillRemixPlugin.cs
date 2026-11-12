@@ -121,6 +121,8 @@ namespace UnityRemix
             RemixWatchdog.Start(LogSource);
             RemixProfiler.Logger = LogSource;
             PrimitiveDiagnostics.Logger = LogSource;
+            // Before the game creates the shaders that pass through (they are created on first use).
+            ShaderPassThrough.Install(LogSource);
             // Awake, not Start: some games destroy the plugin's GameObject before it starts.
             if (!beforeRenderHooked)
             {
@@ -867,6 +869,7 @@ namespace UnityRemix
                 }
                 RemixProfiler.AddDetail(RemixProfiler.Detail.Trails, RemixProfiler.ElapsedMs(trailsStart));
                 Games.GameProfiles.CaptureFrame(materialManager, nextState, frameCount);
+                ShaderPassThrough.Capture(cameraHandler?.CurrentCamera ?? Camera.main, frameCount);
                 dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
                 
                 // Update scene scan visibility with the camera position resolved by CaptureStaticMeshes

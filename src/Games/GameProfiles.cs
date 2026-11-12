@@ -127,6 +127,11 @@ namespace UnityRemix.Games
             return body;
         }
 
+        public static void GetPassThroughRenderers(Camera worldCamera, System.Collections.Generic.List<Renderer> renderers)
+        {
+            Run(nameof(GetPassThroughRenderers), p => p.GetPassThroughRenderers(worldCamera, renderers));
+        }
+
         public static bool OpensViewPortal(Material material)
         {
             bool opens = false;

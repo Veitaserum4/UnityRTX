@@ -4,8 +4,8 @@
 # it was written against (see README.md). The same arrangement as SourcePT's
 # deps/dxso (DXVK's D3D9 compiler), whose util, SPIR-V builder and shims it
 # shares.
-project('dxbc', 'cpp', default_options: ['cpp_std=c++17', 'warning_level=0'])
 dxbc_inc = include_directories('src', 'include')
+vulkan_inc = include_directories(get_option('vulkan_include'))
 dxbc_src = files(
   'src/dxbc/dxbc_analysis.cpp', 'src/dxbc/dxbc_chunk_isgn.cpp', 'src/dxbc/dxbc_chunk_shex.cpp',
   'src/dxbc/dxbc_common.cpp', 'src/dxbc/dxbc_compiler.cpp', 'src/dxbc/dxbc_decoder.cpp', 'src/dxbc/dxbc_defs.cpp',
@@ -14,7 +14,6 @@ dxbc_src = files(
   'src/spirv/spirv_code_buffer.cpp', 'src/spirv/spirv_compression.cpp', 'src/spirv/spirv_module.cpp',
   'src/util/log/log.cpp', 'src/util/util_string.cpp', 'src/util/util_env.cpp', 'src/util/dxbc_standalone.cpp',
 )
-vulkan_inc = include_directories(get_option('vulkan_include'))
 dxbc_lib = static_library('dxbc', dxbc_src,
   include_directories: [dxbc_inc, vulkan_inc],
   cpp_args: ['-w', '-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS'],

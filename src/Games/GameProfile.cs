@@ -109,6 +109,10 @@ namespace UnityRemix.Games
         // open: at their back, for rays other than the camera's).
         public virtual bool OpensViewPortal(Material material) => false;
 
+        // Renderers whose own shaders pass through to OpenRemix as host passes (ShaderPassThrough):
+        // drawn by Unity from the game camera's view each frame and replayed over the path-traced frame.
+        public virtual void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers) { }
+
         // The chromatic aberration of what such a material shows (its red right and blue left of
         // green), a fraction of the screen's width; 0 none. Main thread.
         public virtual float ViewChromaticAberration(Material material) => 0f;

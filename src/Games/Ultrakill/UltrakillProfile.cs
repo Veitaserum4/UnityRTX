@@ -73,6 +73,30 @@ namespace UnityRemix.Games.Ultrakill
         // fakeCamStart, within its camera's far plane and nearer it than the player's start.
         public override bool OpensViewPortal(Material material) => material.IsKeywordEnabled("LIMBO_WALLS");
 
+        // The Limbo walls (LIMBO_WALLS): their shader passes through (its sky texture, _LimboSky,
+        // becomes the path-traced frame), rescanned every 120 frames.
+        private readonly List<Renderer> limboWalls = new List<Renderer>();
+        private int limboWallsFrame = -1000;
+
+        public override void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers)
+        {
+            if (Time.frameCount - limboWallsFrame >= 120)
+            {
+                limboWallsFrame = Time.frameCount;
+                limboWalls.Clear();
+                foreach (var r in UnityEngine.Object.FindObjectsOfType<MeshRenderer>())
+                    foreach (var m in r.sharedMaterials)
+                        if (m != null && m.IsKeywordEnabled("LIMBO_WALLS"))
+                        {
+                            limboWalls.Add(r);
+                            break;
+                        }
+            }
+            foreach (var r in limboWalls)
+                if (r != null)
+                    renderers.Add(r);
+        }
+
         // LIMBO_WALLS samples the sky's red at +_ChromaticAberration / _LimboSkyWidth and its blue at
         // minus that, in screen UV: the sky is rendered at the screen's width over the skybox's
         // downscaleFactor (2), so the shift is _ChromaticAberration x 2 screen pixels.
