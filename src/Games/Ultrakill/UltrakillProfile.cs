@@ -80,6 +80,15 @@ namespace UnityRemix.Games.Ultrakill
 
         public override bool UsesShaderPassThrough => true;
 
+        // _LimboSky: the material's, else the global the LimboSkybox camera sets.
+        public override Texture PassThroughFrameTexture(Material material)
+        {
+            Texture sky = null;
+            if (material != null && material.HasProperty("_LimboSky"))
+                sky = material.GetTexture("_LimboSky");
+            return sky != null ? sky : Shader.GetGlobalTexture("_LimboSky");
+        }
+
         public override void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers)
         {
             if (Time.frameCount - limboWallsFrame >= 120)
@@ -105,6 +114,9 @@ namespace UnityRemix.Games.Ultrakill
         public override float ViewChromaticAberration(Material material)
         {
             if (!material.IsKeywordEnabled("LIMBO_WALLS") || !material.HasProperty("_ChromaticAberration"))
+                return 0f;
+            // Replayed with its own shader (ShaderPassThrough), which shifts the channels itself.
+            if (ShaderPassThrough.Installed)
                 return 0f;
             // LimboSkybox.downscaleFactor (2 in the game's levels), read from the skybox the view
             // portal found (GetRayPortalView).

@@ -457,6 +457,7 @@ namespace UnityRemix
                         hwndOverride = IntPtr.Zero
                     };
                     
+                    ShaderPassThrough.Submit();
                     renderPhaseSw.Restart();
                     var result = presentFunc(ref presentInfo);
                     presentMs = renderPhaseSw.Elapsed.TotalMilliseconds;

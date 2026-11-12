@@ -134,6 +134,15 @@ namespace urtx {
   uint64_t stateCalls(); // every call through a hooked context slot
   uint64_t rehooks();    // draw slots d3d11 rewrote and the hooks took back
 
+  // Replay (replay.cpp): the last capture as OpenRemix host passes.
+  bool bindRemix(HMODULE remix);
+  void setFrameTexture(void *resource);                     // the texture the frame replaces
+  void setProjection(float p22, float p23, bool reversedZ); // the capture camera's GPU projection
+  void setTexture(void *resource, uint32_t width, uint32_t height, uint32_t vkFormat, const void *rgba8);
+  int missingTextures(void **resources, int *sizes, int max); // sampled, neither the frame nor uploaded
+  int submit(); // the presenting thread, before each present: passes submitted
+  std::string submitReport();
+
   bool install(ID3D11Device *device);
   void repatchContexts(); // render thread: patch the context's current vtable if new
   void log(const char *format, ...);

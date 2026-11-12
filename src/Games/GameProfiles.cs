@@ -132,6 +132,13 @@ namespace UnityRemix.Games
             Run(nameof(GetPassThroughRenderers), p => p.GetPassThroughRenderers(worldCamera, renderers));
         }
 
+        public static Texture PassThroughFrameTexture(Material material)
+        {
+            Texture texture = null;
+            Run(nameof(PassThroughFrameTexture), p => texture = p.PassThroughFrameTexture(material));
+            return texture;
+        }
+
         public static bool OpensViewPortal(Material material)
         {
             bool opens = false;

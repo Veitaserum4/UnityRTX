@@ -117,6 +117,10 @@ namespace UnityRemix.Games
         // Unity's graphics jobs off (ShaderPassThrough.RequireImmediateRendering).
         public virtual bool UsesShaderPassThrough => false;
 
+        // The texture a pass-through material samples that the path-traced frame stands in for
+        // (its screen-space view of the scene); null: none. Main thread.
+        public virtual Texture PassThroughFrameTexture(Material material) => null;
+
         // The chromatic aberration of what such a material shows (its red right and blue left of
         // green), a fraction of the screen's width; 0 none. Main thread.
         public virtual float ViewChromaticAberration(Material material) => 0f;
