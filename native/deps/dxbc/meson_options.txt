@@ -1,0 +1,1 @@
+option('vulkan_include', type: 'string', value: 'C:/Users/Jacob/Desktop/UnityRTX/OpenRemix/include/vulkan/include', description: 'Vulkan headers (OpenRemix ships them)')
