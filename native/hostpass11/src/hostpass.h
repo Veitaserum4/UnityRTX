@@ -93,6 +93,7 @@ namespace urtx {
   void beginCapture(uint32_t tag);
   void endCapture();
   bool capturing();
+  void clearCapture(); // nothing to replay (none of the marked renderers in view)
   void recordDraw(ID3D11DeviceContext *context, uint32_t indexCount, uint32_t startIndex, int32_t baseVertex,
                   uint32_t vertexCount, uint32_t startVertex, bool indexed);
   // The last finished capture's draws (copied out under the lock).

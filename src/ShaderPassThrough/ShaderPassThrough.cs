@@ -33,6 +33,7 @@ namespace UnityRemix
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetTexture(IntPtr resource, int width, int height, int vkFormat, IntPtr rgba8);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_MissingTextures([Out] IntPtr[] resources, [Out] int[] sizes, int max);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Submit();
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_ClearCapture();
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         private delegate void GetDeviceD(IntPtr self, out IntPtr device);
@@ -47,6 +48,13 @@ namespace UnityRemix
         private static int lastReportFrame = -100000;
         private static int lastDrawCount = -1;
         private static int reports;
+        private static readonly Plane[] frustum = new Plane[6];
+        private static bool captureCleared;
+        private static Texture frameTexture;
+        private static IntPtr frameTexturePtr;
+        // Main-thread cost of Capture, for the report.
+        private static readonly System.Diagnostics.Stopwatch captureTime = new System.Diagnostics.Stopwatch();
+        private static int capturedFrames, culledFrames;
         private static bool bound, bindFailed;
         // Textures sent to the replay (by native pointer), and those no texture was found for.
         private static readonly HashSet<IntPtr> sentTextures = new HashSet<IntPtr>();
@@ -146,10 +154,40 @@ namespace UnityRemix
         {
             if (!installed || main == null)
                 return;
+            captureTime.Start();
+            try { CaptureVisible(main, frame); }
+            finally { captureTime.Stop(); }
+            if (frame - lastReportFrame >= 600)
+                Report(frame);
+        }
+
+        // The profile's pass-through renderers the game camera sees, drawn through the capture
+        // window; none in view: nothing is drawn, and the replay submits nothing.
+        private static void CaptureVisible(Camera main, int frame)
+        {
             renderers.Clear();
             Games.GameProfiles.GetPassThroughRenderers(main, renderers);
+            GeometryUtility.CalculateFrustumPlanes(main, frustum);
+            int kept = 0;
+            for (int i = 0; i < renderers.Count; i++)
+            {
+                var r = renderers[i];
+                if (r != null && r.enabled && r.gameObject.activeInHierarchy && GeometryUtility.TestPlanesAABB(frustum, r.bounds))
+                    renderers[kept++] = r;
+            }
+            renderers.RemoveRange(kept, renderers.Count - kept);
             if (renderers.Count == 0)
+            {
+                ++culledFrames;
+                if (!captureCleared)
+                {
+                    UnityRTXHostPass_ClearCapture();
+                    captureCleared = true;
+                }
                 return;
+            }
+            captureCleared = false;
+            ++capturedFrames;
             EnsureHelper(main);
             helper.CopyFrom(main);
             helper.enabled = false;
@@ -184,9 +222,6 @@ namespace UnityRemix
             }
             if (bound)
                 PrepareReplay();
-
-            if (frame - lastReportFrame >= 600)
-                Report(frame);
         }
 
         /// <summary>
@@ -203,8 +238,14 @@ namespace UnityRemix
             for (int i = 0; i < renderers.Count && material == null; i++)
                 if (renderers[i] != null)
                     material = renderers[i].sharedMaterial;
+            // GetNativeTexturePtr waits for Unity's render thread: only when the texture changes.
             var frame = Games.GameProfiles.PassThroughFrameTexture(material);
-            UnityRTXHostPass_SetFrameTexture(frame != null ? frame.GetNativeTexturePtr() : IntPtr.Zero);
+            if (frame != frameTexture)
+            {
+                frameTexture = frame;
+                frameTexturePtr = frame != null ? frame.GetNativeTexturePtr() : IntPtr.Zero;
+            }
+            UnityRTXHostPass_SetFrameTexture(frameTexturePtr);
 
             int count = UnityRTXHostPass_MissingTextures(missing, missingSizes, missing.Length);
             for (int i = 0; i < count; i++)
@@ -343,7 +384,11 @@ namespace UnityRemix
             if (++reports > 5 && draws == lastDrawCount)
                 return;
             lastDrawCount = draws;
-            logger?.LogInfo($"[ShaderPassThrough] {renderers.Count} renderers passed through; capture:\n{report}");
+            int frames = capturedFrames + culledFrames;
+            logger?.LogInfo($"[ShaderPassThrough] {renderers.Count} renderers in view; capture {captureTime.Elapsed.TotalMilliseconds / Math.Max(1, frames):F2} ms a frame " +
+                            $"over {frames} frames ({culledFrames} with none in view):\n{report}");
+            captureTime.Reset();
+            capturedFrames = culledFrames = 0;
         }
     }
 }

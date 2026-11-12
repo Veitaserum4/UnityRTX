@@ -51,6 +51,7 @@ __declspec(dllexport) int UnityRTXHostPass_MissingTextures(void **resources, int
   return resources && sizes && max > 0 ? urtx::missingTextures(resources, sizes, max) : 0;
 }
 __declspec(dllexport) int UnityRTXHostPass_Submit() { return urtx::submit(); }
+__declspec(dllexport) void UnityRTXHostPass_ClearCapture() { urtx::clearCapture(); }
 
 __declspec(dllexport) int UnityRTXHostPass_Report(char *buffer, int bytes) {
   const std::string text = urtx::report() + urtx::submitReport() + "\n";

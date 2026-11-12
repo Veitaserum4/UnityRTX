@@ -50,6 +50,10 @@ namespace urtx {
     ++g_captures;
   }
   bool capturing() { return g_capturing; }
+  void clearCapture() {
+    std::lock_guard l(lock());
+    g_last.clear();
+  }
 
   void recordDraw(ID3D11DeviceContext *context, uint32_t indexCount, uint32_t startIndex, int32_t baseVertex,
                   uint32_t vertexCount, uint32_t startVertex, bool indexed) {

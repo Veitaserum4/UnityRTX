@@ -58,7 +58,11 @@ namespace UnityRemix.Games.Ultrakill
         public override void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) =>
             bloodStains.Capture(Logger, materials, state);
 
-        public override void OnSceneLoaded() => bloodStains.Reset();
+        public override void OnSceneLoaded()
+        {
+            bloodStains.Reset();
+            limboWallsFrame = -100000; // rescan the Limbo walls
+        }
 
         // Unity's built-in Default-Material appears only on helper shapes the game doesn't show:
         // crusher base boxes, skull altar placeholders, invisible walls.
@@ -74,7 +78,8 @@ namespace UnityRemix.Games.Ultrakill
         public override bool OpensViewPortal(Material material) => material.IsKeywordEnabled("LIMBO_WALLS");
 
         // The Limbo walls (LIMBO_WALLS): their shader passes through (its sky texture, _LimboSky,
-        // becomes the path-traced frame), rescanned every 120 frames.
+        // becomes the path-traced frame), scanned on scene load and every 600 frames (a scan
+        // walks every MeshRenderer in the scene).
         private readonly List<Renderer> limboWalls = new List<Renderer>();
         private int limboWallsFrame = -1000;
 
@@ -91,7 +96,7 @@ namespace UnityRemix.Games.Ultrakill
 
         public override void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers)
         {
-            if (Time.frameCount - limboWallsFrame >= 120)
+            if (Time.frameCount - limboWallsFrame >= 600)
             {
                 limboWallsFrame = Time.frameCount;
                 limboWalls.Clear();
