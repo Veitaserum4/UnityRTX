@@ -581,8 +581,10 @@ namespace UnityRemix
             
             try
             {
-                // Convert Unity color and intensity to Remix radiance
-                Color lightColor = light.color * light.intensity * configLightIntensityMultiplier.Value;
+                // Remix radiance is linear; a Unity light's colour is sRGB-encoded (Unity linearizes
+                // it to light). Passed as is, coloured lights wash out (orange (1, 0.5, 0) is
+                // (1, 0.21, 0) linear). Intensity stays a linear scale: white lights are unchanged.
+                Color lightColor = light.color.linear * light.intensity * configLightIntensityMultiplier.Value;
                 var radiance = new RemixAPI.remixapi_Float3D(lightColor.r, lightColor.g, lightColor.b);
                 
                 // Create base light info
