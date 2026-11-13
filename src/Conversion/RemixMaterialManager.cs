@@ -529,9 +529,10 @@ namespace UnityRemix
                 alphaMode = alphaCutoff > 0f ? AlphaMode.Cutout : AlphaMode.Opaque,
                 alphaCutoff = alphaCutoff,
                 paintFinish = paintFinish,
+                rayPortalIndex = -1, // 0 would open portal 0 (e.g. Limbo's TV view)
                 wrapModeU = 1, // MDL Repeat
                 wrapModeV = 1,
-                filterMode = 1,
+                filterMode = (byte)(albedo != null && albedo.filterMode == FilterMode.Point ? 0 : 1),
                 mainTexST = new Vector4(1, 1, 0, 0),
                 roughness = roughness,
                 metallic = metallic,
