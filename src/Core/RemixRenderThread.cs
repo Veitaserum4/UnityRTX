@@ -457,6 +457,7 @@ namespace UnityRemix
                         hwndOverride = IntPtr.Zero
                     };
                     
+                    ShaderPassThrough.SetStainView(in presentedCamera);
                     ShaderPassThrough.Submit();
                     renderPhaseSw.Restart();
                     var result = presentFunc(ref presentInfo);
@@ -530,6 +531,9 @@ namespace UnityRemix
         /// <summary>
         /// Render game geometry from captured frame state
         /// </summary>
+        // The camera of the frame being rendered (for host passes drawn over it).
+        private RemixFrameCapture.CameraData presentedCamera;
+
         private bool RenderGameGeometry()
         {
             // Get frame state atomically
@@ -541,6 +545,7 @@ namespace UnityRemix
                 RemixFrameCapture.RenderingFrame = state.frameCount;
             }
             
+            presentedCamera = state.camera;
             // Setup camera - CRITICAL for rendering!
             if (state.camera.valid)
             {

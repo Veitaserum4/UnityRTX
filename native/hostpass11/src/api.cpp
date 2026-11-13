@@ -8,8 +8,10 @@
 //   UnityRTXHostPass_SetFrameTexture / SetProjection / SetTexture (main thread)
 //     name the texture the frame replaces, the capture camera's projection and
 //     the other textures' pixels;
+//   UnityRTXHostPass_SetStains (main thread) / SetStainView (the presenting
+//     thread) give the blood stains drawn over the frame and its camera;
 //   UnityRTXHostPass_Submit() (the presenting thread, before each present)
-//     submits the last capture as host passes.
+//     submits the stains and the last capture as host passes.
 #include "hostpass.h"
 #include <cstring>
 
@@ -50,6 +52,10 @@ __declspec(dllexport) void UnityRTXHostPass_SetTexture(void *resource, int width
 __declspec(dllexport) int UnityRTXHostPass_MissingTextures(void **resources, int *sizes, int max) {
   return resources && sizes && max > 0 ? urtx::missingTextures(resources, sizes, max) : 0;
 }
+__declspec(dllexport) void UnityRTXHostPass_SetStains(const float *vertices, int quads, void *atlas) {
+  urtx::setStains(vertices, vertices && quads > 0 ? size_t(quads) : 0, atlas);
+}
+__declspec(dllexport) void UnityRTXHostPass_SetStainView(const float *rows) { urtx::setStainView(rows); }
 __declspec(dllexport) int UnityRTXHostPass_Submit() { return urtx::submit(); }
 __declspec(dllexport) void UnityRTXHostPass_ClearCapture() { urtx::clearCapture(); }
 

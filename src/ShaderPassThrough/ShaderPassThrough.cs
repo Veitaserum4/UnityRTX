@@ -32,6 +32,8 @@ namespace UnityRemix
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetProjection(float p22, float p23, int reversedZ);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetTexture(IntPtr resource, int width, int height, int vkFormat, IntPtr rgba8);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_MissingTextures([Out] IntPtr[] resources, [Out] int[] sizes, int max);
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetStains(float[] vertices, int quads, IntPtr atlas);
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetStainView(float[] rows);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Submit();
         [DllImport(Dll)] private static extern void UnityRTXHostPass_ClearCapture();
 
@@ -56,6 +58,10 @@ namespace UnityRemix
         private static readonly System.Diagnostics.Stopwatch captureTime = new System.Diagnostics.Stopwatch();
         private static int capturedFrames, culledFrames;
         private static bool bound, bindFailed;
+        private static bool stainsSet;
+        private static Texture stainAtlas;
+        private static IntPtr stainAtlasPtr;
+        private static readonly float[] stainView = new float[16];
         // Textures sent to the replay (by native pointer), and those no texture was found for.
         private static readonly HashSet<IntPtr> sentTextures = new HashSet<IntPtr>();
         private static readonly HashSet<IntPtr> unmatchedTextures = new HashSet<IntPtr>();
@@ -214,14 +220,88 @@ namespace UnityRemix
             commands.IssuePluginEvent(renderEvent, EndEvent);
             helper.Render();
 
-            if (!bound && !bindFailed && RemixAPI.RemixDllHandle != IntPtr.Zero)
+            if (Bind())
+                PrepareReplay();
+        }
+
+        // remix.dll's host passes, once it is loaded.
+        private static bool Bind()
+        {
+            if (!bound && !bindFailed && installed && RemixAPI.RemixDllHandle != IntPtr.Zero)
             {
                 bound = UnityRTXHostPass_BindRemix(RemixAPI.RemixDllHandle) != 0;
                 bindFailed = !bound;
                 logger?.LogInfo($"[ShaderPassThrough] replay {(bound ? "bound to remix.dll's host passes" : "unavailable: remix.dll has no host passes")}");
             }
-            if (bound)
-                PrepareReplay();
+            return bound;
+        }
+
+        /// <summary>
+        /// Main thread: whether blood stains can be drawn over the frame (SetStains), as the game
+        /// composites them, instead of as geometry.
+        /// </summary>
+        public static bool CanDrawStains => Bind();
+
+        /// <summary>
+        /// Main thread, when they change: the stains drawn over the frame, quads of (x, y, z, u, v)
+        /// vertices (world space, atlas coordinates as Unity samples it) over <paramref name="atlas"/>,
+        /// whose pixels are sent once. Null or no quads: none.
+        /// </summary>
+        public static void SetStains(float[] vertices, int quads, Texture atlas)
+        {
+            if (!Bind())
+                return;
+            IntPtr resource = IntPtr.Zero;
+            if (atlas != null && quads > 0 && vertices != null)
+            {
+                // GetNativeTexturePtr waits for Unity's render thread: only when the atlas changes.
+                if (atlas != stainAtlas)
+                {
+                    stainAtlas = atlas;
+                    stainAtlasPtr = atlas.GetNativeTexturePtr();
+                }
+                resource = stainAtlasPtr;
+                if (resource != IntPtr.Zero && !sentTextures.Contains(resource) && SendTexture(resource, atlas))
+                    sentTextures.Add(resource);
+            }
+            bool any = resource != IntPtr.Zero;
+            if (!any && !stainsSet)
+                return;
+            UnityRTXHostPass_SetStains(any ? vertices : null, any ? quads : 0, resource);
+            stainsSet = any;
+        }
+
+        /// <summary>
+        /// The presenting thread, before Submit: the path-traced camera of the frame being
+        /// presented (as given to Remix), for the stains' view-projection.
+        /// </summary>
+        public static void SetStainView(in RemixFrameCapture.CameraData camera)
+        {
+            if (!bound || !stainsSet)
+                return;
+            if (!camera.valid)
+            {
+                UnityRTXHostPass_SetStainView(null);
+                return;
+            }
+            // D3D clip space: x right, y up, z 0 at the near plane and w at the far one, w the
+            // distance along the camera's axis.
+            float tanY = Mathf.Tan(camera.fov * 0.5f * Mathf.Deg2Rad);
+            float sx = 1f / (tanY * camera.aspect), sy = 1f / tanY;
+            float a = camera.farPlane / (camera.farPlane - camera.nearPlane), b = -camera.nearPlane * a;
+            Vector3 p = camera.position, r = camera.right, u = camera.up, f = camera.forward;
+            void Row(int i, Vector3 axis, float scale, float add)
+            {
+                stainView[i * 4 + 0] = axis.x * scale;
+                stainView[i * 4 + 1] = axis.y * scale;
+                stainView[i * 4 + 2] = axis.z * scale;
+                stainView[i * 4 + 3] = -Vector3.Dot(axis, p) * scale + add;
+            }
+            Row(0, r, sx, 0);
+            Row(1, u, sy, 0);
+            Row(2, f, a, b);
+            Row(3, f, 1, 0);
+            UnityRTXHostPass_SetStainView(stainView);
         }
 
         /// <summary>

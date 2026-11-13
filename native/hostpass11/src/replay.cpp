@@ -21,6 +21,8 @@
 #include "fill.frag.inc"
 #include "frame_depth.frag.inc"
 #include "fullscreen.vert.inc"
+#include "stain.frag.inc"
+#include "stain.vert.inc"
 #include "wall_mask.frag.inc"
 
 namespace urtx {
@@ -56,6 +58,18 @@ namespace urtx {
     bool g_depthFailed = false;
 
     std::string g_lastSubmit = "nothing submitted yet";
+
+    // Blood stains (setStains, main thread; setStainView, the presenting
+    // thread): quads of (x, y, z, u, v) vertices, the atlas they sample (a
+    // texture uploaded with setTexture) and the path-traced camera's
+    // view-projection rows for the frame being presented.
+    constexpr uint32_t kVkR32G32B32Sfloat = 106;
+    std::shared_ptr<const std::vector<float>> g_stainVertices;
+    void *g_stainAtlas = nullptr;
+    float g_stainView[16] = {};
+    bool g_stainViewSet = false;
+    remixapi_HostShaderHandleEXT g_stainVs = 0, g_stainFs = 0;
+    bool g_stainFailed = false;
 
     bool uploaded(void *resource) {
       std::lock_guard l(g_settingsLock);
@@ -322,6 +336,74 @@ namespace urtx {
       }
       return true;
     }
+    bool stainShaders() {
+      if (g_stainFailed)
+        return false;
+      if (g_stainVs && g_stainFs)
+        return true;
+      remixapi_HostShaderInfoEXT info{};
+      info.sType = REMIXAPI_STRUCT_TYPE_HOST_SHADER_INFO_EXT;
+      info.pushConstantBytes = 64;
+      info.stage = REMIXAPI_HOST_SHADER_VERTEX_EXT;
+      info.code = stain_vert;
+      info.codeBytes = sizeof(stain_vert);
+      const remixapi_HostShaderBindingEXT two[2] = {{0, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+                                                   {1, REMIXAPI_HOST_BINDING_SAMPLER_EXT}};
+      if (g_register(&info, &g_stainVs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_stainFailed = true;
+        log("registering the stain vertex shader failed");
+        return false;
+      }
+      info.stage = REMIXAPI_HOST_SHADER_FRAGMENT_EXT;
+      info.code = stain_frag;
+      info.codeBytes = sizeof(stain_frag);
+      info.bindings = two;
+      info.bindingCount = 2;
+      if (g_register(&info, &g_stainFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_stainFailed = true;
+        log("registering the stain fragment shader failed");
+        return false;
+      }
+      return true;
+    }
+
+    // The stains as one draw on the frame (a multiply blend), or none.
+    bool stainPass(const std::vector<float> &vertices, void *atlas, const float view[16], Pass &pass) {
+      const size_t quads = vertices.size() / 20;
+      if (!quads || !atlas || !stainShaders())
+        return false;
+      auto &info = pass.info;
+      info.kind = REMIXAPI_HOST_PASS_DRAW_EXT;
+      info.target = 0; // the frame
+      info.vertexShader = g_stainVs;
+      info.fragmentShader = g_stainFs;
+      pass.samplers.push_back({0, reinterpret_cast<remixapi_HostTargetHandleEXT>(atlas), 0, 1, 1});
+      pass.samplers.push_back({1, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
+      pass.vertexData.emplace_back(reinterpret_cast<const uint8_t *>(vertices.data()),
+                                   reinterpret_cast<const uint8_t *>(vertices.data() + quads * 20));
+      pass.vertexBindings.push_back({nullptr, uint32_t(quads * 20 * sizeof(float)), 5 * sizeof(float)});
+      pass.attributes.push_back({0, 0, kVkR32G32B32Sfloat, 0});
+      pass.attributes.push_back({1, 0, kVkR32G32Sfloat, 3 * sizeof(float)});
+      pass.indices.resize(quads * 6);
+      for (uint32_t q = 0; q < quads; ++q) {
+        const uint32_t v = q * 4;
+        const uint32_t quad[6] = {v, v + 1, v + 2, v, v + 2, v + 3};
+        std::memcpy(&pass.indices[size_t(q) * 6], quad, sizeof(quad));
+      }
+      info.topology = 0;
+      // frame * (1, 0, 0): VK_BLEND_FACTOR_DST_COLOR, ZERO; alpha kept.
+      info.blendEnable = 1;
+      info.srcColorBlend = 4;
+      info.dstColorBlend = 0;
+      info.colorBlendOp = 0;
+      info.srcAlphaBlend = 0;
+      info.dstAlphaBlend = 1;
+      info.alphaBlendOp = 0;
+      info.colorWriteMask = 0x7;
+      pass.push.assign(reinterpret_cast<const uint8_t *>(view), reinterpret_cast<const uint8_t *>(view) + 64);
+      return true;
+    }
+
     Pass fullScreen(remixapi_HostShaderHandleEXT fragment, remixapi_HostTargetHandleEXT target, uint32_t width,
                     uint32_t height, const void *push, size_t pushBytes) {
       Pass pass;
@@ -380,6 +462,18 @@ namespace urtx {
     g_pending[resource] = std::move(t);
   }
 
+  void setStains(const float *vertices, size_t quads, void *atlas) {
+    std::lock_guard l(g_settingsLock);
+    g_stainVertices = quads ? std::make_shared<const std::vector<float>>(vertices, vertices + quads * 20) : nullptr;
+    g_stainAtlas = atlas;
+  }
+  void setStainView(const float rows[16]) {
+    std::lock_guard l(g_settingsLock);
+    if (rows)
+      std::memcpy(g_stainView, rows, sizeof(g_stainView));
+    g_stainViewSet = rows != nullptr;
+  }
+
   int missingTextures(void **resources, int *sizes, int max) {
     const auto draws = lastCapture();
     std::lock_guard l(g_settingsLock);
@@ -407,8 +501,16 @@ namespace urtx {
     float projection[2];
     bool reversedZ;
     std::unordered_map<void *, PendingTexture> pending;
+    std::shared_ptr<const std::vector<float>> stainVertices;
+    void *stainAtlas = nullptr;
+    float stainView[16];
     {
       std::lock_guard l(g_settingsLock);
+      if (g_stainViewSet && g_stainVertices && g_stainAtlas && g_uploaded.count(g_stainAtlas)) {
+        stainVertices = g_stainVertices;
+        stainAtlas = g_stainAtlas;
+        std::memcpy(stainView, g_stainView, sizeof(stainView));
+      }
       frameTexture = g_frameTexture;
       projection[0] = g_projection[0];
       projection[1] = g_projection[1];
@@ -498,6 +600,15 @@ namespace urtx {
       if (!replayed)
         passes.clear(); // no draw made it: nothing to replay
     }
+    // Blood stains first: the replayed draws then sample a frame with them.
+    size_t stains = 0;
+    {
+      Pass pass;
+      if (stainVertices && stainPass(*stainVertices, stainAtlas, stainView, pass)) {
+        stains = stainVertices->size() / 20;
+        passes.insert(passes.begin(), std::move(pass));
+      }
+    }
     std::vector<remixapi_HostPassEXT> list;
     std::vector<uint32_t> flags;
     for (auto &p : passes) {
@@ -517,8 +628,9 @@ namespace urtx {
     const auto error = g_submit(&submission);
 
     char line[512];
-    std::snprintf(line, sizeof(line), "submitted %zu passes (%zu captured draws, error %d)%s%s", list.size(),
-                  draws.size(), int(error), skipped.empty() ? "" : "; first skipped: ", skipped.c_str());
+    std::snprintf(line, sizeof(line), "submitted %zu passes (%zu captured draws, %zu stains, error %d)%s%s",
+                  list.size(), draws.size(), stains, int(error), skipped.empty() ? "" : "; first skipped: ",
+                  skipped.c_str());
     std::string text = line;
     if (g_statistics) {
       remixapi_HostPassStatisticsEXT s{};

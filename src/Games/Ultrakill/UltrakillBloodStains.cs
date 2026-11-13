@@ -9,8 +9,15 @@ namespace UnityRemix.Games.Ultrakill
     /// ULTRAKILL draws blood stains on walls and floors from an offscreen CommandBuffer,
     /// which Remix never sees. With compute shaders off, BloodsplatterManager's CPU job
     /// (GenerateBloodMeshJob) combines every stain into totalStainMesh: one world-space
-    /// quad per stain. That mesh is drawn as one dynamic mesh, re-uploaded only when the
-    /// stains change.
+    /// quad per stain, lying on its surface.
+    ///
+    /// The game draws those quads into a mask (where the splatter atlas is opaque) and
+    /// composites it by keeping only the lit frame's red channel there, so overlapping
+    /// stains merge and the blood takes the scene's lighting. With host passes
+    /// (ShaderPassThrough.CanDrawStains) the stains are drawn the same way over the
+    /// path-traced frame, and only where they lie on the surface the frame shows: none
+    /// hanging past an edge or over what stands in front. Without them, the quads are
+    /// path-traced as a translucent dynamic mesh.
     /// </summary>
     internal sealed class UltrakillBloodStains
     {
@@ -34,6 +41,9 @@ namespace UnityRemix.Games.Ultrakill
         private Vector2[] uvs;
         private Color32[] colors;
         private int[] triangles;
+        // The host-pass stains: (x, y, z, u, v) per vertex, and whether any were sent.
+        private float[] stainVertices;
+        private bool stainsSent;
 
         public bool IsStainMaterial(Material material) =>
             material != null && (material == stainMaterial ||
@@ -45,6 +55,15 @@ namespace UnityRemix.Games.Ultrakill
             manager = null;
             vertices = null;
             capturedCount = capturedVerts = -1;
+            ClearHostStains();
+        }
+
+        private void ClearHostStains()
+        {
+            if (!stainsSent)
+                return;
+            ShaderPassThrough.SetStains(null, 0, null);
+            stainsSent = false;
         }
 
         public void Capture(ManualLogSource logger, RemixMaterialManager materials, RemixFrameCapture.FrameState state)
@@ -76,6 +95,26 @@ namespace UnityRemix.Games.Ultrakill
                 // Stains exist but the mesh is empty: ask for it.
                 if (count > 0)
                     Rebuild();
+                else
+                {
+                    ClearHostStains();
+                    capturedCount = capturedVerts = -1;
+                }
+                return;
+            }
+
+            if (ShaderPassThrough.CanDrawStains)
+            {
+                if (!stainsSent || count != capturedCount || mesh.vertexCount != capturedVerts)
+                {
+                    int quads = ExtractHost(mesh);
+                    var atlas = stainMaterial == null ? null
+                        : stainMaterial.HasProperty("_SplatterAtlas") ? stainMaterial.GetTexture("_SplatterAtlas") : stainMaterial.mainTexture;
+                    ShaderPassThrough.SetStains(stainVertices, quads, atlas);
+                    stainsSent = quads > 0 && atlas != null;
+                    capturedCount = count;
+                    capturedVerts = mesh.vertexCount;
+                }
                 return;
             }
 
@@ -150,6 +189,38 @@ namespace UnityRemix.Games.Ultrakill
                 }
             }
             logger.LogInfo($"[UltrakillBloodStains] BloodsplatterManager {(managerType != null ? "found" : "not found")}, compute shaders {(computeDisabled ? "disabled" : "left on")}");
+        }
+
+        // The host-pass stains: each quad where it lies, mapped to its atlas cell. Quads.
+        private int ExtractHost(Mesh mesh)
+        {
+            Vector3[] rawVerts = mesh.vertices;
+            Vector2[] rawUvs = mesh.uv;
+            if (rawVerts == null || rawVerts.Length < 4)
+                return 0;
+            int quadCount = rawVerts.Length / 4;
+            bool hasUvs = rawUvs != null && rawUvs.Length == rawVerts.Length;
+            int floats = quadCount * 4 * 5;
+            if (stainVertices == null || stainVertices.Length < floats)
+                stainVertices = new float[Mathf.NextPowerOfTwo(floats)];
+            for (int s = 0; s < quadCount; s++)
+            {
+                // _SplatterAtlas holds 5 splatters side by side: cell (index % 5), as the game's
+                // instanced shader picks it.
+                float uOffset = (s % 5) * 0.2f;
+                for (int k = 0; k < 4; k++)
+                {
+                    int v = s * 4 + k, o = v * 5;
+                    Vector3 p = rawVerts[v];
+                    Vector2 raw = hasUvs ? rawUvs[v] : new Vector2(k == 1 || k == 2 ? 1f : 0f, k >= 2 ? 1f : 0f);
+                    stainVertices[o] = p.x;
+                    stainVertices[o + 1] = p.y;
+                    stainVertices[o + 2] = p.z;
+                    stainVertices[o + 3] = uOffset + raw.x * 0.2f;
+                    stainVertices[o + 4] = raw.y;
+                }
+            }
+            return quadCount;
         }
 
         // One quad per stain: lifted off its surface, wound to face out, mapped to its atlas cell.
