@@ -370,33 +370,8 @@ namespace UnityRemix
             return path;
         }
 
-        // Diagnostics: every renderer under the game camera or the player's body, once each.
-        private readonly HashSet<int> loggedHeldRenderers = new HashSet<int>();
-        private void LogHeldRenderers(Camera mainCam)
-        {
-            if (mainCam == null || Time.frameCount % 120 != 0 || loggedHeldRenderers.Count > 600)
-                return;
-            foreach (var r in mainCam.GetComponentsInChildren<Renderer>(false))
-                LogHeldRenderer(r, "camera");
-            var player = mainCam.transform.root;
-            foreach (var r in player.GetComponentsInChildren<Renderer>(false))
-                if (IsPlayerBodyRenderer(r))
-                    LogHeldRenderer(r, "body");
-        }
-        private void LogHeldRenderer(Renderer r, string where)
-        {
-            if (r == null || !loggedHeldRenderers.Add(r.GetInstanceID()))
-                return;
-            string mesh = r is MeshRenderer ? (r.GetComponent<MeshFilter>()?.sharedMesh?.name ?? "none")
-                        : r is SkinnedMeshRenderer smr ? (smr.sharedMesh != null ? smr.sharedMesh.name : "none") : "-";
-            string mode = r is ParticleSystemRenderer psr ? $" mode {psr.renderMode}" + (psr.mesh != null ? $" mesh '{psr.mesh.name}'" : "") : "";
-            logger.LogInfo($"[Held] {where}: {r.GetType().Name} '{GetHierarchyPath(r.transform)}' layer {r.gameObject.layer} ({LayerMask.LayerToName(r.gameObject.layer)}), " +
-                           $"enabled {r.enabled}, mesh '{mesh}'{mode}, material '{(r.sharedMaterial != null ? r.sharedMaterial.name : "none")}', body {IsPlayerBodyRenderer(r)}");
-        }
-
         private void UpdateViewModelLayers(Camera mainCam, Camera viewModelCam)
         {
-            LogHeldRenderers(mainCam);
             viewModelLayers = viewModelCam != null && viewModelCam != mainCam
                 ? GameCameraMasks.Get(viewModelCam) & ~GameCameraMasks.Get(mainCam)
                 : 0;
@@ -411,23 +386,6 @@ namespace UnityRemix
                 if ((viewModelLayers & (1 << l)) != 0)
                     names.Add($"{l} {LayerMask.LayerToName(l)}");
             logger.LogInfo($"[ViewModel] layers only '{(viewModelCam != null ? viewModelCam.name : "none")}' draws: {(names.Count > 0 ? string.Join(", ", names) : "none")}");
-            // Diagnostics: what else is on them (particles are not marked view models yet).
-            if (viewModelLayers == 0)
-                return;
-            int listed = 0;
-            foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
-            {
-                if (r == null || (viewModelLayers & (1 << r.gameObject.layer)) == 0 || listed >= 60)
-                    continue;
-                if (r is ParticleSystemRenderer || r is TrailRenderer || r is LineRenderer)
-                {
-                    listed++;
-                    logger.LogInfo($"[ViewModel] {r.GetType().Name} '{GetHierarchyPath(r.transform)}' on layer {r.gameObject.layer}");
-                }
-            }
-            foreach (var c in UnityEngine.Object.FindObjectsOfType<Canvas>())
-                if (c != null && c.isRootCanvas && (viewModelLayers & (1 << c.gameObject.layer)) != 0 && listed++ < 60)
-                    logger.LogInfo($"[ViewModel] Canvas '{GetHierarchyPath(c.transform)}' ({c.renderMode}) on layer {c.gameObject.layer}");
         }
 
         // GameProfile.IsPlayerBody, asked once per renderer.
@@ -931,44 +889,6 @@ namespace UnityRemix
         private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
         // The player's body (GameProfile.IsPlayerBody, asked once per renderer): reflection-only.
         private readonly HashSet<int> playerBodySkinnedIds = new HashSet<int>();
-        // Debug toggles (F3): leave out the player's body, or the view-model skinned meshes.
-        public static bool DebugHidePlayerBody, DebugHideViewModelSkinned, DebugHideWeaponScreens, DebugHideScanner;
-        public static volatile bool DebugDumpRequested; // F10: DebugDump at the end of the next capture
-
-        // Diagnostics (F10): everything this frame submits within 8 m of the camera, with the
-        // Unity object behind it where its id resolves.
-        public void DebugDump(FrameState state, Camera cam)
-        {
-            if (!DebugDumpRequested || cam == null)
-                return;
-            DebugDumpRequested = false;
-            var names = new Dictionary<int, string>();
-            foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
-                if (r != null) names[r.GetInstanceID()] = r.GetType().Name + " " + GetHierarchyPath(r.transform);
-            foreach (var g in UnityEngine.Object.FindObjectsOfType<Graphic>())
-                if (g != null) names[g.GetInstanceID()] = g.GetType().Name + " " + GetHierarchyPath(g.transform);
-            foreach (var info in cachedSkinnedInfo.Values)
-                if (info != null && info.transform != null && !names.ContainsKey(info.hierarchyHash))
-                    names[info.hierarchyHash] = "Skinned " + GetHierarchyPath(info.transform);
-            Vector3 eye = cam.transform.position;
-            string Name(int id) => names.TryGetValue(id, out var n) ? n : $"id {id}";
-            int listed = 0;
-            logger.LogInfo($"[Dump] frame {Time.frameCount}: {state.instances.Count} instances, {state.skinned.Count} dynamic meshes; within 8 m of the camera:");
-            foreach (var i in state.instances)
-            {
-                var p = i.localToWorld.GetColumn(3);
-                float d = Vector3.Distance(eye, p);
-                if (d > 8f || listed++ > 200) continue;
-                logger.LogInfo($"[Dump]   instance {Name(i.rendererInstanceId)} mesh {i.meshId} flags 0x{i.categoryFlags:X} at {d:F2} m");
-            }
-            foreach (var s in state.skinned)
-            {
-                var p = s.localToWorld.GetColumn(3);
-                float d = Vector3.Distance(eye, p);
-                if (d > 8f || listed++ > 400) continue;
-                logger.LogInfo($"[Dump]   {s.source} {Name(s.meshId)} flags 0x{s.categoryFlags:X} at {d:F2} m, {(s.vertices != null ? s.vertices.Length : -1)} verts, material {s.materialId}");
-            }
-        }
         private readonly Dictionary<int, bool> playerBodyRenderers = new Dictionary<int, bool>();
         // Skinned id (CachedSkinnedRendererInfo.hierarchyHash) -> the renderer holding it; kept
         // across renderer cache refreshes so twins never swap ids, cleared on scene load.
@@ -1784,8 +1704,6 @@ namespace UnityRemix
                 }
                 if (playerBody)
                     categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY;
-                if (playerBody && DebugHidePlayerBody)
-                    continue;
                 
                 // Queue mesh for creation if not cached, not already queued, and not previously failed
                 bool needsQueue;
@@ -2622,8 +2540,6 @@ namespace UnityRemix
                 }
 
                 var bones = info.bones;
-                if (skinData != null && viewModel && frameCount % 300 == 0)
-                    DiagnoseSkinning(skinned, sharedMesh, skinData, bones);
                 if (skinData != null && bones != null && bones.Length > 0)
                 {
                     // Compute bone transforms for Remix GPU skinning using double-buffered array
@@ -2806,9 +2722,6 @@ namespace UnityRemix
                 if (validSkinnedIds.Contains(entry.meshId))
                 {
                     var submitted = entry;
-                    if ((DebugHidePlayerBody && playerBodySkinnedIds.Contains(entry.meshId)) ||
-                        (DebugHideViewModelSkinned && viewModelSkinnedIds.Contains(entry.meshId)))
-                        continue;
                     if (viewModelSkinnedIds.Contains(entry.meshId))
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
                     if (playerBodySkinnedIds.Contains(entry.meshId))
@@ -2953,8 +2866,7 @@ namespace UnityRemix
             return cam;
         }
 
-        // draw false: only marks the models (previewRendererIds) so no other capture draws them.
-        private void CaptureImageCameraScene(FrameState state, Camera cam, int frameCount, bool draw = true)
+        private void CaptureImageCameraScene(FrameState state, Camera cam, int frameCount)
         {
             int mask = GameCameraMasks.Get(cam);
             var camT = cam.transform;
@@ -2980,8 +2892,7 @@ namespace UnityRemix
                     Mathf.Abs(Vector3.Dot(d, right)) > halfW + ext || Mathf.Abs(Vector3.Dot(d, up)) > halfH + ext)
                     continue;
                 previewRendererIds.Add(r.GetInstanceID());
-                if (draw)
-                    CapturePreviewRenderer(state, r, frameCount);
+                CapturePreviewRenderer(state, r, frameCount);
             }
         }
 
@@ -3298,11 +3209,7 @@ namespace UnityRemix
                 var liveCam = FindImageCamera(liveImage, liveTexture);
                 if (liveCam == null)
                     return;
-                // A shop preview's models sit just in front of its image, at their true size:
-                // drawn where they are. A held weapon's display (ULTRAKILL's shotgun charge,
-                // the jackhammer's gauge) films models placed elsewhere near the gun: drawn
-                // where they are, they float in the view, so only the image's quad is drawn.
-                CaptureImageCameraScene(state, liveCam, frameCount, draw: !onViewModel);
+                CaptureImageCameraScene(state, liveCam, frameCount);
                 Color clear = liveCam.backgroundColor;
                 if (liveCam.clearFlags != CameraClearFlags.SolidColor || clear.a <= 0.001f)
                     return; // transparent: only its models show
@@ -3467,8 +3374,6 @@ namespace UnityRemix
                                $"texture {(shownTex != null ? $"'{shownTex.name}' ({shownTex.GetType().Name})" : "none")}");
             }
 
-            if (onViewModel && DebugHideWeaponScreens)
-                return;
             state.skinned.Add(new SkinnedMeshData
             {
                 source = DynamicSource.WorldUI,
@@ -5566,37 +5471,6 @@ namespace UnityRemix
         // Skins the data on the CPU as the renderer will on the GPU (bones relative to the
         // unscaled renderer transform, blendshapes at the current weights) and compares with
         // BakeMesh of the same pose. False also when the data cannot be compared.
-        // Diagnostics: the cached skinning against BakeMesh in the current pose, per bone.
-        private void DiagnoseSkinning(SkinnedMeshRenderer skinned, Mesh mesh, CachedSkinningData data, Transform[] bones)
-        {
-            bool ok = ValidateGpuSkinning(skinned, mesh, data, out float error, out float tolerance);
-            var sb = new System.Text.StringBuilder();
-            sb.Append($"[SkinCheck] '{mesh.name}' now: max error {error:G3} (tolerance {tolerance:G3}) {(ok ? "ok" : "MISMATCH")}; rootBone '{(skinned.rootBone != null ? skinned.rootBone.name : "none")}', bones:");
-            var tr = skinned.transform;
-            for (int b = 0; b < data.boneCount; b++)
-            {
-                var bone = bones != null && b < bones.Length ? bones[b] : null;
-                if (bone == null) { sb.Append($" [{b} null]"); continue; }
-                var local = tr.InverseTransformPoint(bone.position);
-                sb.Append($" [{b} {bone.name} at {local.x:F3},{local.y:F3},{local.z:F3} scale {bone.lossyScale.x:F2},{bone.lossyScale.y:F2},{bone.lossyScale.z:F2} active {bone.gameObject.activeInHierarchy}]");
-            }
-            // Vertices per bone (their largest weight).
-            var counts = new int[data.boneCount];
-            for (int v = 0; v < data.bindVertices.Length; v++)
-            {
-                int best = 0; float bw = -1;
-                for (int k = 0; k < data.bonesPerVertex; k++)
-                {
-                    float w = data.blendWeights[v * data.bonesPerVertex + k];
-                    if (w > bw) { bw = w; best = (int)data.blendIndices[v * data.bonesPerVertex + k]; }
-                }
-                if (best < counts.Length) counts[best]++;
-            }
-            sb.Append(" | vertices by bone:");
-            for (int b = 0; b < counts.Length; b++) sb.Append($" {b}:{counts[b]}");
-            logger.LogInfo(sb.ToString());
-        }
-
         private bool ValidateGpuSkinning(SkinnedMeshRenderer skinned, Mesh mesh, CachedSkinningData data, out float error, out float tolerance)
         {
             error = float.PositiveInfinity;

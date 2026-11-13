@@ -22,7 +22,7 @@ namespace UnityRemix
         private readonly ManualLogSource _log;
         private readonly UnityRemixPlugin _plugin;
         private bool _visible = false;
-        private bool _f3WasDown, _f6WasDown, _f7WasDown, _f8WasDown, _f9WasDown;
+        private bool _f3WasDown;
 
         private HUDSnapshot _snapshot;
 
@@ -246,23 +246,6 @@ namespace UnityRemix
             if (f3Down && !_f3WasDown)
                 _visible = !_visible;
             _f3WasDown = f3Down;
-            // Debug toggles (the HUD takes no mouse input): F6 the player's body, F7 the
-            // view-model skinned meshes.
-            bool f6Down = (GetAsyncKeyState(0x75) & 0x8000) != 0, f7Down = (GetAsyncKeyState(0x76) & 0x8000) != 0;
-            if (f6Down && !_f6WasDown)
-                RemixFrameCapture.DebugHidePlayerBody = !RemixFrameCapture.DebugHidePlayerBody;
-            if (f7Down && !_f7WasDown)
-                RemixFrameCapture.DebugHideViewModelSkinned = !RemixFrameCapture.DebugHideViewModelSkinned;
-            _f6WasDown = f6Down;
-            _f7WasDown = f7Down;
-            // F8 the weapon screens (UI on held weapons), F9 everything the scene scanner draws.
-            bool f8Down = (GetAsyncKeyState(0x77) & 0x8000) != 0, f9Down = (GetAsyncKeyState(0x78) & 0x8000) != 0;
-            if (f8Down && !_f8WasDown)
-                RemixFrameCapture.DebugHideWeaponScreens = !RemixFrameCapture.DebugHideWeaponScreens;
-            if (f9Down && !_f9WasDown)
-                RemixFrameCapture.DebugHideScanner = !RemixFrameCapture.DebugHideScanner;
-            _f8WasDown = f8Down;
-            _f9WasDown = f9Down;
 
             if (!_visible)
                 return;
@@ -307,9 +290,6 @@ namespace UnityRemix
         {
             RemixImGui.Text($"Scene: {snap.SceneName}");
             RemixImGui.Text($"Camera: {snap.CameraName}");
-            // Diagnostics: what draws the stray weapon parts.
-            RemixImGui.Text($"F6 player body: {(RemixFrameCapture.DebugHidePlayerBody ? "HIDDEN" : "shown")} | F7 held skinned meshes: {(RemixFrameCapture.DebugHideViewModelSkinned ? "HIDDEN" : "shown")}");
-            RemixImGui.Text($"F8 weapon screens: {(RemixFrameCapture.DebugHideWeaponScreens ? "HIDDEN" : "shown")} | F9 scanned scene: {(RemixFrameCapture.DebugHideScanner ? "HIDDEN" : "shown")}");
             RemixImGui.Spacing();
             RemixImGui.Text($"Static Meshes (cached):  {snap.StaticMeshCache}");
             RemixImGui.Text($"Skinned Meshes (active): {snap.SkinnedMeshHandles}");
