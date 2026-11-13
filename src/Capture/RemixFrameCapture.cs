@@ -774,6 +774,8 @@ namespace UnityRemix
             // GPU skinning: bind-pose data + weights cached per sharedMesh (null = BakeMesh fallback)
             public CachedSkinningData skinningData;
             public uint categoryFlags;
+            // Multiplicative paint (with a decal category): drawn blending DST_COLOR * ZERO.
+            public bool multiplyPaint;
             public Vector4 uvST;
             public int bakeFrame;
             // Optional: the vertices this entry's triangles use (triangles index into it).

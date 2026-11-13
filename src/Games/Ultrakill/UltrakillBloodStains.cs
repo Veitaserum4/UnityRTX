@@ -13,16 +13,28 @@ namespace UnityRemix.Games.Ultrakill
     ///
     /// The game draws those quads into a mask (where the splatter atlas is opaque) and
     /// composites it by keeping only the lit frame's red channel there, so overlapping
-    /// stains merge and the blood takes the scene's lighting. With host passes
-    /// (ShaderPassThrough.CanDrawStains) the stains are drawn the same way over the
-    /// path-traced frame, and only where they lie on the surface the frame shows: none
-    /// hanging past an edge or over what stands in front. Without them, the quads are
-    /// path-traced as a translucent dynamic mesh.
+    /// stains merge and the blood takes the scene's lighting.
+    ///
+    /// By default the quads are path-traced as OpenRemix multiplicative paint: a decal
+    /// instance blending DST_COLOR * ZERO with an atlas that is red where the game's is
+    /// opaque. Paint coats the surface just behind it (none where a quad hangs past an
+    /// edge) and every ray sees it, so the blood shows in reflections; its finish
+    /// (remixapi_MaterialInfoPaintFinishEXT) makes the surface under it glossy, as wet.
+    /// With Overlay set and host passes available (ShaderPassThrough.CanDrawStains), the
+    /// stains are instead drawn as the game composites them over the path-traced frame:
+    /// its exact look, at no tracing cost, but in no reflection.
     /// </summary>
     internal sealed class UltrakillBloodStains
     {
         private const int MeshId = 0x7B100D01;
         private const ulong MeshHash = 0x7B100D0000000001UL;
+        // The paint's roughness: wet blood.
+        private const float PaintRoughness = 0.12f;
+        // How far the paint lies above its surface (OpenRemix attaches paint within 5 cm).
+        private const float PaintLift = 0.01f;
+
+        /// <summary>Config: draw the stains over the frame as the game does (host passes) instead of path-traced.</summary>
+        public static BepInEx.Configuration.ConfigEntry<bool> Overlay;
 
         // Albedo color of the stain material: ULTRAKILL's stain shader colors the splatter
         // atlas itself, which Remix doesn't run.
@@ -44,6 +56,11 @@ namespace UnityRemix.Games.Ultrakill
         // The host-pass stains: (x, y, z, u, v) per vertex, and whether any were sent.
         private float[] stainVertices;
         private bool stainsSent;
+        private bool overlayActive;
+        // The paint's material: the atlas, red where the game's is opaque.
+        private Texture paintAtlas;
+        private Texture2D paintTexture;
+        private int paintMaterialId;
 
         public bool IsStainMaterial(Material material) =>
             material != null && (material == stainMaterial ||
@@ -103,7 +120,15 @@ namespace UnityRemix.Games.Ultrakill
                 return;
             }
 
-            if (ShaderPassThrough.CanDrawStains)
+            bool overlay = Overlay != null && Overlay.Value && ShaderPassThrough.CanDrawStains;
+            if (overlay != overlayActive)
+            {
+                overlayActive = overlay;
+                capturedCount = capturedVerts = -1;
+                vertices = null;
+                ClearHostStains();
+            }
+            if (overlay)
             {
                 if (!stainsSent || count != capturedCount || mesh.vertexCount != capturedVerts)
                 {
@@ -127,11 +152,9 @@ namespace UnityRemix.Games.Ultrakill
                 version++;
             }
 
-            // The scene scan may capture this material first (its fallback quad): the tint and
-            // blending come from UltrakillProfile.OverrideMaterial either way.
-            int materialId = stainMaterial != null ? stainMaterial.GetInstanceID() : MeshId;
-            if (stainMaterial != null)
-                materials.CaptureMaterialTextures(stainMaterial, materialId);
+            int materialId = PaintMaterial(logger, materials);
+            if (materialId == 0)
+                return;
 
             state.skinned.Add(new RemixFrameCapture.SkinnedMeshData
             {
@@ -145,8 +168,58 @@ namespace UnityRemix.Games.Ultrakill
                 colors = colors,
                 triangles = triangles,
                 localToWorld = Matrix4x4.identity,
-                bakeFrame = version
+                bakeFrame = version,
+                categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC,
+                multiplyPaint = true
             });
+        }
+
+        // The paint's material (once per atlas): red where the game's atlas is opaque
+        // (its stain shader's alpha == 1 test), transparent elsewhere; wet.
+        private int PaintMaterial(ManualLogSource logger, RemixMaterialManager materials)
+        {
+            var atlas = stainMaterial == null ? null
+                : stainMaterial.HasProperty("_SplatterAtlas") ? stainMaterial.GetTexture("_SplatterAtlas") : stainMaterial.mainTexture;
+            if (atlas == null)
+                return paintMaterialId;
+            if (atlas == paintAtlas)
+                return paintMaterialId;
+            paintAtlas = atlas;
+            var rt = RenderTexture.GetTemporary(atlas.width, atlas.height, 0, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+            var previous = RenderTexture.active;
+            try
+            {
+                Graphics.Blit(atlas, rt);
+                RenderTexture.active = rt;
+                var read = new Texture2D(atlas.width, atlas.height, TextureFormat.RGBA32, false, true);
+                read.ReadPixels(new Rect(0, 0, atlas.width, atlas.height), 0, 0, false);
+                var pixels = read.GetPixels32();
+                UnityEngine.Object.Destroy(read);
+                for (int i = 0; i < pixels.Length; i++)
+                    pixels[i] = pixels[i].a >= 254 ? new Color32(255, 0, 0, 255) : new Color32(255, 0, 0, 0);
+                if (paintTexture == null || paintTexture.width != atlas.width || paintTexture.height != atlas.height)
+                    paintTexture = new Texture2D(atlas.width, atlas.height, TextureFormat.RGBA32, false, true)
+                    {
+                        name = "UnityRTX blood paint",
+                        filterMode = FilterMode.Point,
+                        wrapMode = TextureWrapMode.Clamp
+                    };
+                paintTexture.SetPixels32(pixels);
+                paintTexture.Apply(false, false);
+                paintMaterialId = materials.RegisterCustomMaterial("UnityRTX blood paint " + atlas.GetInstanceID(), paintTexture,
+                    roughness: PaintRoughness, metallic: 0f, alphaCutoff: 0.5f, paintFinish: true);
+                logger.LogInfo($"[UltrakillBloodStains] blood paint from '{atlas.name}' {atlas.width}x{atlas.height}");
+            }
+            catch (Exception e)
+            {
+                logger.LogWarning($"[UltrakillBloodStains] reading the splatter atlas failed: {e.Message}");
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+            }
+            return paintMaterialId;
         }
 
         private void Rebuild()
@@ -223,7 +296,7 @@ namespace UnityRemix.Games.Ultrakill
             return quadCount;
         }
 
-        // One quad per stain: lifted off its surface, wound to face out, mapped to its atlas cell.
+        // One quad per stain: just above its surface (paint), wound to face out, mapped to its atlas cell.
         private bool Extract(Mesh mesh)
         {
             Vector3[] rawVerts = mesh.vertices;
@@ -246,15 +319,15 @@ namespace UnityRemix.Games.Ultrakill
                 int vBase = s * 4;
                 Vector3 v0 = rawVerts[vBase], v1 = rawVerts[vBase + 1], v2 = rawVerts[vBase + 2];
 
-                Vector3 normal = hasNorms ? rawNorms[vBase] : Vector3.zero;
+                // The game stores each stain's normal into its surface (-hit.normal): out of it.
+                Vector3 normal = hasNorms ? -rawNorms[vBase] : Vector3.zero;
                 if (normal.sqrMagnitude < 0.001f)
                     normal = Vector3.Cross(v2 - v0, v1 - v0).normalized;
                 if (normal.sqrMagnitude < 0.001f)
                     normal = Vector3.up;
 
-                // 12 mm off the surface, plus 0.5 mm per layer (16 layers): clears brush seams
-                // and keeps overlapping stains from z-fighting.
-                Vector3 offset = normal * (0.012f + (s % 16) * 0.0005f);
+                // In front of the surface it coats: the paint peel finds paint before its receiver.
+                Vector3 offset = normal * PaintLift;
 
                 // _SplatterAtlas holds 5 splatters side by side; ULTRAKILL's vertex shader picks
                 // cell (index % 5) by scaling u by 0.2.

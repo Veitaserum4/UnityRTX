@@ -204,6 +204,10 @@ namespace UnityRemix
             configOpenRemixRefreshInPlace = Config.Bind("Native", "RefreshMeshesInPlace", true,
                 "Refit BLAS in-place for dynamic/animated meshes instead of full BVH rebuild from scratch.");
 
+            Games.Ultrakill.UltrakillBloodStains.Overlay = Config.Bind("Ultrakill", "BloodStainOverlay", false,
+                "ULTRAKILL's blood stains drawn over the frame as the game composites them (exact look, cheaper, " +
+                "in no reflection) instead of path-traced as wet paint (in reflections, glossy).");
+
             configOpenRemixBounces = Config.Bind("Native", "PathTraceBounces", 2,
                 new ConfigDescription("Number of ray bounces for path tracing.",
                     new AcceptableValueRange<int>(1, 8)));

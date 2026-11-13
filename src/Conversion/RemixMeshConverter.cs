@@ -1221,7 +1221,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null, bool doubleSided = true)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null, bool doubleSided = true, bool multiplyPaint = false)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -1263,8 +1263,33 @@ namespace UnityRemix
             }
 
             RemixAPI.remixapi_InstanceInfoBlendEXT blendExt = default;
-            bool hasBlend = isParticleInstance;
-            if (hasBlend)
+            bool hasBlend = isParticleInstance || multiplyPaint;
+            if (multiplyPaint)
+            {
+                // Multiplicative paint (with a decal category): the receiver's colour times the
+                // paint's (DST_COLOR * ZERO), where its alpha test passes.
+                blendExt = new RemixAPI.remixapi_InstanceInfoBlendEXT
+                {
+                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT,
+                    pNext = IntPtr.Zero,
+                    alphaBlendEnabled = 1,
+                    srcColorBlendFactor = 4, // VkBlendFactor::eDstColor
+                    dstColorBlendFactor = 0, // VkBlendFactor::eZero
+                    colorBlendOp = 0,
+                    textureColorArg1Source = 1,
+                    textureColorArg2Source = 2,
+                    textureColorOperation = 3,
+                    textureAlphaArg1Source = 1,
+                    textureAlphaArg2Source = 2,
+                    textureAlphaOperation = 3,
+                    tFactor = 0xFFFFFFFFu,
+                    srcAlphaBlendFactor = 0,
+                    dstAlphaBlendFactor = 1,
+                    alphaBlendOp = 0,
+                    writeMask = 15
+                };
+            }
+            else if (hasBlend)
             {
                 // Enable coverageBlended layer traversal in OpenRemix without setting hit.tinted (which causes
                 // stained-glass dark transmission borders), and modulate texture alpha by vertex alpha (Diffuse)

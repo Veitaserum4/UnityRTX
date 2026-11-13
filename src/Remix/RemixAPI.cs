@@ -608,6 +608,21 @@ namespace UnityRemix
         /// </summary>
         public const int REMIXAPI_STRUCT_TYPE_MATERIAL_VIEW_EFFECTS_EXT = 0x7fff1078;
 
+        /// <summary>
+        /// pNext on opaque MaterialInfo drawn as multiplicative paint (a decal instance blending
+        /// DST_COLOR * ZERO): where it covers, the receiver takes the paint's roughness and
+        /// metalness (a wet film), its colour tinted by the paint.
+        /// </summary>
+        public const int REMIXAPI_STRUCT_TYPE_MATERIAL_PAINT_FINISH_EXT = 0x7fff1079;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialInfoPaintFinishEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+            public uint enabled;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_MaterialInfoViewEffectsEXT
         {

@@ -185,6 +185,7 @@ namespace UnityRemix
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
             public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
+            public bool paintFinish; // remixapi_MaterialInfoPaintFinishEXT: multiplicative paint with its own roughness
             public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
@@ -491,7 +492,8 @@ namespace UnityRemix
         /// Register a custom/baked material directly (e.g. for baked terrain).
         /// Returns the materialId.
         /// </summary>
-        public int RegisterCustomMaterial(string name, Texture2D albedo, Texture2D normal = null, float roughness = 0.85f, float metallic = 0.0f)
+        public int RegisterCustomMaterial(string name, Texture2D albedo, Texture2D normal = null, float roughness = 0.85f, float metallic = 0.0f,
+            float alphaCutoff = 0f, bool paintFinish = false)
         {
             int matId = HashUtils.HashStringFNV(name).GetHashCode();
             if (matId == 0) matId = 1;
@@ -524,7 +526,9 @@ namespace UnityRemix
                 normalHandle = normalHandle,
                 normalTextureHash = normalHash,
                 albedoColor = Color.white,
-                alphaMode = AlphaMode.Opaque,
+                alphaMode = alphaCutoff > 0f ? AlphaMode.Cutout : AlphaMode.Opaque,
+                alphaCutoff = alphaCutoff,
+                paintFinish = paintFinish,
                 wrapModeU = 1, // MDL Repeat
                 wrapModeV = 1,
                 filterMode = 1,
@@ -3903,6 +3907,7 @@ namespace UnityRemix
                 GCHandle remapExtHandle = default;
                 GCHandle portalExtHandle = default;
                 GCHandle viewEffectsHandle = default;
+                GCHandle paintFinishHandle = default;
                 IntPtr roughnessPathPtr = IntPtr.Zero, metallicPathPtr = IntPtr.Zero;
                 IntPtr extPtr;
                 IntPtr emissionExtPtr = IntPtr.Zero;
@@ -4129,6 +4134,17 @@ namespace UnityRemix
                         viewEffectsHandle = GCHandle.Alloc(viewEffects, GCHandleType.Pinned);
                         opaqueExt.pNext = viewEffectsHandle.AddrOfPinnedObject();
                     }
+                    if (matData.paintFinish && !standalonePortal)
+                    {
+                        var finish = new RemixAPI.remixapi_MaterialInfoPaintFinishEXT
+                        {
+                            sType = RemixAPI.REMIXAPI_STRUCT_TYPE_MATERIAL_PAINT_FINISH_EXT,
+                            pNext = opaqueExt.pNext,
+                            enabled = 1
+                        };
+                        paintFinishHandle = GCHandle.Alloc(finish, GCHandleType.Pinned);
+                        opaqueExt.pNext = paintFinishHandle.AddrOfPinnedObject();
+                    }
                     if (matData.rayPortalIndex >= 0)
                     {
                         var portalExt = new RemixAPI.remixapi_MaterialInfoPortalEXT
@@ -4215,6 +4231,7 @@ namespace UnityRemix
                     if (remapExtHandle.IsAllocated) remapExtHandle.Free();
                     if (portalExtHandle.IsAllocated) portalExtHandle.Free();
                     if (viewEffectsHandle.IsAllocated) viewEffectsHandle.Free();
+                    if (paintFinishHandle.IsAllocated) paintFinishHandle.Free();
                     if (roughnessPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(roughnessPathPtr);
                     if (metallicPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(metallicPathPtr);
                     extHandle.Free();
