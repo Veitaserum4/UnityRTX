@@ -60,6 +60,31 @@ namespace UnityRemix
             public LightType type;
         }
         private readonly Dictionary<int, LightState> lightStates = new Dictionary<int, LightState>();
+
+        // Bake once (FreezeBakeLights): the static lights Forward+ baked the level with, by Unity
+        // light. OpenRemix discards the bake when one of them is destroyed or updated, so they
+        // stay as baked until the scene ends: not drawn while their light is off (a room the
+        // game deactivates), a dynamic twin (TwinSalt) drawn while it differs. Lights that settle
+        // afterwards stay dynamic, lit live.
+        private readonly Dictionary<int, IntPtr> bakedLights = new Dictionary<int, IntPtr>();
+        private bool bakeFrozen;
+        private readonly Dictionary<int, IntPtr> twinLights = new Dictionary<int, IntPtr>();
+        private readonly Dictionary<int, UnityLightData> twinData = new Dictionary<int, UnityLightData>();
+        private const ulong TwinSalt = 0x7477696E5F6C6974UL;
+
+        /// <summary>A baked light was updated in place (the intensity multiplier changed): the
+        /// bake is stale and must be published again (render thread; cleared by ThawBakeLights).</summary>
+        public bool BakeInvalidated { get; private set; }
+
+        private void DestroyTwin(int id)
+        {
+            if (!twinLights.TryGetValue(id, out var twin))
+                return;
+            twinLights.Remove(id);
+            twinData.Remove(id);
+            if (twin != IntPtr.Zero && destroyLightFunc != null)
+                lock (apiLock) { try { destroyLightFunc(twin); } catch { } }
+        }
         private readonly HashSet<int> reusableActiveLightIds = new HashSet<int>();
         private readonly List<int> reusableLightsToRemove = new List<int>();
 
@@ -253,10 +278,44 @@ namespace UnityRemix
         }
         
         /// <summary>
+        /// Render thread, once the level's bake scene is published: its static lights are the
+        /// baked ones (bakedLights) until the scene ends; no light settles after them.
+        /// </summary>
+        public void FreezeBakeLights(List<IntPtr> published)
+        {
+            lock (cacheLock)
+            {
+                if (bakeFrozen)
+                    return;
+                var handles = new HashSet<IntPtr>(published);
+                foreach (var kvp in lightCache)
+                    if (handles.Contains(kvp.Value) && lightStates.TryGetValue(kvp.Key, out var state) && state.isStatic)
+                        bakedLights[kvp.Key] = kvp.Value;
+                bakeFrozen = true;
+            }
+        }
+
+        /// <summary>The bake scene withdrawn (scene change, baking off): lights settle again.</summary>
+        public void ThawBakeLights()
+        {
+            lock (cacheLock)
+            {
+                bakeFrozen = false;
+                BakeInvalidated = false;
+                // Twins go; baked lights stay in the cache as ordinary lights (an inactive one is
+                // destroyed with the next update, a changed one demoted).
+                foreach (var id in new List<int>(twinLights.Keys))
+                    DestroyTwin(id);
+                bakedLights.Clear();
+            }
+        }
+
+        /// <summary>
         /// Clear light cache (call on scene change)
         /// </summary>
         public void ClearCache()
         {
+            ThawBakeLights();
             cachedSceneLights.Clear();
             cachedSceneLightIds.Clear();
             lightDiscoveryCounter = -1;
@@ -369,10 +428,52 @@ namespace UnityRemix
                         state.isStatic = false;
                         state.changedFrame = frameCount;
                     }
-                    else if (!state.isStatic && !state.demoted && lightData.bakeable &&
+                    else if (!bakeFrozen && !state.isStatic && !state.demoted && lightData.bakeable &&
                              frameCount - state.changedFrame >= LightSettleFrames)
                     {
                         makeStatic = true;
+                    }
+
+                    if (bakedLights.TryGetValue(lightData.instanceId, out var bakedHandle))
+                    {
+                        if (multiplierChanged)
+                        {
+                            // Every light changes: the bake is redone (RemixRenderThread.CheckBakeScene).
+                            BakeInvalidated = true;
+                        }
+                        else
+                        {
+                            // The cache keeps the baked handle (its data the baked data); what is drawn
+                            // is it, or while the light differs, a dynamic twin.
+                            IntPtr draw = bakedHandle;
+                            bool asBaked = lastSubmittedLightData.TryGetValue(lightData.instanceId, out var bakedData) &&
+                                           LightDataEquals(in lightData, in bakedData);
+                            if (asBaked)
+                                DestroyTwin(lightData.instanceId);
+                            else
+                            {
+                                if (!twinLights.ContainsKey(lightData.instanceId) ||
+                                    !twinData.TryGetValue(lightData.instanceId, out var previousTwin) ||
+                                    !LightDataEquals(in lightData, in previousTwin))
+                                {
+                                    var twin = lightData;
+                                    twin.hash ^= TwinSalt;
+                                    IntPtr created = CreateRemixLightFromData(ref twin, frameCount, false);
+                                    if (created != IntPtr.Zero)
+                                    {
+                                        twinLights[lightData.instanceId] = created;
+                                        twinData[lightData.instanceId] = lightData;
+                                    }
+                                }
+                                twinLights.TryGetValue(lightData.instanceId, out draw);
+                            }
+                            lightCache[lightData.instanceId] = bakedHandle;
+                            state.type = lightData.type;
+                            lightStates[lightData.instanceId] = state;
+                            if (draw != IntPtr.Zero)
+                                lock (apiLock) { drawLightInstanceFunc(draw); }
+                            continue;
+                        }
                     }
 
                     if (dataChanged || makeStatic || multiplierChanged)
@@ -406,6 +507,12 @@ namespace UnityRemix
                 {
                     if (!reusableActiveLightIds.Contains(kvp.Key))
                     {
+                        if (bakedLights.TryGetValue(kvp.Key, out var bakedHandle) && kvp.Value == bakedHandle)
+                        {
+                            DestroyTwin(kvp.Key);
+                            continue; // kept as baked, not drawn
+                        }
+
                         reusableLightsToRemove.Add(kvp.Key);
 
                         if (kvp.Value != IntPtr.Zero && destroyLightFunc != null)
@@ -444,6 +551,11 @@ namespace UnityRemix
         {
             lock (cacheLock)
             {
+                if (bakeFrozen)
+                {
+                    output.AddRange(bakedLights.Values);
+                    return;
+                }
                 bool sun = false;
                 foreach (var kvp in lightCache)
                 {

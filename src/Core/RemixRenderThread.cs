@@ -94,6 +94,7 @@ namespace UnityRemix
             if (configBakeLighting != null && !configBakeLighting.Value)
             {
                 bakeScene.Reset();
+                lightConverter?.ThawBakeLights();
                 return;
             }
             bakeInstances.Clear();
@@ -102,7 +103,16 @@ namespace UnityRemix
                 if (record.Visible && !record.Moved && meshConverter.IsBakeable(record.MeshHandle))
                     bakeInstances.Add(record.NativeHandle);
             lightConverter?.GetStaticLights(bakeLights);
+            if (lightConverter != null && lightConverter.BakeInvalidated)
+            {
+                // The baked lights changed (intensity multiplier): bake again, once.
+                logger.LogInfo("[Bake] baked lights changed: publishing the scene again");
+                bakeScene.Reset();
+                lightConverter.ThawBakeLights();
+            }
             bakeScene.Check(frameNum, bakeInstances, bakeLights, skyboxManager?.DrawnDomeLight ?? IntPtr.Zero);
+            if (bakeScene.Published)
+                lightConverter?.FreezeBakeLights(bakeScene.PublishedLights);
         }
 
         private readonly Dictionary<ulong, RetainedInstanceRecord> retainedSceneInstances = new Dictionary<ulong, RetainedInstanceRecord>(4096);
@@ -573,6 +583,7 @@ namespace UnityRemix
             if (Interlocked.Exchange(ref needClearRetained, 0) != 0)
             {
                 bakeScene?.Reset();
+                lightConverter?.ThawBakeLights();
                 ClearRetainedSceneInstances();
             }
 

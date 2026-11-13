@@ -17,6 +17,12 @@ namespace UnityRemix
     /// rooms toggling on and off do not restart the bake every frame. OpenRemix caches bakes
     /// by content, so a set seen before comes back from its cache.
     ///
+    /// Bake once: after a level's first publish the scene is not republished until the next
+    /// scene load (Reset): rooms the game toggles on and off, and lights settling in rooms
+    /// visited later, would otherwise restart the bake each time. The published lights are
+    /// kept alive as baked (RemixLightConverter.FreezeBakeLights); OpenRemix keeps its own
+    /// snapshot of the instances.
+    ///
     /// The runtime refuses a whole scene for one ineligible input (an animated or still-loading
     /// material, a dynamic texture, a second sun). A refused scene is bisected to find those
     /// inputs, which are left out and retried later with a growing back-off.
@@ -56,6 +62,12 @@ namespace UnityRemix
         }
 
         public static bool Available => RemixAPI.SetBakeSceneEXTFunc != null;
+
+        /// <summary>The level's scene is published: its lights are the baked ones (render thread).</summary>
+        public bool Published => published;
+
+        /// <summary>The lights of the published scene (valid while Published).</summary>
+        public List<IntPtr> PublishedLights => lights;
 
         /// <summary>Main thread, on a single scene load: names the next bake scene.</summary>
         public void SetSceneName(string name) => pendingSceneName = name ?? "";
@@ -121,6 +133,8 @@ namespace UnityRemix
 
             LogStatus(frame);
 
+            if (published)
+                return; // bake once: kept until the scene changes (Reset)
             if (instances.Count == 0)
                 return;
             ulong signature = Signature();
