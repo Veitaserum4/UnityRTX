@@ -1930,11 +1930,6 @@ namespace UnityRemix
         public RemixAPI.PFN_remixapi_CreateMesh GetCreateMeshFunc() => createMeshFunc;
         
         /// <summary>
-        /// Expose DrawInstance delegate for external callers (e.g. SceneMeshScanner).
-        /// </summary>
-        public RemixAPI.PFN_remixapi_DrawInstance GetDrawInstanceFunc() => drawInstanceFunc;
-        
-        /// <summary>
         /// Expose DestroyMesh delegate for external callers (e.g. RemixTerrainManager).
         /// </summary>
         public RemixAPI.PFN_remixapi_DestroyMesh GetDestroyMeshFunc() => destroyMeshFunc;
@@ -1943,42 +1938,6 @@ namespace UnityRemix
         public int MeshCacheCount => meshCache.Count;
         public int SkinnedMeshHandleCount => skinnedMeshHandles.Count;
 
-        public bool TryGetMaterialId(ulong meshKey, out int materialId)
-        {
-            return meshToMaterialMap.TryGetValue(meshKey, out materialId);
-        }
-
-        public bool TryGetMaterialId(int meshId, out int materialId)
-        {
-            return meshToMaterialMap.TryGetValue((ulong)(uint)meshId, out materialId);
-        }
-
-        /// <summary>
-        /// Clears all cached static and skinned mesh handles, enqueueing them for safe deferred destruction.
-        /// Forces meshes to be recreated on the next frame with updated materials/hashes.
-        /// </summary>
-        public void ClearMeshCache()
-        {
-            int currentFrame = Time.frameCount;
-            foreach (var handle in meshCache.Values)
-            {
-                if (handle != IntPtr.Zero)
-                    deferredDestructionQueue.Enqueue(new DeferredMeshDestruction { handle = handle, frameSubmitted = currentFrame });
-            }
-            meshCache.Clear();
-
-            foreach (var handle in skinnedMeshHandles.Values)
-            {
-                if (handle != IntPtr.Zero)
-                    deferredDestructionQueue.Enqueue(new DeferredMeshDestruction { handle = handle, frameSubmitted = currentFrame });
-            }
-            skinnedMeshHandles.Clear();
-            skinnedMeshBakeFrames.Clear();
-            meshToMaterialMap.Clear();
-
-            logger?.LogInfo("[RemixMeshConverter] Cleared mesh cache and retired handles for material update.");
-        }
-        
         /// <summary>
         /// Cleanup all resources
         /// </summary>

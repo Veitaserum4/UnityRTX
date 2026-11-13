@@ -1387,18 +1387,6 @@ namespace UnityRemix
             return new string(buffer, 0, (int)result);
         }
 
-        private static string GetCurrentDllDirectory()
-        {
-            var buffer = new char[MAX_PATH];
-            uint result = GetDllDirectoryW((uint)buffer.Length, buffer);
-            if (result == 0 || result >= buffer.Length)
-            {
-                return string.Empty;
-            }
-
-            return new string(buffer, 0, (int)result);
-        }
-
         /// <summary>
         /// Shutdown and unload the Remix DLL.
         /// This mirrors remixapi_lib_shutdownAndUnloadRemixDll from remix_c.h

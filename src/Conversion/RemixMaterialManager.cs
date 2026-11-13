@@ -255,10 +255,6 @@ namespace UnityRemix
         private IntPtr fallbackMaterialHandle = IntPtr.Zero;
         
         // Queue for async material creation
-        private Queue<int> pendingMaterialCreation = new Queue<int>();
-        private HashSet<int> pendingMaterialSet = new HashSet<int>(); // Track what's pending
-        private bool materialCreationThreadRunning = false;
-        private Thread materialCreationThread = null;
         
         public RemixMaterialManager(
             ManualLogSource logger,
@@ -617,32 +613,6 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Register a texture to a Remix category
-        /// </summary>
-        public void RegisterTextureCategory(ulong textureHash, string categoryName)
-        {
-            if (addTextureHashFunc == null) return;
-            
-            string hashString = textureHash.ToString("X");
-            RemixAPI.remixapi_ErrorCode result;
-            lock (apiLock)
-            {
-                result = addTextureHashFunc(categoryName, hashString);
-            }
-            
-            if (result == RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
-            {
-                textureCategoryManager.SetTextureCategory(textureHash, categoryName);
-                if (verboseTextureLogging.Value)
-                    logger.LogInfo($"Registered texture 0x{textureHash:X16} to category '{categoryName}'");
-            }
-            else
-            {
-                logger.LogError($"Failed to register texture to category: {result}");
-            }
-        }
-
-        /// <summary>
         /// Check if a color has perceptible chromatic saturation (distinguishing tinted colors from neutral white/grey/black).
         /// </summary>
         private static bool IsSaturatedColor(Color c)
@@ -778,16 +748,7 @@ namespace UnityRemix
                 // Material data already captured, don't overwrite it
                 return;
             }
-            
-            // Also check if already pending to avoid race conditions
-            lock (pendingMaterialCreation)
-            {
-                if (pendingMaterialSet.Contains(materialId))
-                {
-                    return;
-                }
-            }
-                
+
             string shaderName = material.shader != null ? material.shader.name : "null";
             bool isParticleOrTrailRenderer = renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer;
             // An additive glow on a mesh (an explosion's sphere, a light shaft): drawn as additive
@@ -2696,60 +2657,6 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Start async material creation thread
-        /// </summary>
-        private void StartMaterialCreationThread()
-        {
-            if (materialCreationThreadRunning)
-                return;
-                
-            materialCreationThreadRunning = true;
-            materialCreationThread = new Thread(MaterialCreationThreadFunc);
-            materialCreationThread.IsBackground = true;
-            materialCreationThread.Start();
-            logger.LogInfo("Started async material creation thread");
-        }
-        
-        private void MaterialCreationThreadFunc()
-        {
-            logger.LogInfo("Material creation thread running");
-            
-            while (materialCreationThreadRunning)
-            {
-                int materialId = -1;
-                
-                lock (pendingMaterialCreation)
-                {
-                    if (pendingMaterialCreation.Count > 0)
-                    {
-                        materialId = pendingMaterialCreation.Dequeue();
-                        pendingMaterialSet.Remove(materialId);
-                    }
-                }
-                
-                if (materialId != -1 && materialTextureData.ContainsKey(materialId))
-                {
-                    Thread.Sleep(200); // Wait for texture upload to complete
-                    
-                    var matData = materialTextureData[materialId];
-                    IntPtr handle = CreateRemixMaterialSimple(ref matData, materialId);
-                    
-                    if (handle != IntPtr.Zero)
-                    {
-                        matData.remixMaterialHandle = handle;
-                        materialTextureData[materialId] = matData;
-                    }
-                }
-                else
-                {
-                    Thread.Sleep(100);
-                }
-            }
-            
-            logger.LogInfo("Material creation thread stopped");
-        }
-        
-        /// <summary>
         /// Convert Unity TextureWrapMode to MDL WrapMode (0=Clamp, 1=Repeat, 2=MirroredRepeat, 3=Clip).
         /// </summary>
         private static byte UnityWrapToMdl(TextureWrapMode mode)
@@ -4506,12 +4413,6 @@ namespace UnityRemix
         /// </summary>
         public void Cleanup()
         {
-            materialCreationThreadRunning = false;
-            if (materialCreationThread != null && materialCreationThread.IsAlive)
-            {
-                materialCreationThread.Join(1000);
-            }
-            
             // Discard pending uploads
             lock (pendingTextureLock)
             {

@@ -405,21 +405,6 @@ namespace UnityRemix
             return renderer.isPartOfStaticBatch;
         }
 
-        private static int CountDistinctMaterials(Material[] materials)
-        {
-            if (materials == null || materials.Length == 0)
-                return 0;
-
-            var materialIds = new HashSet<int>();
-            for (int i = 0; i < materials.Length; i++)
-            {
-                if (materials[i] != null)
-                    materialIds.Add(materials[i].GetInstanceID());
-            }
-
-            return materialIds.Count;
-        }
-
         public StaticGeometryStats GetStaticGeometryStats(SceneMeshScanner scanner)
         {
             var stats = new StaticGeometryStats();
@@ -696,19 +681,6 @@ namespace UnityRemix
         // Persistent cache: last-baked data for every skinned mesh, so all are drawn every frame
         private Dictionary<int, SkinnedMeshData> persistentSkinnedData = new Dictionary<int, SkinnedMeshData>();
         
-        // Per-mesh cached static data (UVs, triangles don't change with skinning)
-        private struct CachedMeshTopology
-        {
-            public Vector2[] uvs;
-            public int[] triangles;
-            public int vertexCount;
-            public int positionOffset;  // byte offset of Position in interleaved vertex buffer
-            public int normalOffset;    // byte offset of Normal in interleaved vertex buffer
-            public int stride;          // total bytes per vertex in GPU buffer
-            public bool valid;
-            public bool layoutValid;    // vertex buffer layout cached but triangles/UVs pending (mesh not readable)
-        }
-        private Dictionary<int, CachedMeshTopology> cachedTopology = new Dictionary<int, CachedMeshTopology>(); // keyed by sharedMesh instance ID
         
         // Cached GPU skinning data per sharedMesh + blendshape signature (bind-pose vertices + bone weights)
         private Dictionary<long, CachedSkinningData> cachedSkinning = new Dictionary<long, CachedSkinningData>(); // keyed by (sharedMeshId << 32) | blendShapeHash
@@ -1113,7 +1085,6 @@ namespace UnityRemix
             }
             skinnedRoundRobinIndex = 0;
             persistentSkinnedData.Clear();
-            cachedTopology.Clear();
             bakedTopology.Clear();
             cachedSkinning.Clear();
             skinningBases.Clear();
@@ -5135,92 +5106,6 @@ namespace UnityRemix
             }
         }
         
-        /// <summary>
-        /// Cache UVs, triangles, and vertex buffer layout for a sharedMesh. Called once per unique mesh.
-        /// </summary>
-        private void CacheMeshTopology(Mesh sharedMesh, int meshId, bool doLog)
-        {
-            try
-            {
-                if (!sharedMesh.isReadable)
-                {
-                    // Mesh not readable — can't get triangles directly.
-                    // Cache vertex buffer layout now; topology will be completed from first BakeMesh.
-                    int posOff2 = -1, nrmOff2 = -1, stride2 = 0;
-                    if (NativeMeshReader.TryGetVertexLayout(sharedMesh, out var l2))
-                    {
-                        posOff2 = l2.PositionOffset;
-                        nrmOff2 = l2.NormalOffset;
-                        stride2 = l2.Stride;
-                    }
-                    bool layoutOk = posOff2 >= 0 && stride2 > 0;
-                    cachedTopology[meshId] = new CachedMeshTopology
-                    {
-                        valid = false,
-                        layoutValid = layoutOk,
-                        vertexCount = sharedMesh.vertexCount,
-                        positionOffset = posOff2,
-                        normalOffset = nrmOff2,
-                        stride = stride2
-                    };
-                    logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' not readable — cached layout (layoutValid={layoutOk} stride={stride2} posOff={posOff2} nrmOff={nrmOff2} verts={sharedMesh.vertexCount}), awaiting BakeMesh for triangles/UVs");
-                    return;
-                }
-
-                var uvCoords = sharedMesh.uv;
-                
-                // Combine all submesh triangles
-                var allTris = new List<int>();
-                for (int i = 0; i < sharedMesh.subMeshCount; i++)
-                {
-                    if (sharedMesh.GetTopology(i) != MeshTopology.Triangles)
-                        continue;
-                    var subTris = sharedMesh.GetTriangles(i);
-                    if (subTris != null && subTris.Length > 0)
-                        allTris.AddRange(subTris);
-                }
-                
-                if (allTris.Count == 0 || allTris.Count % 3 != 0)
-                {
-                    logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' INVALID: subMeshCount={sharedMesh.subMeshCount} triCount={allTris.Count} isReadable={sharedMesh.isReadable}");
-                    cachedTopology[meshId] = new CachedMeshTopology { valid = false };
-                    return;
-                }
-                
-                // Get vertex buffer layout for GPU readback
-                int posOffset = -1;
-                int nrmOffset = -1;
-                int stride = 0;
-                
-                if (NativeMeshReader.TryGetVertexLayout(sharedMesh, out var l1))
-                {
-                    posOffset = l1.PositionOffset;
-                    nrmOffset = l1.NormalOffset;
-                    stride = l1.Stride;
-                }
-                
-                bool topoValid = posOffset >= 0 && stride > 0;
-                cachedTopology[meshId] = new CachedMeshTopology
-                {
-                    uvs = uvCoords ?? new Vector2[sharedMesh.vertexCount],
-                    triangles = allTris.ToArray(),
-                    vertexCount = sharedMesh.vertexCount,
-                    positionOffset = posOffset,
-                    normalOffset = nrmOffset,
-                    stride = stride,
-                    valid = topoValid
-                };
-                
-                // Always log topology — only fires once per unique mesh
-                logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' verts={sharedMesh.vertexCount} tris={allTris.Count/3} stride={stride} posOff={posOffset} nrmOff={nrmOffset} valid={topoValid}");
-            }
-            catch (Exception ex)
-            {
-                cachedTopology[meshId] = new CachedMeshTopology { valid = false };
-                logger.LogWarning($"[MeshTopology] Failed for '{sharedMesh.name}': {ex.Message}");
-            }
-        }
-        
         private const int MAX_REMIX_BONES = 256;
         private const int BONES_PER_VERTEX = 4; // D3D9 standard, Remix expectation
         
@@ -5812,28 +5697,18 @@ namespace UnityRemix
 
         private BakedRendererTopology BuildBakedTopology(SkinnedMeshRenderer skinned, Mesh sharedMesh, Mesh bakedMesh, int sharedMeshId, int vertexCount)
         {
-            // Reuse cached UVs and triangles — they never change between frames
-            Vector2[] uvCoords;
-            int[] tris;
-            if (cachedTopology.TryGetValue(sharedMeshId, out var topo) && topo.valid && topo.uvs != null && topo.triangles != null)
+            // UVs and triangles never change between frames: built once per renderer (bakedTopology).
+            Vector2[] uvCoords = bakedMesh.uv;
+            var allTris = new List<int>();
+            for (int i = 0; i < bakedMesh.subMeshCount; i++)
             {
-                uvCoords = topo.uvs;
-                tris = topo.triangles;
+                if (bakedMesh.GetTopology(i) != MeshTopology.Triangles)
+                    continue;
+                var subTris = bakedMesh.GetTriangles(i);
+                if (subTris != null && subTris.Length > 0)
+                    allTris.AddRange(subTris);
             }
-            else
-            {
-                uvCoords = bakedMesh.uv;
-                var allTris = new List<int>();
-                for (int i = 0; i < bakedMesh.subMeshCount; i++)
-                {
-                    if (bakedMesh.GetTopology(i) != MeshTopology.Triangles)
-                        continue;
-                    var subTris = bakedMesh.GetTriangles(i);
-                    if (subTris != null && subTris.Length > 0)
-                        allTris.AddRange(subTris);
-                }
-                tris = allTris.ToArray();
-            }
+            int[] tris = allTris.ToArray();
 
             if (tris.Length == 0 || tris.Length % 3 != 0)
                 return null;
@@ -5947,16 +5822,6 @@ namespace UnityRemix
                     bakedTopology[skinnedId] = topo;
                     if (verts.Length > 20000)
                         logger.LogInfo($"[Skinning] Large BakeMesh fallback '{skinned.name}': {verts.Length} verts, {topo.mergedTriangles.Length / 3} tris, {topo.submeshes.Length} submeshes");
-
-                    // Complete topology from baked mesh if triangles were unavailable (non-readable mesh)
-                    if (cachedTopology.TryGetValue(sharedMeshId, out var pendingTopo) && !pendingTopo.valid)
-                    {
-                        pendingTopo.uvs = topo.uvs;
-                        pendingTopo.triangles = topo.mergedTriangles;
-                        pendingTopo.valid = true;
-                        cachedTopology[sharedMeshId] = pendingTopo;
-                        logger.LogInfo($"[MeshTopology] '{sharedMesh.name}' topology completed from BakeMesh: verts={pendingTopo.vertexCount} tris={topo.mergedTriangles.Length / 3} stride={pendingTopo.stride}");
-                    }
                 }
 
                 topo.poseSignature = pose;
@@ -6264,7 +6129,6 @@ namespace UnityRemix
                 }
             }
             bakedMeshes.Clear();
-            cachedTopology.Clear();
             bakedTopology.Clear();
         }
     }

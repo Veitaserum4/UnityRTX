@@ -715,6 +715,5 @@ namespace UnityRemix
             _staticMeshFrameSkip = _plugin.GetConfigInt("StaticMeshFrameSkip");
         }
 
-        public void ResetState() { _initialized = false; }
     }
 }

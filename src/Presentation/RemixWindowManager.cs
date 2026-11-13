@@ -178,8 +178,6 @@ namespace UnityRemix
         public int WindowWidth => windowWidth;
         public int WindowHeight => windowHeight;
         public static bool IsRemixUIOpen => isRemixUIOpen;
-        public static void SetRemixUIOpen(bool open) => isRemixUIOpen = open;
-
         private static bool lastSyncedRemixOpen = false;
         private static volatile int cachedNativeUIState = -1;
 
@@ -292,9 +290,6 @@ namespace UnityRemix
         }
         
         #region Win32 API Declarations
-
-        [DllImport("user32.dll")]
-        private static extern bool EnableWindow(IntPtr hWnd, bool bEnable);
 
         [DllImport("user32.dll")]
         private static extern bool ClipCursor(IntPtr lpRect);
@@ -567,12 +562,6 @@ namespace UnityRemix
         public static extern IntPtr SetFocus(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        public static extern IntPtr GetFocus();
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetActiveWindow();
-        
-        [DllImport("user32.dll")]
         public static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
@@ -592,14 +581,8 @@ namespace UnityRemix
         private static extern bool IsWindowVisible(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr SetParent(IntPtr hWndChild, IntPtr hWndNewParent);
-
-        [DllImport("user32.dll")]
         private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
-        [DllImport("user32.dll")]
-        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-        
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr CreateWindowExW(
             uint dwExStyle, 
@@ -619,12 +602,6 @@ namespace UnityRemix
         private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, 
             int X, int Y, int cx, int cy, uint uFlags);
         
-        [DllImport("user32.dll")]
-        private static extern int SetWindowLongW(IntPtr hWnd, int nIndex, int dwNewLong);
-        
-        [DllImport("user32.dll")]
-        private static extern int GetWindowLongW(IntPtr hWnd, int nIndex);
-        
         [DllImport("kernel32.dll")]
         private static extern IntPtr GetModuleHandleW([MarshalAs(UnmanagedType.LPWStr)] string lpModuleName);
         
@@ -642,9 +619,6 @@ namespace UnityRemix
         
         [DllImport("user32.dll", SetLastError = true)]
         private static extern ushort RegisterClassW(ref WNDCLASS lpWndClass);
-        
-        [DllImport("user32.dll")]
-        private static extern bool UnregisterClassW([MarshalAs(UnmanagedType.LPWStr)] string lpClassName, IntPtr hInstance);
         
         [DllImport("user32.dll")]
         private static extern IntPtr LoadCursorW(IntPtr hInstance, int lpCursorName);
@@ -1331,15 +1305,6 @@ namespace UnityRemix
             {
                 isRemixUIOpen = newOpen;
             }
-        }
-        
-        /// <summary>
-        /// Wait for messages with timeout (for frame rate limiting)
-        /// </summary>
-        public bool WaitForMessages(uint milliseconds)
-        {
-            uint result = MsgWaitForMultipleObjectsEx(0, null, milliseconds, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-            return result == WAIT_OBJECT_0; // Returns true if messages are available
         }
         
         /// <summary>

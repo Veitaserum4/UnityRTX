@@ -373,13 +373,6 @@ namespace UnityRemix
             logger?.LogInfo($"[RemixFramebufferPresenter] In-engine 3D rendering suppressed on {suppressedCount} World Cameras.");
         }
 
-        public void ApplyInEngineRenderingSuppression()
-        {
-            Camera worldCam = cameraHandler?.CurrentCamera ?? Camera.main;
-            ApplyCameraSuppression(worldCam);
-            SetupEmbeddedUIOverlay();
-        }
-
         private void SetupEmbeddedUIOverlay()
         {
             if (configSingleWindowUIOverlay == null || !configSingleWindowUIOverlay.Value)

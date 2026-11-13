@@ -48,7 +48,6 @@ namespace UnityRemix
         // Background bake state
         private Thread bakeThread;
         private volatile bool bakeInProgress;
-        private volatile bool bakeCompleted;
         // Scenes that arrived while bake was running — process after completion
         private readonly Queue<SceneInfo> pendingScenes = new Queue<SceneInfo>();
         private readonly object pendingLock = new object();
@@ -155,42 +154,6 @@ namespace UnityRemix
             bakeThread.Start();
         }
         
-        /// <summary>
-        /// Called each render frame. Drains a batch from the streaming queue,
-        /// creates meshes, and returns all instances loaded so far.
-        /// </summary>
-        public BakedInstanceData[] GetBakedInstances()
-        {
-            // If bake just completed, process pending scenes on a background thread
-            if (bakeCompleted)
-            {
-                bakeCompleted = false;
-                var thread = new Thread(ProcessPendingScenes);
-                thread.IsBackground = true;
-                thread.Start();
-            }
-            
-            // Drain a batch from the streaming queue (mesh creation on render thread)
-            DrainStreamingBatch();
-            
-            lock (bakeLock)
-            {
-                return currentBakedInstances.Count > 0 ? currentBakedInstances.ToArray() : null;
-            }
-        }
-        
-        public void ClearBakedData()
-        {
-            lock (bakeLock)
-            {
-                currentBakedInstances.Clear();
-            }
-            lock (streamLock)
-            {
-                streamingQueue.Clear();
-            }
-        }
-        
         private void DrainStreamingBatch()
         {
             BakeCacheReader.BakedMeshEntry[] batch;
@@ -279,8 +242,6 @@ namespace UnityRemix
                 string manifestPath = System.IO.Path.Combine(cacheDir, "manifest.json");
                 LoadManifest(manifestPath);
                 
-                // Signal that pending scenes should be processed
-                bakeCompleted = true;
             }
             catch (Exception ex)
             {

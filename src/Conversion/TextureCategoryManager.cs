@@ -48,28 +48,6 @@ namespace UnityRemix
         }
         
         /// <summary>
-        /// Remove a texture from a specific category
-        /// </summary>
-        public void RemoveTextureCategory(ulong textureHash, string categoryName)
-        {
-            if (textureHash == 0) return;
-            
-            uint categoryFlag = CategoryNameToFlag(categoryName);
-            if (categoryFlag == 0) return;
-            
-            if (textureCategoryMap.ContainsKey(textureHash))
-            {
-                textureCategoryMap[textureHash] &= ~categoryFlag;
-                
-                // Remove entry if no categories left
-                if (textureCategoryMap[textureHash] == 0)
-                {
-                    textureCategoryMap.Remove(textureHash);
-                }
-            }
-        }
-        
-        /// <summary>
         /// Get category flags for a given texture hash
         /// </summary>
         public uint GetCategoryFlags(ulong textureHash)
@@ -82,15 +60,6 @@ namespace UnityRemix
             }
             
             return 0;
-        }
-        
-        /// <summary>
-        /// Get category flags for a material based on its albedo texture
-        /// This matches how Remix does it internally (using getColorTexture().getImageHash())
-        /// </summary>
-        public uint GetCategoryFlagsForMaterial(ulong albedoTextureHash)
-        {
-            return GetCategoryFlags(albedoTextureHash);
         }
         
         /// <summary>
