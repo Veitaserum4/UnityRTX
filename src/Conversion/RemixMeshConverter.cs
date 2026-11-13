@@ -458,6 +458,15 @@ namespace UnityRemix
         private readonly ConcurrentDictionary<IntPtr, byte> blendedMeshes = new ConcurrentDictionary<IntPtr, byte>();
         private static IntPtr blendedExt;
 
+        // Every mesh path notes it: a spawned or deforming effect (an explosion's sphere) is a
+        // dynamic mesh, its handle possibly a destroyed one's.
+        private void NoteBlended(IntPtr handle, int materialId)
+        {
+            if (handle == IntPtr.Zero) return;
+            if (materialManager.NeedsBlendedInstance(materialId)) blendedMeshes[handle] = 0;
+            else blendedMeshes.TryRemove(handle, out _);
+        }
+
         // The blend particles' instances carry: alpha over, the texel times the vertex colour.
         private static RemixAPI.remixapi_InstanceInfoBlendEXT ParticleBlend(IntPtr next) => new RemixAPI.remixapi_InstanceInfoBlendEXT
         {
@@ -1251,6 +1260,7 @@ namespace UnityRemix
                     return IntPtr.Zero;
                 }
 
+                NoteBlended(handle, materialId);
                 return handle;
             }
             finally
@@ -1535,6 +1545,7 @@ namespace UnityRemix
                         return IntPtr.Zero;
                     }
                     
+                    NoteBlended(handle, materialId);
                     return handle;
                 }
                 finally
@@ -1608,6 +1619,14 @@ namespace UnityRemix
                         rasterVisible = 1
                     };
                     objectPickingExt.pNext = (IntPtr)(&identityExt);
+                }
+
+                // A blended (particle-like) material: the chain's tail.
+                var blendExt = ParticleBlend(IntPtr.Zero);
+                if (blendedMeshes.ContainsKey(meshHandle))
+                {
+                    if (targetInstanceId != 0) identityExt.pNext = (IntPtr)(&blendExt);
+                    else objectPickingExt.pNext = (IntPtr)(&blendExt);
                 }
 
                 var boneExt = new RemixAPI.remixapi_InstanceInfoBoneTransformsEXT
@@ -1720,6 +1739,7 @@ namespace UnityRemix
                 try
                 {
                     destroyMeshFunc(oldest.handle);
+                    blendedMeshes.TryRemove(oldest.handle, out _);
                 }
                 catch { }
             }
