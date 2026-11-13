@@ -220,6 +220,14 @@ namespace UnityRemix
         /// <summary>White blended toward the vertex color by weight (1: the color itself).</summary>
         internal static Color32 WeightVertexColor(Color32 c, float weight)
         {
+            if (weight == RemixMaterialManager.GlowVertexColors)
+            {
+                // An additive glow: its brightness as coverage, its hue at full brightness.
+                int m = Math.Max(c.r, Math.Max(c.g, c.b));
+                if (m == 0)
+                    return new Color32(255, 255, 255, 0);
+                return new Color32((byte)(c.r * 255 / m), (byte)(c.g * 255 / m), (byte)(c.b * 255 / m), (byte)(c.a * m / 255));
+            }
             if (weight >= 1f)
                 return c;
             return new Color32((byte)(255 + (c.r - 255) * weight), (byte)(255 + (c.g - 255) * weight),
@@ -764,7 +772,7 @@ namespace UnityRemix
                     break;
                 }
             }
-            if (vertexColorWeight <= 0f)
+            if (vertexColorWeight == 0f)
                 hasColors = false;
 
             // Check if any surface needs UV tiling/offset applied, or box-projected UVs
@@ -1097,7 +1105,7 @@ namespace UnityRemix
             if (st.y == 0f) st.y = 1f;
             bool hasColors = colors != null && colors.Length >= sourceVertexCount;
             float vertexColorWeight = materialManager.GetVertexColorWeight(materialId);
-            if (vertexColorWeight <= 0f)
+            if (vertexColorWeight == 0f)
                 hasColors = false;
             if (vertexMap != null)
             {
@@ -1446,7 +1454,7 @@ namespace UnityRemix
             Vector4 stSkin = materialManager.GetMainTexST(materialId);
             bool hasColors = colors != null && colors.Length == vertices.Length;
             float vertexColorWeight = materialManager.GetVertexColorWeight(materialId);
-            if (vertexColorWeight <= 0f)
+            if (vertexColorWeight == 0f)
                 hasColors = false;
             var remixVerts = new RemixAPI.remixapi_HardcodedVertex[vertices.Length];
             for (int i = 0; i < vertices.Length; i++)

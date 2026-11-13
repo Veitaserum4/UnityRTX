@@ -64,6 +64,10 @@ namespace UnityRemix
                     var tris = lineBakeMesh.triangles;
                     if (verts == null || verts.Length < 3 || tris == null || tris.Length < 3)
                         continue;
+                    // BakeMesh leaves out the transform's position (rotation and scale only): placed
+                    // where the renderer's world bounds say it is.
+                    lineBakeMesh.RecalculateBounds();
+                    Vector3 offset = line.bounds.center - lineBakeMesh.bounds.center;
 
                     // The line's colour (its vertices carry the gradient), one material per colour.
                     Color lineColor = (line.startColor + line.endColor) * 0.5f;
@@ -96,7 +100,7 @@ namespace UnityRemix
                         uvs = lineBakeMesh.uv,
                         colors = lineBakeMesh.colors32,
                         triangles = tris,
-                        localToWorld = Matrix4x4.identity,
+                        localToWorld = Matrix4x4.Translate(offset),
                         boneTransforms = null,
                         skinningData = null,
                         categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE,

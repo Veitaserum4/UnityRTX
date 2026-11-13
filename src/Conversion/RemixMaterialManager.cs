@@ -1013,8 +1013,16 @@ namespace UnityRemix
             return projectionScales.TryGetValue(materialId, out scale);
         }
 
+        // How a mesh's vertex colours apply to the material: 1 as colour, 0 not at all (masks of
+        // a layered material), between partly; GlowVertexColors for an additive glow, whose
+        // vertex brightness is how much it adds (a light shaft fading to black along its length):
+        // moved into alpha, its coverage (RemixMeshConverter.WeightVertexColor).
+        public const float GlowVertexColors = -1f;
+
         public float GetVertexColorWeight(int materialId)
         {
+            if (materialTextureData.TryGetValue(materialId, out var data) && data.glowCoverage > 0f)
+                return GlowVertexColors;
             return vertexColorWeights.TryGetValue(materialId, out float weight) ? weight : 1f;
         }
 

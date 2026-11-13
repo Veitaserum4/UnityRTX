@@ -731,8 +731,21 @@ namespace UnityRemix.Games.Ultrakill
             var parent = filter.transform.parent;
             string parentName = parent != null ? parent.name : null;
             var material = renderer.sharedMaterial;
+            // Additive glows (light shafts) come and go with the lights they belong to: Flicker
+            // toggles its flickerDisableObjects with the lamp.
+            if (material != null && IsAdditiveGlow(material))
+                return true;
             return ContainsAny(filter.gameObject.name, followNames) || ContainsAny(parentName, followNames) ||
                    (material != null && ContainsAny(material.name, noPassNames));
+        }
+
+        private bool IsAdditiveGlow(Material material)
+        {
+            string shader = material.shader != null ? material.shader.name : "";
+            if (shader.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0)
+                return true;
+            return ReadsBlendProperties(shader) && material.HasProperty("_DstBlend") &&
+                   Mathf.RoundToInt(material.GetFloat("_DstBlend")) == (int)UnityEngine.Rendering.BlendMode.One;
         }
 
         private static readonly string[] followNames = { "CheckPoint", "NoPass" };
