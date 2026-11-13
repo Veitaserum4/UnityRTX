@@ -208,6 +208,11 @@ namespace UnityRemix
                 "ULTRAKILL's blood stains drawn over the frame as the game composites them (exact look, cheaper, " +
                 "in no reflection) instead of path-traced as wet paint (in reflections, glossy).");
 
+            Games.Ultrakill.UltrakillProfile.GamePostProcess = Config.Bind("Ultrakill", "GamePostProcess", true,
+                "ULTRAKILL's own screen post-process over the path-traced frame, as its graphics menu sets it " +
+                "(dithering, colour compression, custom palette, gamma, downsampling). Off: only while it shows " +
+                "the death sequence or Greed's distortion.");
+
             configOpenRemixBounces = Config.Bind("Native", "PathTraceBounces", 2,
                 new ConfigDescription("Number of ray bounces for path tracing.",
                     new AcceptableValueRange<int>(1, 8)));

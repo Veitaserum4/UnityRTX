@@ -30,6 +30,7 @@ namespace urtx {
     PFN_remixapi_RegisterHostShaderEXT g_register = nullptr;
     PFN_remixapi_SubmitHostPassesEXT g_submit = nullptr;
     PFN_remixapi_UpdateHostTargetEXT g_updateTarget = nullptr;
+    PFN_remixapi_UpdateHostVolumeEXT g_updateVolume = nullptr; // optional: volumes stay missing without it
     PFN_remixapi_GetHostPassStatisticsEXT g_statistics = nullptr;
 
     constexpr remixapi_HostTargetHandleEXT kFrameCopy = 0x5552000000000001ull;
@@ -45,10 +46,12 @@ namespace urtx {
     std::mutex g_settingsLock;
     void *g_frameTexture = nullptr; // the resource the draws sample as the frame
     void *g_screenSource = nullptr; // the resource screen effects sample as the frame
+    uint32_t g_screenSize[2] = {};  // the frame's scale for them (0: as it is)
+    uint32_t g_screenFrame[2] = {}; // the frame they cover (the capture's target)
     float g_projection[2] = {};     // the capture camera's GPU projection: P22, P23
     bool g_reversedZ = true;
     struct PendingTexture {
-      uint32_t width = 0, height = 0, vkFormat = 0;
+      uint32_t width = 0, height = 0, depth = 1, vkFormat = 0;
       std::vector<uint8_t> pixels;
     };
     std::unordered_map<void *, PendingTexture> g_pending; // to upload
@@ -438,6 +441,8 @@ namespace urtx {
     g_submit = reinterpret_cast<PFN_remixapi_SubmitHostPassesEXT>(GetProcAddress(remix, "remixapi_SubmitHostPassesEXT"));
     g_updateTarget =
         reinterpret_cast<PFN_remixapi_UpdateHostTargetEXT>(GetProcAddress(remix, "remixapi_UpdateHostTargetEXT"));
+    g_updateVolume =
+        reinterpret_cast<PFN_remixapi_UpdateHostVolumeEXT>(GetProcAddress(remix, "remixapi_UpdateHostVolumeEXT"));
     g_statistics = reinterpret_cast<PFN_remixapi_GetHostPassStatisticsEXT>(
         GetProcAddress(remix, "remixapi_GetHostPassStatisticsEXT"));
     log("remix host passes: register %p submit %p update %p statistics %p", g_register, g_submit, g_updateTarget,
@@ -449,9 +454,13 @@ namespace urtx {
     std::lock_guard l(g_settingsLock);
     g_frameTexture = resource;
   }
-  void setScreenSource(void *resource) {
+  void setScreenSource(void *resource, uint32_t width, uint32_t height, uint32_t frameWidth, uint32_t frameHeight) {
     std::lock_guard l(g_settingsLock);
     g_screenSource = resource;
+    g_screenSize[0] = width;
+    g_screenSize[1] = height;
+    g_screenFrame[0] = frameWidth;
+    g_screenFrame[1] = frameHeight;
   }
   void setProjection(float p22, float p23, bool reversedZ) {
     std::lock_guard l(g_settingsLock);
@@ -459,13 +468,18 @@ namespace urtx {
     g_projection[1] = p23;
     g_reversedZ = reversedZ;
   }
-  void setTexture(void *resource, uint32_t width, uint32_t height, uint32_t vkFormat, const void *pixels) {
+  void setTexture(void *resource, uint32_t width, uint32_t height, uint32_t depth, uint32_t vkFormat,
+                  const void *pixels) {
     PendingTexture t;
     t.width = width;
     t.height = height;
+    t.depth = depth;
     t.vkFormat = vkFormat;
-    t.pixels.assign(static_cast<const uint8_t *>(pixels), static_cast<const uint8_t *>(pixels) + size_t(width) * height * 4);
+    t.pixels.assign(static_cast<const uint8_t *>(pixels),
+                    static_cast<const uint8_t *>(pixels) + size_t(width) * height * depth * 4);
     std::lock_guard l(g_settingsLock);
+    // Content replaced (a palette's LUT recomputed): sampled as new once uploaded.
+    g_uploaded.erase(resource);
     g_pending[resource] = std::move(t);
   }
 
@@ -495,8 +509,9 @@ namespace urtx {
         if (count >= max)
           return count;
         resources[count] = t.resource;
-        sizes[2 * count] = int(t.width);
-        sizes[2 * count + 1] = int(t.height);
+        sizes[3 * count] = int(t.width);
+        sizes[3 * count + 1] = int(t.height);
+        sizes[3 * count + 2] = int(t.depth);
         ++count;
       }
     return count;
@@ -506,6 +521,7 @@ namespace urtx {
     if (!g_submit)
       return 0;
     void *frameTexture = nullptr, *screenSource = nullptr;
+    uint32_t screenSize[2], screenFrame[2];
     float projection[2];
     bool reversedZ;
     std::unordered_map<void *, PendingTexture> pending;
@@ -521,14 +537,22 @@ namespace urtx {
       }
       frameTexture = g_frameTexture;
       screenSource = g_screenSource;
+      screenSize[0] = g_screenSize[0];
+      screenSize[1] = g_screenSize[1];
+      screenFrame[0] = g_screenFrame[0];
+      screenFrame[1] = g_screenFrame[1];
       projection[0] = g_projection[0];
       projection[1] = g_projection[1];
       reversedZ = g_reversedZ;
       pending.swap(g_pending);
     }
     for (auto &[resource, t] : pending) {
-      const auto error = g_updateTarget(reinterpret_cast<remixapi_HostTargetHandleEXT>(resource), t.width, t.height,
-                                        t.vkFormat, t.pixels.data(), t.pixels.size());
+      const auto handle = reinterpret_cast<remixapi_HostTargetHandleEXT>(resource);
+      const auto error =
+          t.depth > 1 ? (g_updateVolume ? g_updateVolume(handle, t.width, t.height, t.depth, t.vkFormat,
+                                                         t.pixels.data(), t.pixels.size())
+                                        : REMIXAPI_ERROR_CODE_GET_PROC_ADDRESS_FAILURE)
+                      : g_updateTarget(handle, t.width, t.height, t.vkFormat, t.pixels.data(), t.pixels.size());
       if (error == REMIXAPI_ERROR_CODE_SUCCESS) {
         std::lock_guard l(g_settingsLock);
         g_uploaded.insert(resource);
@@ -637,12 +661,22 @@ namespace urtx {
           skipped = "screen effect: " + (screenSource ? why : std::string("no screen source"));
         continue;
       }
+      // All of the frame (flipped as the captures are), whatever viewport Unity's blit had.
+      if (screenFrame[0] && screenFrame[1]) {
+        pass.info.viewport[0] = 0;
+        pass.info.viewport[1] = int32_t(screenFrame[1]);
+        pass.info.viewport[2] = int32_t(screenFrame[0]);
+        pass.info.viewport[3] = -int32_t(screenFrame[1]);
+      }
       Pass copy;
       copy.info.kind = REMIXAPI_HOST_PASS_COPY_EXT;
       copy.info.source = 0;
       copy.info.target = kScreenCopy;
-      copy.info.targetWidth = uint32_t(d.viewport.Width);
-      copy.info.targetHeight = uint32_t(d.viewport.Height);
+      // At the game's render resolution (its downsampling), nearest as it renders.
+      copy.info.targetWidth = screenSize[0] ? screenSize[0] : screenFrame[0] ? screenFrame[0] : uint32_t(d.viewport.Width);
+      copy.info.targetHeight =
+          screenSize[1] ? screenSize[1] : screenFrame[1] ? screenFrame[1] : uint32_t(d.viewport.Height);
+      copy.info.linear = 0;
       passes.push_back(std::move(copy));
       passes.push_back(std::move(pass));
       ++screens;

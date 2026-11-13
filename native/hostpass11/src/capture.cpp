@@ -133,6 +133,17 @@ namespace urtx {
             t.height = desc.Height;
             t.format = desc.Format;
             texture->Release();
+          } else {
+            ID3D11Texture3D *volume = nullptr;
+            if (SUCCEEDED(resource->QueryInterface(__uuidof(ID3D11Texture3D), reinterpret_cast<void **>(&volume)))) {
+              D3D11_TEXTURE3D_DESC desc{};
+              volume->GetDesc(&desc);
+              t.width = desc.Width;
+              t.height = desc.Height;
+              t.depth = desc.Depth;
+              t.format = desc.Format;
+              volume->Release();
+            }
           }
           resource->Release();
         }

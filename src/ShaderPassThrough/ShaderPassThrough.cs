@@ -30,9 +30,9 @@ namespace UnityRemix
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Report(StringBuilder buffer, int bytes);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_BindRemix(IntPtr remix);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetFrameTexture(IntPtr resource);
-        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetScreenSource(IntPtr resource);
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetScreenSource(IntPtr resource, int width, int height, int frameWidth, int frameHeight);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetProjection(float p22, float p23, int reversedZ);
-        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetTexture(IntPtr resource, int width, int height, int vkFormat, IntPtr rgba8);
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetTexture(IntPtr resource, int width, int height, int depth, int vkFormat, IntPtr rgba8);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_MissingTextures([Out] IntPtr[] resources, [Out] int[] sizes, int max);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetStains(float[] vertices, int quads, IntPtr atlas);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetStainView(float[] rows);
@@ -73,7 +73,13 @@ namespace UnityRemix
         private static readonly HashSet<IntPtr> sentTextures = new HashSet<IntPtr>();
         private static readonly HashSet<IntPtr> unmatchedTextures = new HashSet<IntPtr>();
         private static readonly IntPtr[] missing = new IntPtr[32];
-        private static readonly int[] missingSizes = new int[64];
+        private static readonly int[] missingSizes = new int[96]; // (width, height, depth) each
+        // What was sent of each texture: re-sent when Unity updates it (a palette's LUT recomputed).
+        private static readonly Dictionary<IntPtr, (Texture texture, uint version)> sentVersions =
+            new Dictionary<IntPtr, (Texture, uint)>();
+        // The screen effect as blitted: a copy of the game's material (its keywords and values each
+        // frame) with _MainTex the stand-in source, whatever the game's material holds there.
+        private static Material screenCopy;
 
         /// <summary>The hooks are in: the profile's pass-through renderers are replayed with their own shaders.</summary>
         public static bool Installed => installed;
@@ -230,8 +236,14 @@ namespace UnityRemix
                 // Its own shaders over the whole frame: Blit sets _MainTex to the source, which
                 // the replay replaces with the composed frame.
                 EnsureScreenSource();
+                if (screenCopy == null || screenCopy.shader != screenEffect.shader)
+                    screenCopy = new Material(screenEffect) { name = screenEffect.name + " (UnityRTX)", hideFlags = HideFlags.HideAndDontSave };
+                else
+                    screenCopy.CopyPropertiesFromMaterial(screenEffect);
+                screenCopy.shaderKeywords = screenEffect.shaderKeywords;
+                screenCopy.SetTexture("_MainTex", screenSource);
                 commands.IssuePluginEvent(renderEvent, BeginEvent | ScreenTag);
-                commands.Blit(screenSource, new RenderTargetIdentifier(target), screenEffect);
+                commands.Blit(screenSource, new RenderTargetIdentifier(target), screenCopy);
             }
             commands.IssuePluginEvent(renderEvent, EndEvent);
             helper.Render();
@@ -342,7 +354,30 @@ namespace UnityRemix
                 frameTexturePtr = frame != null ? frame.GetNativeTexturePtr() : IntPtr.Zero;
             }
             UnityRTXHostPass_SetFrameTexture(frameTexturePtr);
-            UnityRTXHostPass_SetScreenSource(screenEffect != null ? screenSourcePtr : IntPtr.Zero);
+            UnityRTXHostPass_SetScreenSource(screenEffect != null ? screenSourcePtr : IntPtr.Zero,
+                screenEffect != null ? screenSource.width : 0, screenEffect != null ? screenSource.height : 0,
+                target.width, target.height);
+
+            // Textures Unity has written since they were sent (sentVersions): again.
+            if (sentVersions.Count > 0)
+            {
+                List<IntPtr> stale = null;
+                foreach (var entry in sentVersions)
+                    if (entry.Value.texture == null)
+                        (stale ??= new List<IntPtr>()).Add(entry.Key);
+                    else if (entry.Value.texture.updateCount != entry.Value.version)
+                        (stale ??= new List<IntPtr>()).Add(entry.Key);
+                if (stale != null)
+                    foreach (var resource in stale)
+                    {
+                        var texture = sentVersions[resource].texture;
+                        sentVersions.Remove(resource);
+                        if (texture != null)
+                            SendTexture(resource, texture);
+                        else
+                            sentTextures.Remove(resource);
+                    }
+            }
 
             int count = UnityRTXHostPass_MissingTextures(missing, missingSizes, missing.Length);
             for (int i = 0; i < count; i++)
@@ -350,12 +385,12 @@ namespace UnityRemix
                 IntPtr resource = missing[i];
                 if (sentTextures.Contains(resource) || unmatchedTextures.Contains(resource))
                     continue;
-                int width = missingSizes[2 * i], height = missingSizes[2 * i + 1];
-                var texture = FindTexture(resource, width, height);
+                int width = missingSizes[3 * i], height = missingSizes[3 * i + 1], depth = missingSizes[3 * i + 2];
+                var texture = FindTexture(resource, width, height, depth);
                 if (texture == null)
                 {
                     unmatchedTextures.Add(resource);
-                    logger?.LogWarning($"[ShaderPassThrough] no texture found for resource 0x{resource.ToInt64():X} ({width}x{height})");
+                    logger?.LogWarning($"[ShaderPassThrough] no texture found for resource 0x{resource.ToInt64():X} ({width}x{height}x{depth})");
                     continue;
                 }
                 if (SendTexture(resource, texture))
@@ -367,7 +402,7 @@ namespace UnityRemix
 
         // The texture whose native pointer is `resource`: the pass-through materials' own first,
         // then any loaded texture of its size.
-        private static Texture FindTexture(IntPtr resource, int width, int height)
+        private static Texture FindTexture(IntPtr resource, int width, int height, int depth)
         {
             var names = new List<string>();
             var materials = new List<Material>();
@@ -386,7 +421,7 @@ namespace UnityRemix
                     foreach (var name in names)
                     {
                         var t = m.GetTexture(name);
-                        if (t != null && t.width == width && t.height == height && t.GetNativeTexturePtr() == resource)
+                        if (t != null && t.width == width && t.height == height && Depth(t) == depth && t.GetNativeTexturePtr() == resource)
                         {
                             logger?.LogInfo($"[ShaderPassThrough] resource 0x{resource.ToInt64():X} is {m.name}.{name} ('{t.name}')");
                             return t;
@@ -395,7 +430,7 @@ namespace UnityRemix
                 }
             }
             foreach (var t in Resources.FindObjectsOfTypeAll<Texture>())
-                if (t != null && t.width == width && t.height == height && t.GetNativeTexturePtr() == resource)
+                if (t != null && t.width == width && t.height == height && Depth(t) == depth && t.GetNativeTexturePtr() == resource)
                 {
                     logger?.LogInfo($"[ShaderPassThrough] resource 0x{resource.ToInt64():X} is texture '{t.name}' (not a material property)");
                     return t;
@@ -403,9 +438,22 @@ namespace UnityRemix
             return null;
         }
 
+        private static int Depth(Texture t) =>
+            t is Texture3D volume ? volume.depth :
+            t is RenderTexture rt && rt.dimension == TextureDimension.Tex3D ? rt.volumeDepth : 1;
+
         private static bool SendTexture(IntPtr resource, Texture texture)
         {
             bool srgb = UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(texture.graphicsFormat);
+            uint version = texture.updateCount;
+            int depth = Depth(texture);
+            if (depth > 1)
+            {
+                if (!SendVolume(resource, texture, depth, srgb))
+                    return false;
+                sentVersions[resource] = (texture, version);
+                return true;
+            }
             var rt = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32,
                 srgb ? RenderTextureReadWrite.sRGB : RenderTextureReadWrite.Linear);
             var previous = RenderTexture.active;
@@ -421,10 +469,11 @@ namespace UnityRemix
                 try
                 {
                     // VK_FORMAT_R8G8B8A8_SRGB 43, _UNORM 37: sampled as the game's view of it was.
-                    UnityRTXHostPass_SetTexture(resource, texture.width, texture.height, srgb ? 43 : 37, handle.AddrOfPinnedObject());
+                    UnityRTXHostPass_SetTexture(resource, texture.width, texture.height, 1, srgb ? 43 : 37, handle.AddrOfPinnedObject());
                 }
                 finally { handle.Free(); }
                 logger?.LogInfo($"[ShaderPassThrough] sent '{texture.name}' {texture.width}x{texture.height}{(srgb ? " sRGB" : "")}");
+                sentVersions[resource] = (texture, version);
                 return true;
             }
             catch (Exception e)
@@ -437,6 +486,65 @@ namespace UnityRemix
                 RenderTexture.active = previous;
                 RenderTexture.ReleaseTemporary(rt);
             }
+        }
+
+        // A volume (a palette's 3D LUT, often a compute shader's render texture): read back whole
+        // through the GPU, slices in order.
+        private static bool SendVolume(IntPtr resource, Texture texture, int depth, bool srgb)
+        {
+            try
+            {
+                var request = AsyncGPUReadback.Request(texture, 0, 0, texture.width, 0, texture.height, 0, depth, TextureFormat.RGBA32);
+                request.WaitForCompletion();
+                if (request.hasError)
+                {
+                    logger?.LogWarning($"[ShaderPassThrough] reading volume '{texture.name}' back failed");
+                    return false;
+                }
+                int slice = texture.width * texture.height * 4;
+                var pixels = new byte[(long)slice * depth];
+                if (request.layerCount >= depth)
+                {
+                    for (int z = 0; z < depth; z++)
+                        Unity.Collections.NativeArray<byte>.Copy(request.GetData<byte>(z), 0, pixels, z * slice, slice);
+                }
+                else
+                {
+                    var data = request.GetData<byte>(0);
+                    if (data.Length < pixels.Length)
+                    {
+                        logger?.LogWarning($"[ShaderPassThrough] volume '{texture.name}' read back {data.Length} of {pixels.Length} bytes");
+                        return false;
+                    }
+                    Unity.Collections.NativeArray<byte>.Copy(data, pixels, pixels.Length);
+                }
+                var handle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+                try
+                {
+                    UnityRTXHostPass_SetTexture(resource, texture.width, texture.height, depth, srgb ? 43 : 37, handle.AddrOfPinnedObject());
+                }
+                finally { handle.Free(); }
+                logger?.LogInfo($"[ShaderPassThrough] sent volume '{texture.name}' {texture.width}x{texture.height}x{depth}{(srgb ? " sRGB" : "")}");
+                return true;
+            }
+            catch (Exception e)
+            {
+                logger?.LogWarning($"[ShaderPassThrough] reading volume '{texture.name}' back failed: {e.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Main thread: a texture the replay samples has new contents Unity does not count as an
+        /// update (a compute shader's render texture): sent again before it is next sampled.
+        /// </summary>
+        public static void TextureChanged(Texture texture)
+        {
+            if (texture == null)
+                return;
+            foreach (var entry in new List<KeyValuePair<IntPtr, (Texture texture, uint version)>>(sentVersions))
+                if (entry.Value.texture == texture)
+                    sentVersions[entry.Key] = (texture, unchecked(texture.updateCount + 1));
         }
 
         /// <summary>The presenting thread, before each present: the last capture as host passes.</summary>
@@ -452,21 +560,27 @@ namespace UnityRemix
             }
         }
 
-        // The screen effect's source: the frame's size (its _MainTex_TexelSize), contents unused.
+        // The screen effect's source: the size the game renders the frame it reads at (its
+        // _MainTex_TexelSize; the replay scales the frame to it), contents unused.
         private static void EnsureScreenSource()
         {
-            if (screenSource != null && screenSource.width == target.width && screenSource.height == target.height)
+            var size = Games.GameProfiles.PassThroughScreenResolution(screenEffect);
+            int width = size.x > 0 ? Mathf.Min(size.x, target.width) : target.width;
+            int height = size.y > 0 ? Mathf.Min(size.y, target.height) : target.height;
+            if (screenSource != null && screenSource.width == width && screenSource.height == height)
                 return;
             if (screenSource != null)
                 screenSource.Release();
-            screenSource = new RenderTexture(target.width, target.height, 0, RenderTextureFormat.ARGB32) { name = "UnityRTX screen source" };
+            screenSource = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32) { name = "UnityRTX screen source" };
             screenSource.Create();
             screenSourcePtr = screenSource.GetNativeTexturePtr();
         }
 
         private static void EnsureHelper(Camera main)
         {
-            int width = Mathf.Max(1, main.pixelWidth), height = Mathf.Max(1, main.pixelHeight);
+            // The presented frame's size: the game camera's own target may be smaller (a game
+            // rendering at a lower resolution, as ULTRAKILL's downsampling does).
+            int width = Mathf.Max(1, Screen.width), height = Mathf.Max(1, Screen.height);
             if (target == null || target.width != width || target.height != height)
             {
                 if (target != null)

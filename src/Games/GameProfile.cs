@@ -126,6 +126,14 @@ namespace UnityRemix.Games
         // this frame; null: none. Main thread.
         public virtual Material PassThroughScreenEffect() => null;
 
+        // The profile's own options, drawn in the Remix menu's Plugin tab (RemixSettingsUI) on
+        // its render thread with RemixImGui; false: it has none.
+        public virtual bool DrawSettings() => false;
+
+        // The resolution the game renders the frame such an effect reads at (its downsampling):
+        // the composed frame is scaled to it (nearest) first; zero: the frame's own. Main thread.
+        public virtual Vector2Int PassThroughScreenResolution(Material material) => Vector2Int.zero;
+
         // The chromatic aberration of what such a material shows (its red right and blue left of
         // green), a fraction of the screen's width; 0 none. Main thread.
         public virtual float ViewChromaticAberration(Material material) => 0f;

@@ -70,6 +70,7 @@ namespace urtx {
     uint32_t slot = 0;
     void *resource = nullptr;  // the ID3D11Resource the view shows (identity only)
     uint32_t width = 0, height = 0, format = 0;
+    uint32_t depth = 1; // above 1: a volume (Texture3D)
   };
   struct Sampler {
     uint32_t slot = 0;
@@ -139,12 +140,18 @@ namespace urtx {
   bool bindRemix(HMODULE remix);
   void setFrameTexture(void *resource);                     // the texture the frame replaces
   // Screen effects: draws tagged kScreenTag are full-screen passes over the
-  // composed frame (after the others), sampling a copy of it for `resource`.
+  // composed frame (after the others) over all of it (frameWidth x
+  // frameHeight, the capture's target), sampling a copy of it for `resource`,
+  // scaled (nearest) to width x height (the game's render resolution; 0: the
+  // frame's).
   constexpr uint32_t kScreenTag = 0xfffe;
-  void setScreenSource(void *resource);
+  void setScreenSource(void *resource, uint32_t width, uint32_t height, uint32_t frameWidth, uint32_t frameHeight);
   void setProjection(float p22, float p23, bool reversedZ); // the capture camera's GPU projection
-  void setTexture(void *resource, uint32_t width, uint32_t height, uint32_t vkFormat, const void *rgba8);
-  int missingTextures(void **resources, int *sizes, int max); // sampled, neither the frame nor uploaded
+  // A texture's pixels (RGBA8; depth above 1: a volume's slices in order).
+  void setTexture(void *resource, uint32_t width, uint32_t height, uint32_t depth, uint32_t vkFormat,
+                  const void *rgba8);
+  // Sampled, neither the frame nor uploaded: sizes are (width, height, depth) triples.
+  int missingTextures(void **resources, int *sizes, int max);
   // Blood stains drawn over the frame: quads of (x, y, z, u, v) vertices (main
   // thread, when they change) sampling `atlas` (uploaded with setTexture), in
   // the view-projection of the frame being presented (its thread, before

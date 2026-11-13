@@ -15,6 +15,7 @@
 //   UnityRTXHostPass_Submit() (the presenting thread, before each present)
 //     submits the stains and the last capture as host passes.
 #include "hostpass.h"
+#include <algorithm>
 #include <cstring>
 
 namespace {
@@ -43,14 +44,18 @@ __declspec(dllexport) int UnityRTXHostPass_BindRemix(void *remix) {
   return urtx::bindRemix(static_cast<HMODULE>(remix)) ? 1 : 0;
 }
 __declspec(dllexport) void UnityRTXHostPass_SetFrameTexture(void *resource) { urtx::setFrameTexture(resource); }
-__declspec(dllexport) void UnityRTXHostPass_SetScreenSource(void *resource) { urtx::setScreenSource(resource); }
+__declspec(dllexport) void UnityRTXHostPass_SetScreenSource(void *resource, int width, int height, int frameWidth,
+                                                             int frameHeight) {
+  urtx::setScreenSource(resource, uint32_t(std::max(width, 0)), uint32_t(std::max(height, 0)),
+                        uint32_t(std::max(frameWidth, 0)), uint32_t(std::max(frameHeight, 0)));
+}
 __declspec(dllexport) void UnityRTXHostPass_SetProjection(float p22, float p23, int reversedZ) {
   urtx::setProjection(p22, p23, reversedZ != 0);
 }
-__declspec(dllexport) void UnityRTXHostPass_SetTexture(void *resource, int width, int height, int vkFormat,
+__declspec(dllexport) void UnityRTXHostPass_SetTexture(void *resource, int width, int height, int depth, int vkFormat,
                                                        const void *rgba8) {
-  if (resource && rgba8 && width > 0 && height > 0)
-    urtx::setTexture(resource, uint32_t(width), uint32_t(height), uint32_t(vkFormat), rgba8);
+  if (resource && rgba8 && width > 0 && height > 0 && depth > 0)
+    urtx::setTexture(resource, uint32_t(width), uint32_t(height), uint32_t(depth), uint32_t(vkFormat), rgba8);
 }
 __declspec(dllexport) int UnityRTXHostPass_MissingTextures(void **resources, int *sizes, int max) {
   return resources && sizes && max > 0 ? urtx::missingTextures(resources, sizes, max) : 0;

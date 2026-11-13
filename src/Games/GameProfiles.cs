@@ -139,6 +139,13 @@ namespace UnityRemix.Games
             return material;
         }
 
+        public static Vector2Int PassThroughScreenResolution(Material material)
+        {
+            Vector2Int size = Vector2Int.zero;
+            Run(nameof(PassThroughScreenResolution), p => size = p.PassThroughScreenResolution(material));
+            return size;
+        }
+
         public static Texture PassThroughFrameTexture(Material material)
         {
             Texture texture = null;

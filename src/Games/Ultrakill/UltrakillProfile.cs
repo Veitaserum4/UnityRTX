@@ -113,15 +113,76 @@ namespace UnityRemix.Games.Ultrakill
                     renderers.Add(r);
         }
 
-        // The death sequence (DeathSequence): PostProcessV2_Handler's screen material
-        // (ULTRAKILL/PostProcessV2, postProcessV2_VSRM) with DEAD, its noise and blocks ramping
-        // with _Deathness (its variant also applies the material's palette, colour depth and
-        // vignette, as the game does). Other times it stays off: the path-traced look.
+        // PostProcessV2_Handler's screen material (ULTRAKILL/PostProcessV2, postProcessV2_VSRM)
+        // while it shows something: DEAD, the death sequence (DeathSequence; noise and blocks
+        // ramping with _Deathness), or WICKED, Greed's distortion near a ScreenDistortionField
+        // (ScreenDistortionController; its strength _RandomNoiseStrength). Its variants also
+        // apply the material's palette, colour depth and vignette, as the game does. With
+        // GamePostProcess, always: the graphics menu's dithering (_DitherStrength), colour
+        // compression (_ColorPrecision), palette (PALETTIZE), gamma and downsampling.
+        public static BepInEx.Configuration.ConfigEntry<bool> GamePostProcess;
+
+        public override bool DrawSettings()
+        {
+            RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Screen");
+            RemixImGui.Separator();
+            if (GamePostProcess != null)
+            {
+                bool post = GamePostProcess.Value;
+                if (RemixImGui.Checkbox("Game post-process", ref post))
+                    GamePostProcess.Value = post;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("ULTRAKILL's own screen effects over the path-traced image, as its graphics menu sets them: " +
+                                          "dithering, colour compression, custom palette, gamma, downscaling. " +
+                                          "Off: only the death sequence and Greed's distortion.");
+            }
+
+            RemixImGui.Spacing();
+            RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Blood");
+            RemixImGui.Separator();
+            var overlay = UltrakillBloodStains.Overlay;
+            if (overlay != null)
+            {
+                bool value = overlay.Value;
+                if (RemixImGui.Checkbox("Blood stains as the game draws them", ref value))
+                    overlay.Value = value;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Composites stains over the image exactly as the game does (cheaper, not in reflections). " +
+                                          "Off: path-traced wet paint (glossy, in reflections).");
+            }
+            return true;
+        }
         private Material postProcessMaterial;
         private int postProcessFrame = -1000;
 
+        // ConvertPaletteToLUT recomputes the palette's LUT (_LUT, a 3D render texture) in place
+        // when the palette changes; Unity doesn't count a compute shader's writes as an update.
+        private Component paletteConverter;
+        private UnityEngine.Object lastPalette;
+        private int paletteSearchFrame = -1000;
+
+        private void WatchPalette()
+        {
+            if (paletteConverter == null && Time.frameCount - paletteSearchFrame >= 120)
+            {
+                paletteSearchFrame = Time.frameCount;
+                var type = AccessTools.TypeByName("ConvertPaletteToLUT");
+                if (type != null)
+                    paletteConverter = UnityEngine.Object.FindObjectOfType(type) as Component;
+            }
+            if (paletteConverter == null)
+                return;
+            var type2 = paletteConverter.GetType();
+            var palette = AccessTools.Field(type2, "lastPalette")?.GetValue(paletteConverter) as UnityEngine.Object;
+            if (palette == lastPalette)
+                return;
+            lastPalette = palette;
+            ShaderPassThrough.TextureChanged(AccessTools.Field(type2, "processedLUT")?.GetValue(paletteConverter) as Texture);
+        }
+
         public override Material PassThroughScreenEffect()
         {
+            WatchPalette();
             if (postProcessMaterial == null && Time.frameCount - postProcessFrame >= 120)
             {
                 postProcessFrame = Time.frameCount;
@@ -131,7 +192,19 @@ namespace UnityRemix.Games.Ultrakill
                 if (field != null && handler != null)
                     postProcessMaterial = field.GetValue(handler) as Material;
             }
-            return postProcessMaterial != null && postProcessMaterial.IsKeywordEnabled("DEAD") ? postProcessMaterial : null;
+            return postProcessMaterial != null &&
+                   ((GamePostProcess != null && GamePostProcess.Value) ||
+                    postProcessMaterial.IsKeywordEnabled("DEAD") || postProcessMaterial.IsKeywordEnabled("WICKED"))
+                ? postProcessMaterial : null;
+        }
+
+        // The pixelization setting (_ResY): PostProcessV2_Handler renders mainTex at _VirtualRes.
+        public override Vector2Int PassThroughScreenResolution(Material material)
+        {
+            if (material == null || material != postProcessMaterial || !material.HasProperty("_VirtualRes"))
+                return Vector2Int.zero;
+            Vector4 v = material.GetVector("_VirtualRes");
+            return v.x >= 1f && v.y >= 1f ? new Vector2Int((int)v.x, (int)v.y) : Vector2Int.zero;
         }
 
         // LIMBO_WALLS samples the sky's red at +_ChromaticAberration / _LimboSkyWidth and its blue at
