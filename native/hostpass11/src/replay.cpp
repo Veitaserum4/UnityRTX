@@ -33,6 +33,8 @@ namespace urtx {
     PFN_remixapi_GetHostPassStatisticsEXT g_statistics = nullptr;
 
     constexpr remixapi_HostTargetHandleEXT kFrameCopy = 0x5552000000000001ull;
+    // The composed frame (walls and stains drawn) for screen effects to sample.
+    constexpr remixapi_HostTargetHandleEXT kScreenCopy = 0x5552000000000004ull;
     // What is behind the walls: the frame where they show, holes (where
     // something stands in front of them) filled from beside (ping-pong).
     constexpr remixapi_HostTargetHandleEXT kBehind[2] = {0x5552000000000002ull, 0x5552000000000003ull};
@@ -42,6 +44,7 @@ namespace urtx {
     // From the plugin (main thread), read on the render thread.
     std::mutex g_settingsLock;
     void *g_frameTexture = nullptr; // the resource the draws sample as the frame
+    void *g_screenSource = nullptr; // the resource screen effects sample as the frame
     float g_projection[2] = {};     // the capture camera's GPU projection: P22, P23
     bool g_reversedZ = true;
     struct PendingTexture {
@@ -446,6 +449,10 @@ namespace urtx {
     std::lock_guard l(g_settingsLock);
     g_frameTexture = resource;
   }
+  void setScreenSource(void *resource) {
+    std::lock_guard l(g_settingsLock);
+    g_screenSource = resource;
+  }
   void setProjection(float p22, float p23, bool reversedZ) {
     std::lock_guard l(g_settingsLock);
     g_projection[0] = p22;
@@ -480,7 +487,8 @@ namespace urtx {
     int count = 0;
     for (const auto &d : draws)
       for (const auto &t : d.textures) {
-        if (!t.resource || t.resource == g_frameTexture || g_uploaded.count(t.resource) || g_pending.count(t.resource))
+        if (!t.resource || t.resource == g_frameTexture || t.resource == g_screenSource || g_uploaded.count(t.resource) ||
+            g_pending.count(t.resource))
           continue;
         if (std::find(resources, resources + count, t.resource) != resources + count)
           continue;
@@ -497,7 +505,7 @@ namespace urtx {
   int submit() {
     if (!g_submit)
       return 0;
-    void *frameTexture = nullptr;
+    void *frameTexture = nullptr, *screenSource = nullptr;
     float projection[2];
     bool reversedZ;
     std::unordered_map<void *, PendingTexture> pending;
@@ -512,6 +520,7 @@ namespace urtx {
         std::memcpy(stainView, g_stainView, sizeof(stainView));
       }
       frameTexture = g_frameTexture;
+      screenSource = g_screenSource;
       projection[0] = g_projection[0];
       projection[1] = g_projection[1];
       reversedZ = g_reversedZ;
@@ -527,7 +536,15 @@ namespace urtx {
         log("uploading texture %p (%ux%u) failed: %d", resource, t.width, t.height, int(error));
     }
 
-    const auto draws = lastCapture();
+    // Screen effects apart: they follow everything else, over the composed frame.
+    auto draws = lastCapture();
+    std::vector<Draw> screen;
+    for (auto it = draws.begin(); it != draws.end();)
+      if (it->tag == kScreenTag) {
+        screen.push_back(std::move(*it));
+        it = draws.erase(it);
+      } else
+        ++it;
     std::vector<Pass> passes;
     passes.reserve(draws.size() + 2);
     std::string skipped;
@@ -609,6 +626,27 @@ namespace urtx {
         passes.insert(passes.begin(), std::move(pass));
       }
     }
+    // Screen effects (the game's full-screen post-process): each over a copy of
+    // the frame as composed so far, its whole viewport, no depth.
+    size_t screens = 0;
+    for (const auto &d : screen) {
+      Pass pass;
+      std::string why;
+      if (!screenSource || !drawPass(d, screenSource, kScreenCopy, 0, false, pass, why)) {
+        if (skipped.empty())
+          skipped = "screen effect: " + (screenSource ? why : std::string("no screen source"));
+        continue;
+      }
+      Pass copy;
+      copy.info.kind = REMIXAPI_HOST_PASS_COPY_EXT;
+      copy.info.source = 0;
+      copy.info.target = kScreenCopy;
+      copy.info.targetWidth = uint32_t(d.viewport.Width);
+      copy.info.targetHeight = uint32_t(d.viewport.Height);
+      passes.push_back(std::move(copy));
+      passes.push_back(std::move(pass));
+      ++screens;
+    }
     std::vector<remixapi_HostPassEXT> list;
     std::vector<uint32_t> flags;
     for (auto &p : passes) {
@@ -628,8 +666,8 @@ namespace urtx {
     const auto error = g_submit(&submission);
 
     char line[512];
-    std::snprintf(line, sizeof(line), "submitted %zu passes (%zu captured draws, %zu stains, error %d)%s%s",
-                  list.size(), draws.size(), stains, int(error), skipped.empty() ? "" : "; first skipped: ",
+    std::snprintf(line, sizeof(line), "submitted %zu passes (%zu captured draws, %zu screen effects, %zu stains, error %d)%s%s",
+                  list.size(), draws.size(), screens, stains, int(error), skipped.empty() ? "" : "; first skipped: ",
                   skipped.c_str());
     std::string text = line;
     if (g_statistics) {

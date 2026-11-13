@@ -132,6 +132,13 @@ namespace UnityRemix.Games
             Run(nameof(GetPassThroughRenderers), p => p.GetPassThroughRenderers(worldCamera, renderers));
         }
 
+        public static Material PassThroughScreenEffect()
+        {
+            Material material = null;
+            Run(nameof(PassThroughScreenEffect), p => material = p.PassThroughScreenEffect());
+            return material;
+        }
+
         public static Texture PassThroughFrameTexture(Material material)
         {
             Texture texture = null;

@@ -22,6 +22,7 @@ namespace UnityRemix
     {
         private const string Dll = "UnityRTXHostPass";
         private const int BeginEvent = 0x55520000, EndEvent = 0x5552ffff;
+        private const int ScreenTag = 0xfffe; // a screen effect's draw (hostpass.h kScreenTag)
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr LoadLibraryW(string path);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Install(IntPtr device);
@@ -29,6 +30,7 @@ namespace UnityRemix
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Report(StringBuilder buffer, int bytes);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_BindRemix(IntPtr remix);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetFrameTexture(IntPtr resource);
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetScreenSource(IntPtr resource);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetProjection(float p22, float p23, int reversedZ);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetTexture(IntPtr resource, int width, int height, int vkFormat, IntPtr rgba8);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_MissingTextures([Out] IntPtr[] resources, [Out] int[] sizes, int max);
@@ -47,6 +49,11 @@ namespace UnityRemix
         private static RenderTexture target;
         private static CommandBuffer commands;
         private static readonly List<Renderer> renderers = new List<Renderer>();
+        // The profile's screen effect this frame (GameProfile.PassThroughScreenEffect), blitted from
+        // screenSource, the texture the replay gives it the composed frame for.
+        private static Material screenEffect;
+        private static RenderTexture screenSource;
+        private static IntPtr screenSourcePtr;
         private static int lastReportFrame = -100000;
         private static int lastDrawCount = -1;
         private static int reports;
@@ -182,7 +189,8 @@ namespace UnityRemix
                     renderers[kept++] = r;
             }
             renderers.RemoveRange(kept, renderers.Count - kept);
-            if (renderers.Count == 0)
+            screenEffect = Games.GameProfiles.PassThroughScreenEffect();
+            if (renderers.Count == 0 && screenEffect == null)
             {
                 ++culledFrames;
                 if (!captureCleared)
@@ -216,6 +224,14 @@ namespace UnityRemix
                     commands.IssuePluginEvent(renderEvent, BeginEvent | (i & 0xffff));
                     commands.DrawRenderer(r, materials[s], s, 0);
                 }
+            }
+            if (screenEffect != null)
+            {
+                // Its own shaders over the whole frame: Blit sets _MainTex to the source, which
+                // the replay replaces with the composed frame.
+                EnsureScreenSource();
+                commands.IssuePluginEvent(renderEvent, BeginEvent | ScreenTag);
+                commands.Blit(screenSource, new RenderTargetIdentifier(target), screenEffect);
             }
             commands.IssuePluginEvent(renderEvent, EndEvent);
             helper.Render();
@@ -326,6 +342,7 @@ namespace UnityRemix
                 frameTexturePtr = frame != null ? frame.GetNativeTexturePtr() : IntPtr.Zero;
             }
             UnityRTXHostPass_SetFrameTexture(frameTexturePtr);
+            UnityRTXHostPass_SetScreenSource(screenEffect != null ? screenSourcePtr : IntPtr.Zero);
 
             int count = UnityRTXHostPass_MissingTextures(missing, missingSizes, missing.Length);
             for (int i = 0; i < count; i++)
@@ -353,11 +370,14 @@ namespace UnityRemix
         private static Texture FindTexture(IntPtr resource, int width, int height)
         {
             var names = new List<string>();
+            var materials = new List<Material>();
             foreach (var r in renderers)
+                if (r != null)
+                    materials.AddRange(r.sharedMaterials);
+            if (screenEffect != null)
+                materials.Add(screenEffect);
             {
-                if (r == null)
-                    continue;
-                foreach (var m in r.sharedMaterials)
+                foreach (var m in materials)
                 {
                     if (m == null)
                         continue;
@@ -430,6 +450,18 @@ namespace UnityRemix
                 bound = false;
                 logger?.LogWarning($"[ShaderPassThrough] submit failed, replay off: {e.Message}");
             }
+        }
+
+        // The screen effect's source: the frame's size (its _MainTex_TexelSize), contents unused.
+        private static void EnsureScreenSource()
+        {
+            if (screenSource != null && screenSource.width == target.width && screenSource.height == target.height)
+                return;
+            if (screenSource != null)
+                screenSource.Release();
+            screenSource = new RenderTexture(target.width, target.height, 0, RenderTextureFormat.ARGB32) { name = "UnityRTX screen source" };
+            screenSource.Create();
+            screenSourcePtr = screenSource.GetNativeTexturePtr();
         }
 
         private static void EnsureHelper(Camera main)

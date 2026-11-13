@@ -121,6 +121,11 @@ namespace UnityRemix.Games
         // (its screen-space view of the scene); null: none. Main thread.
         public virtual Texture PassThroughFrameTexture(Material material) => null;
 
+        // A full-screen effect the game applies over its frame (a material Unity blits with,
+        // reading the frame as _MainTex), passed through over the composed path-traced frame
+        // this frame; null: none. Main thread.
+        public virtual Material PassThroughScreenEffect() => null;
+
         // The chromatic aberration of what such a material shows (its red right and blue left of
         // green), a fraction of the screen's width; 0 none. Main thread.
         public virtual float ViewChromaticAberration(Material material) => 0f;

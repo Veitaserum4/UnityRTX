@@ -138,6 +138,10 @@ namespace urtx {
   // Replay (replay.cpp): the last capture as OpenRemix host passes.
   bool bindRemix(HMODULE remix);
   void setFrameTexture(void *resource);                     // the texture the frame replaces
+  // Screen effects: draws tagged kScreenTag are full-screen passes over the
+  // composed frame (after the others), sampling a copy of it for `resource`.
+  constexpr uint32_t kScreenTag = 0xfffe;
+  void setScreenSource(void *resource);
   void setProjection(float p22, float p23, bool reversedZ); // the capture camera's GPU projection
   void setTexture(void *resource, uint32_t width, uint32_t height, uint32_t vkFormat, const void *rgba8);
   int missingTextures(void **resources, int *sizes, int max); // sampled, neither the frame nor uploaded

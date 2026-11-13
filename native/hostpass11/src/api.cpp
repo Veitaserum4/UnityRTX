@@ -8,6 +8,8 @@
 //   UnityRTXHostPass_SetFrameTexture / SetProjection / SetTexture (main thread)
 //     name the texture the frame replaces, the capture camera's projection and
 //     the other textures' pixels;
+//   UnityRTXHostPass_SetScreenSource (main thread) names the texture a
+//     screen effect's draws (tag kScreenTag) sample as the composed frame;
 //   UnityRTXHostPass_SetStains (main thread) / SetStainView (the presenting
 //     thread) give the blood stains drawn over the frame and its camera;
 //   UnityRTXHostPass_Submit() (the presenting thread, before each present)
@@ -41,6 +43,7 @@ __declspec(dllexport) int UnityRTXHostPass_BindRemix(void *remix) {
   return urtx::bindRemix(static_cast<HMODULE>(remix)) ? 1 : 0;
 }
 __declspec(dllexport) void UnityRTXHostPass_SetFrameTexture(void *resource) { urtx::setFrameTexture(resource); }
+__declspec(dllexport) void UnityRTXHostPass_SetScreenSource(void *resource) { urtx::setScreenSource(resource); }
 __declspec(dllexport) void UnityRTXHostPass_SetProjection(float p22, float p23, int reversedZ) {
   urtx::setProjection(p22, p23, reversedZ != 0);
 }

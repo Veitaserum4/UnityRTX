@@ -113,6 +113,27 @@ namespace UnityRemix.Games.Ultrakill
                     renderers.Add(r);
         }
 
+        // The death sequence (DeathSequence): PostProcessV2_Handler's screen material
+        // (ULTRAKILL/PostProcessV2, postProcessV2_VSRM) with DEAD, its noise and blocks ramping
+        // with _Deathness (its variant also applies the material's palette, colour depth and
+        // vignette, as the game does). Other times it stays off: the path-traced look.
+        private Material postProcessMaterial;
+        private int postProcessFrame = -1000;
+
+        public override Material PassThroughScreenEffect()
+        {
+            if (postProcessMaterial == null && Time.frameCount - postProcessFrame >= 120)
+            {
+                postProcessFrame = Time.frameCount;
+                var type = AccessTools.TypeByName("PostProcessV2_Handler");
+                var field = type != null ? AccessTools.Field(type, "postProcessV2_VSRM") : null;
+                var handler = type != null ? UnityEngine.Object.FindObjectOfType(type) : null;
+                if (field != null && handler != null)
+                    postProcessMaterial = field.GetValue(handler) as Material;
+            }
+            return postProcessMaterial != null && postProcessMaterial.IsKeywordEnabled("DEAD") ? postProcessMaterial : null;
+        }
+
         // LIMBO_WALLS samples the sky's red at +_ChromaticAberration / _LimboSkyWidth and its blue at
         // minus that, in screen UV: the sky is rendered at the screen's width over the skybox's
         // downscaleFactor (2), so the shift is _ChromaticAberration x 2 screen pixels.
