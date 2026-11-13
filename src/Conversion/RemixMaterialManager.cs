@@ -184,6 +184,9 @@ namespace UnityRemix
             public bool emissionAsShown;  // a backdrop (panoramic sky): its emission is what Unity shows, not scaled to light units
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
+            public Color glowColor;     // an additive glow on a mesh: its emission (what Unity adds per white texel, over glowCoverage)
+            public float glowCoverage;  // its texels' coverage scale, the glow's brightness up to 1 (0: not an additive glow)
+            public bool blendedInstance; // drawn with remixapi_InstanceInfoBlendEXT (a particle-like effect on a mesh)
             public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
             public bool paintFinish; // remixapi_MaterialInfoPaintFinishEXT: multiplicative paint with its own roughness
             public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
@@ -327,6 +330,57 @@ namespace UnityRemix
         {
             return materialId == 0 || !materialTextureData.TryGetValue(materialId, out var data) ||
                    (data.alphaMode != AlphaMode.Blend && data.translucentKind == TranslucentKind.None);
+        }
+
+        // A particle-like material on a mesh renderer (an additive glow, a particle shader): its
+        // instances blend (remixapi_InstanceInfoBlendEXT) as particles' do, rather than standing
+        // as an opaque surface or a tinted sheet.
+        public bool NeedsBlendedInstance(int materialId)
+        {
+            return materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.blendedInstance;
+        }
+
+        // Additive blending (SrcAlpha or One, One): ULTRAKILL/Additive and the legacy additive
+        // particle shaders (fixed blend; 2 x _TintColor), and shaders reading _SrcBlend/_DstBlend
+        // (ULTRAKILL/Master, Standard, Particles/Standard) set to it. glow: what Unity adds for a
+        // white, opaque texel. (The psx transparent shaders keep stale _DstBlend values: they
+        // alpha blend.)
+        private static bool TryGetAdditiveGlow(Material material, out Color glow)
+        {
+            glow = Color.black;
+            if (material == null || material.shader == null)
+                return false;
+            string s = material.shader.name;
+            bool fixedAdditive = s.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!fixedAdditive)
+            {
+                bool blendProperties = s == "ULTRAKILL/Master" || s == "Standard" ||
+                                       s.StartsWith("Particles/Standard", StringComparison.Ordinal) ||
+                                       s.StartsWith("ULTRAKILL/Particles/Standard", StringComparison.Ordinal);
+                if (!blendProperties || !material.HasProperty("_SrcBlend") || !material.HasProperty("_DstBlend"))
+                    return false;
+                int src = Mathf.RoundToInt(material.GetFloat("_SrcBlend")), dst = Mathf.RoundToInt(material.GetFloat("_DstBlend"));
+                if (dst != (int)UnityEngine.Rendering.BlendMode.One ||
+                    (src != (int)UnityEngine.Rendering.BlendMode.One && src != (int)UnityEngine.Rendering.BlendMode.SrcAlpha))
+                    return false;
+            }
+            if (material.HasProperty("_TintColor"))
+            {
+                Color t = material.GetColor("_TintColor");
+                glow = new Color(2f * t.r * t.a, 2f * t.g * t.a, 2f * t.b * t.a, 1f);
+            }
+            else
+            {
+                Color c = material.HasProperty("_Color") ? material.GetColor("_Color") : Color.white;
+                float opacity = material.HasProperty("_Opacity") ? material.GetFloat("_Opacity") : 1f;
+                glow = new Color(c.r * c.a * opacity, c.g * c.a * opacity, c.b * c.a * opacity, 1f);
+                if (material.IsKeywordEnabled("_EMISSION") && material.HasProperty("_EmissionColor"))
+                {
+                    Color e = material.GetColor("_EmissionColor");
+                    glow = new Color(glow.r + e.r, glow.g + e.g, glow.b + e.b, 1f);
+                }
+            }
+            return Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)) > 0.001f;
         }
 
         public bool TryGetMaterialData(int materialId, out MaterialTextureData data)
@@ -724,7 +778,12 @@ namespace UnityRemix
                 
             string shaderName = material.shader != null ? material.shader.name : "null";
             bool isParticleOrTrailRenderer = renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer;
-            bool autoSuppressLight = suppressLightGeneration || isParticleOrTrailRenderer ||
+            // An additive glow on a mesh (an explosion's sphere, a light shaft): drawn as additive
+            // particles are (UploadParticleTexture: its brightness as coverage), emitting.
+            Color glow = Color.black;
+            bool additiveGlow = !isParticleOrTrailRenderer && TryGetAdditiveGlow(material, out glow);
+            float glowCoverage = additiveGlow ? Mathf.Clamp(Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)), 0.02f, 1f) : 0f;
+            bool autoSuppressLight = additiveGlow || suppressLightGeneration || isParticleOrTrailRenderer ||
                 shaderName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 (shaderName.IndexOf("TextMeshPro", StringComparison.OrdinalIgnoreCase) >= 0 && shaderName.IndexOf("Distance Field", StringComparison.OrdinalIgnoreCase) >= 0) ||
                 (material.name != null && (material.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
@@ -750,6 +809,8 @@ namespace UnityRemix
                 emissiveColor = Color.black,
                 emissiveIntensity = 0f,
                 suppressLightGeneration = autoSuppressLight,
+                glowColor = additiveGlow ? glow * (1f / glowCoverage) : Color.black,
+                glowCoverage = glowCoverage,
                 rayPortalIndex = rayPortalIndices.TryGetValue(materialId, out int portalIndex) ? portalIndex
                                : Games.GameProfiles.OpensViewPortal(material) ? RayPortals.EntranceIndex : -1,
                 rayPortalStandalone = rayPortalIndices.ContainsKey(materialId),
@@ -1009,7 +1070,8 @@ namespace UnityRemix
                         matData.wrapModeU = matData.wrapModeV = 0; // MDL Clamp
                         matData.mainTexST = new Vector4(1f, 1f, 0f, 0f);
                     }
-                    var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint);
+                    var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint,
+                        matData.glowCoverage > 0f ? matData.glowCoverage : 1f, matData.glowCoverage > 0f);
                     matData.albedoHandle = partHandle;
                     matData.albedoTextureHash = partHash;
                     if (isTinted)
@@ -1415,6 +1477,23 @@ namespace UnityRemix
                 if (matData.rayPortalIndex >= 0 && !matData.rayPortalStandalone)
                     hasEmission = false;
 
+                // An additive glow: black (nothing lights it; it hides what is behind only by its
+                // coverage), emitting its texture times the glow over the coverage scale, so
+                // coverage x emission is what Unity adds.
+                if (matData.glowCoverage > 0f && matData.albedoHandle != IntPtr.Zero)
+                {
+                    matData.alphaMode = AlphaMode.Blend;
+                    matData.emissiveHandle = matData.albedoHandle;
+                    matData.emissiveTextureHash = matData.albedoTextureHash;
+                    matData.emissiveColor = matData.glowColor;
+                    matData.emissiveIntensity = 1f;
+                    matData.albedoColor = new Color(0f, 0f, 0f, 1f);
+                    matData.translucentKind = TranslucentKind.None;
+                    hasEmission = true;
+                    logger.LogInfo($"[Glow] '{material.name}' ({shaderName}) on {(renderer != null ? renderer.name : "?")}: additive, " +
+                                   $"coverage x{matData.glowCoverage:F2}, emission ({matData.glowColor.r:F2},{matData.glowColor.g:F2},{matData.glowColor.b:F2})");
+                }
+
                 // Safety net: if no path confirmed real emission, ensure emissive state is clean.
                 // Prevents stale values from a path that read properties but decided not to emit.
                 if (!hasEmission)
@@ -1482,6 +1561,13 @@ namespace UnityRemix
                 }
             }
             
+            // A particle-like blended material on a mesh (an additive glow, a particle shader's
+            // sphere): its coverage needs a blended instance, as particles have (opacity 1,
+            // RemixMeshConverter.DrawMeshInstance), else it stands opaque.
+            matData.blendedInstance = !isParticleOrTrailRenderer && matData.suppressLightGeneration &&
+                                      matData.alphaMode == AlphaMode.Blend && !matData.emissionAsShown &&
+                                      !shaderName.Contains("TextMeshPro") && matData.rayPortalIndex < 0;
+
             // Store for later use
             materialTextureData[materialId] = matData;
 
@@ -1829,12 +1915,15 @@ namespace UnityRemix
         /// and premultiplied/dark-matte edge de-fringing so transparent particles never render with black outlines.
         /// Cached per Texture2D in OpenRemix (where tint is applied in scene.glsl).
         /// </summary>
-        private (IntPtr handle, ulong hash) UploadParticleTexture(Texture2D tex, Material mat, Color albedoColor)
+        private (IntPtr handle, ulong hash) UploadParticleTexture(Texture2D tex, Material mat, Color albedoColor,
+            float coverageScale = 1f, bool additive = false)
         {
+            // coverageScale: the texels' alpha scale (a faint additive glow covers little).
+            int coverageKey = Mathf.Clamp(Mathf.RoundToInt(coverageScale * 255f), 1, 255);
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
 
-            bool isAdditiveShader = false;
+            bool isAdditiveShader = additive;
             if (mat != null)
             {
                 string sName = mat.shader != null ? mat.shader.name : "";
@@ -1847,7 +1936,7 @@ namespace UnityRemix
                 }
             }
 
-            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((isAdditiveShader ? 1L : 0L) << 24));
+            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((isAdditiveShader ? 1L : 0L) << 24) ^ ((long)(255 - coverageKey) << 40));
 
             lock (pendingTextureLock)
             {
@@ -1989,7 +2078,7 @@ namespace UnityRemix
                     pixelData[i * 4 + 0] = r;
                     pixelData[i * 4 + 1] = g;
                     pixelData[i * 4 + 2] = b;
-                    pixelData[i * 4 + 3] = a;
+                    pixelData[i * 4 + 3] = coverageKey == 255 ? a : (byte)(a * coverageKey / 255);
                 }
 
                 texturesWithAlpha.Add(tex.GetInstanceID());

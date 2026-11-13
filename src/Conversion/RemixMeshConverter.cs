@@ -453,10 +453,49 @@ namespace UnityRemix
             logger.LogInfo($"[CameraOnly] mesh '{name}' (0x{handle.ToInt64():X}): only camera rays meet it");
         }
 
-        // InstanceInfo pNext for a retained instance of the mesh: the shared camera-only
-        // extension (immutable, its pNext null), or none.
+        // Meshes with a particle-like blended material (an additive glow, a particle shader's
+        // sphere; RemixMaterialManager.NeedsBlendedInstance): their instances blend as particles'.
+        private readonly ConcurrentDictionary<IntPtr, byte> blendedMeshes = new ConcurrentDictionary<IntPtr, byte>();
+        private static IntPtr blendedExt;
+
+        // The blend particles' instances carry: alpha over, the texel times the vertex colour.
+        private static RemixAPI.remixapi_InstanceInfoBlendEXT ParticleBlend(IntPtr next) => new RemixAPI.remixapi_InstanceInfoBlendEXT
+        {
+            sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT,
+            pNext = next,
+            alphaBlendEnabled = 1,
+            srcColorBlendFactor = 6,   // VkBlendFactor::eSrcAlpha
+            dstColorBlendFactor = 7,   // VkBlendFactor::eOneMinusSrcAlpha
+            colorBlendOp = 0,          // VkBlendOp::eAdd
+            textureColorArg1Source = 1, // Texture (texel.rgb)
+            textureColorArg2Source = 2, // Diffuse (vertex.rgb)
+            textureColorOperation = 3,  // Modulate (texel.rgb * vertex.rgb)
+            textureAlphaArg1Source = 1, // Texture (texel.a)
+            textureAlphaArg2Source = 2, // Diffuse (vertex.a)
+            textureAlphaOperation = 3,  // Modulate (texel.a * vertex.a)
+            tFactor = 0xFFFFFFFFu,
+            isTextureFactorBlend = 0,
+            isVertexColorBakedLighting = 0,
+            srcAlphaBlendFactor = 1,   // VkBlendFactor::eOne
+            dstAlphaBlendFactor = 7,   // VkBlendFactor::eOneMinusSrcAlpha
+            alphaBlendOp = 0,          // VkBlendOp::eAdd
+            writeMask = 15
+        };
+
+        // InstanceInfo pNext for a retained instance of the mesh: the shared blend extension
+        // (a blended mesh) or the shared camera-only one (immutable, their pNext null), or none.
         public IntPtr CameraOnlyExtension(IntPtr meshHandle)
         {
+            if (blendedMeshes.ContainsKey(meshHandle))
+            {
+                if (blendedExt == IntPtr.Zero)
+                {
+                    var p = Marshal.AllocHGlobal(Marshal.SizeOf<RemixAPI.remixapi_InstanceInfoBlendEXT>());
+                    Marshal.StructureToPtr(ParticleBlend(IntPtr.Zero), p, false);
+                    blendedExt = p;
+                }
+                return blendedExt;
+            }
             if (!cameraOnlyMeshes.ContainsKey(meshHandle))
                 return IntPtr.Zero;
             if (cameraOnlyExt == IntPtr.Zero)
@@ -776,6 +815,7 @@ namespace UnityRemix
 
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 bool bakeable = true;
+                bool blended = false;
                 for (int s = 0; s < submeshIndices.Count; s++)
                 {
                     var surfIndices = submeshIndices[s];
@@ -836,6 +876,8 @@ namespace UnityRemix
                         }
                         if (!materialManager.IsBakeableMaterial(targetMatId != 0 ? targetMatId : primaryMatId))
                             bakeable = false;
+                        if (materialManager.NeedsBlendedInstance(targetMatId != 0 ? targetMatId : primaryMatId))
+                            blended = true;
 
                         IntPtr vertsPtr;
                         ulong vertsCount;
@@ -923,6 +965,8 @@ namespace UnityRemix
 
                 meshCache[meshKey] = handle;
                 SetBakeable(handle, bakeable);
+                if (blended) blendedMeshes[handle] = 0;
+                else blendedMeshes.TryRemove(handle, out _);
                 // Camera rays only: a panoramic sky backdrop. (Screens opening the view portal stay
                 // in bounce rays: OpenRemix carries light through them, rayPortalLightTeleports.)
                 if (data.CameraOnly)
@@ -1263,7 +1307,7 @@ namespace UnityRemix
             }
 
             RemixAPI.remixapi_InstanceInfoBlendEXT blendExt = default;
-            bool hasBlend = isParticleInstance || multiplyPaint;
+            bool hasBlend = isParticleInstance || multiplyPaint || blendedMeshes.ContainsKey(meshHandle);
             if (multiplyPaint)
             {
                 // Multiplicative paint (with a decal category): the receiver's colour times the
@@ -1294,28 +1338,7 @@ namespace UnityRemix
                 // Enable coverageBlended layer traversal in OpenRemix without setting hit.tinted (which causes
                 // stained-glass dark transmission borders), and modulate texture alpha by vertex alpha (Diffuse)
                 // so ColorOverLifetime fade-outs fade alpha rather than turning into black silhouettes.
-                blendExt = new RemixAPI.remixapi_InstanceInfoBlendEXT
-                {
-                    sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_BLEND_EXT,
-                    pNext = IntPtr.Zero,
-                    alphaBlendEnabled = 1,
-                    srcColorBlendFactor = 6,   // VkBlendFactor::eSrcAlpha
-                    dstColorBlendFactor = 7,   // VkBlendFactor::eOneMinusSrcAlpha
-                    colorBlendOp = 0,          // VkBlendOp::eAdd
-                    textureColorArg1Source = 1, // Texture (texel.rgb)
-                    textureColorArg2Source = 2, // Diffuse (vertex.rgb)
-                    textureColorOperation = 3,  // Modulate (texel.rgb * vertex.rgb)
-                    textureAlphaArg1Source = 1, // Texture (texel.a)
-                    textureAlphaArg2Source = 2, // Diffuse (vertex.a)
-                    textureAlphaOperation = 3,  // Modulate (texel.a * vertex.a)
-                    tFactor = 0xFFFFFFFFu,
-                    isTextureFactorBlend = 0,
-                    isVertexColorBakedLighting = 0,
-                    srcAlphaBlendFactor = 1,   // VkBlendFactor::eOne
-                    dstAlphaBlendFactor = 7,   // VkBlendFactor::eOneMinusSrcAlpha
-                    alphaBlendOp = 0,          // VkBlendOp::eAdd
-                    writeMask = 15
-                };
+                blendExt = ParticleBlend(IntPtr.Zero);
             }
 
             unsafe
