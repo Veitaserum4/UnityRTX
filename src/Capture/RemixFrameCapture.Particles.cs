@@ -291,45 +291,15 @@ namespace UnityRemix
                         pCol = startColor.gradient.Evaluate(0.5f);
                 }
 
-                // Check material tint using cache
+                // The material's blend and tint (the particles' own colours are their vertex colours).
                 int matInstId = mat.GetInstanceID();
-                if (!_materialTintCache.TryGetValue(matInstId, out Color matTint))
-                {
-                    matTint = Color.white;
-                    if (materialManager.UsesParticleSnapshot(mat))
-                    {
-                        // the snapshot already shows the material's colors
-                    }
-                    else if (mat.HasProperty("_TintColor"))
-                        matTint = mat.GetColor("_TintColor");
-                    else if (mat.HasProperty("_Color"))
-                        matTint = mat.GetColor("_Color");
-                    else if (mat.HasProperty("_BaseColor"))
-                        matTint = mat.GetColor("_BaseColor");
-                    _materialTintCache[matInstId] = matTint;
-                }
-
-                float matAlpha = Mathf.Clamp01(matTint.a);
-
-                Color finalParticleColor = new Color(
-                    pCol.r * matTint.r,
-                    pCol.g * matTint.g,
-                    pCol.b * matTint.b,
-                    Mathf.Clamp01(pCol.a * matAlpha)
-                );
-
-                if (finalParticleColor.r < 0.01f && finalParticleColor.g < 0.01f && finalParticleColor.b < 0.01f)
-                {
-                    if (pCol.r > 0.05f || pCol.g > 0.05f || pCol.b > 0.05f)
-                        finalParticleColor = new Color(pCol.r, pCol.g, pCol.b, finalParticleColor.a);
-                    else if (matTint.r > 0.05f || matTint.g > 0.05f || matTint.b > 0.05f)
-                        finalParticleColor = new Color(matTint.r, matTint.g, matTint.b, finalParticleColor.a);
-                }
+                ParticleLook look = GetParticleLook(mat, materialManager.UsesParticleSnapshot(mat));
+                float matAlpha = Mathf.Clamp01(look.alphaScale);
 
                 long traitsKey = ((long)tracked.id << 32) | (uint)matInstId;
                 if (!_particleTraitsCache.TryGetValue(traitsKey, out var traits))
                 {
-                    traits.emissive = IsEmissiveParticleSystem(pr, mat);
+                    traits.emissive = look.IsAdditive || (!look.IsMultiply && IsEmissiveParticleSystem(pr, mat));
                     traits.jumpPad = pr.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0
                         || (pr.transform.parent != null && pr.transform.parent.name.IndexOf("jump", StringComparison.OrdinalIgnoreCase) >= 0);
                     _particleTraitsCache[traitsKey] = traits;
@@ -337,11 +307,13 @@ namespace UnityRemix
                 bool isEmissiveParticle = traits.emissive;
                 float emIntensity = isEmissiveParticle ? 0.8f : 0f;
 
-                // Quantize color (0..15 per channel) to group similar tints and prevent material explosion
-                int r4 = Mathf.Clamp((int)(finalParticleColor.r * 15f + 0.5f), 0, 15);
-                int g4 = Mathf.Clamp((int)(finalParticleColor.g * 15f + 0.5f), 0, 15);
-                int b4 = Mathf.Clamp((int)(finalParticleColor.b * 15f + 0.5f), 0, 15);
-                int colorKey = (isEmissiveParticle ? (1 << 12) : 0) | (r4 << 8) | (g4 << 4) | b4;
+                // Emission is not tinted by vertex colours: an emissive system's material emits its
+                // particles' colour (quantized, 0..15 per channel, to keep the material count down).
+                Color emissionColor = look.EmissionColor(pCol);
+                int r4 = Mathf.Clamp((int)(emissionColor.r * 15f + 0.5f), 0, 15);
+                int g4 = Mathf.Clamp((int)(emissionColor.g * 15f + 0.5f), 0, 15);
+                int b4 = Mathf.Clamp((int)(emissionColor.b * 15f + 0.5f), 0, 15);
+                int colorKey = isEmissiveParticle ? (1 << 12) | (r4 << 8) | (g4 << 4) | b4 : 0;
                 Color quantizedColor = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
 
                 int tintedMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
@@ -353,7 +325,7 @@ namespace UnityRemix
                         tintedMatId, 
                         mpbEmissiveColor: isEmissiveParticle ? (Color?)quantizedColor : null, 
                         mpbEmissiveIntensity: emIntensity, 
-                        mpbColor: quantizedColor,
+                        mpbColor: look.MaterialColor,
                         suppressLightGeneration: true,
                         renderer: pr
                     );
@@ -396,14 +368,14 @@ namespace UnityRemix
 
                 if (!isSurfaceAligned && pr.renderMode == ParticleSystemRenderMode.Mesh)
                 {
-                    if (!TryInstanceMeshParticles(tracked.id, pr, ps, mainCam, tintedMatId, matAlpha, actualAlive, state) &&
-                        !BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, matAlpha, state))
+                    if (!TryInstanceMeshParticles(tracked.id, pr, ps, mainCam, tintedMatId, look, actualAlive, state) &&
+                        !BakeMeshParticleSystem(pr, ps, mainCam, tintedMatId, look, state))
                     {
                         int particlesToDraw = Math.Min(actualAlive, 4096);
                         renderedParticles += particlesToDraw;
                         var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
                         long appendStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                        AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, matAlpha, isSurfaceAligned);
+                        AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, look, isSurfaceAligned);
                         particleAppendMs += RemixProfiler.ElapsedMs(appendStart);
                         if (collectEmitters && emitterDetails.Count < 200)
                         {
@@ -438,7 +410,7 @@ namespace UnityRemix
                     renderedParticles += particlesToDraw;
                     var bucket = GetOrCreateBatchBucket(tintedMatId, particlesToDraw);
                     long appendStart = System.Diagnostics.Stopwatch.GetTimestamp();
-                    AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, matAlpha, isSurfaceAligned);
+                    AppendBillboardParticles(bucket, pr, ps, particlesToDraw, mainCam, camRight, camUp, camForward, look, isSurfaceAligned);
                     particleAppendMs += RemixProfiler.ElapsedMs(appendStart);
                     if (collectEmitters && emitterDetails.Count < 200)
                     {
@@ -456,7 +428,7 @@ namespace UnityRemix
                 var trails = ps.trails;
                 if (trails.enabled)
                 {
-                    BakeParticleTrails(pr, ps, mainCam, quantizedColor, emIntensity, state);
+                    BakeParticleTrails(pr, ps, mainCam, pCol, emIntensity, state);
                 }
             }
 
@@ -564,6 +536,18 @@ namespace UnityRemix
             return bucket;
         }
 
+        // A particle material's blend and tint (ParticleLook), worked out once per material.
+        private ParticleLook GetParticleLook(Material mat, bool snapshot)
+        {
+            int id = mat.GetInstanceID();
+            if (!_particleLookCache.TryGetValue(id, out var look))
+            {
+                look = ParticleLook.Of(mat, snapshot);
+                _particleLookCache[id] = look;
+            }
+            return look;
+        }
+
         private static bool IsEmissiveParticleSystem(ParticleSystemRenderer pr, Material mat)
         {
             if (mat != null)
@@ -576,15 +560,6 @@ namespace UnityRemix
                     if (ec.r > 0.05f || ec.g > 0.05f || ec.b > 0.05f)
                         return true;
                 }
-                if (mat.HasProperty("_SrcBlend") && mat.HasProperty("_DstBlend"))
-                {
-                    int dst = mat.GetInt("_DstBlend");
-                    if (dst == (int)UnityEngine.Rendering.BlendMode.One)
-                        return true;
-                }
-                string shName = mat.shader != null ? mat.shader.name : "";
-                if (shName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0)
-                    return true;
             }
 
             string name = (pr != null ? pr.name : "") + " " + (mat != null ? mat.name : "");
@@ -746,7 +721,7 @@ namespace UnityRemix
             Vector3 camRight,
             Vector3 camUp,
             Vector3 camForward,
-            float matAlpha = 1f,
+            ParticleLook look,
             bool isSurfaceAligned = false)
         {
             var mainModule = ps.main;
@@ -796,11 +771,7 @@ namespace UnityRemix
                 else
                     size = isStartSize3D ? p.startSize3D : (Vector3.one * p.startSize);
 
-                Color32 col = hasColorOverLifetime ? p.GetCurrentColor(ps) : p.startColor;
-                if (matAlpha < 0.999f)
-                {
-                    col.a = (byte)Mathf.Clamp(Mathf.RoundToInt(col.a * matAlpha), 0, 255);
-                }
+                Color32 col = look.Vertex(hasColorOverLifetime ? p.GetCurrentColor(ps) : p.startColor);
 
                 float rot = p.rotation;
                 float cosR = 1f;
@@ -1152,7 +1123,7 @@ namespace UnityRemix
         }
 
         private bool TryInstanceMeshParticles(int systemId, ParticleSystemRenderer pr, ParticleSystem ps, Camera cam,
-                                              int matId, float matAlpha, int alive, FrameState state)
+                                              int matId, ParticleLook look, int alive, FrameState state)
         {
             if (alive <= 0 || alive > MaxInstancedMeshParticles)
                 return false;
@@ -1214,9 +1185,8 @@ namespace UnityRemix
             meshParticleVariantKeys.Clear();
             for (int i = 0; i < alive; i++)
             {
-                Color32 c = _particleBuffer[i].GetCurrentColor(ps);
-                int a = matAlpha < 0.999f ? Mathf.RoundToInt(c.a * matAlpha) : c.a;
-                int key = ((c.r * 15 + 127) / 255 << 12) | ((c.g * 15 + 127) / 255 << 8) | ((c.b * 15 + 127) / 255 << 4) | ((a * 15 + 127) / 255);
+                Color32 c = look.Vertex(_particleBuffer[i].GetCurrentColor(ps));
+                int key = ((c.r * 15 + 127) / 255 << 12) | ((c.g * 15 + 127) / 255 << 8) | ((c.b * 15 + 127) / 255 << 4) | ((c.a * 15 + 127) / 255);
                 long variantKey = ((long)matId << 32) | (uint)key;
                 if (!inst.variantHashes.ContainsKey(variantKey))
                 {
@@ -1271,7 +1241,7 @@ namespace UnityRemix
             return true;
         }
 
-        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, ParticleSystem ps, Camera cam, int matId, float matAlpha, FrameState state)
+        private bool BakeMeshParticleSystem(ParticleSystemRenderer pr, ParticleSystem ps, Camera cam, int matId, ParticleLook look, FrameState state)
         {
             if (_reusableParticleMesh == null)
             {
@@ -1345,13 +1315,7 @@ namespace UnityRemix
                         if (hasColors) colors = bakeColors.ToArray();
                     }
 
-                    if (matAlpha < 0.999f && colors != null)
-                    {
-                        for (int ci = 0; ci < vertexCount; ci++)
-                        {
-                            colors[ci].a = (byte)Mathf.Clamp(Mathf.RoundToInt(colors[ci].a * matAlpha), 0, 255);
-                        }
-                    }
+                    look.ApplyTo(colors, vertexCount);
 
                     state.skinned.Add(new SkinnedMeshData
                     {
@@ -1424,21 +1388,28 @@ namespace UnityRemix
                     // No dedicated trail material → skip rather than using the wrong one.
                     if (trailMat == null) return;
 
-                    int r4 = Mathf.Clamp((int)(trailColor.r * 15f + 0.5f), 0, 15);
-                    int g4 = Mathf.Clamp((int)(trailColor.g * 15f + 0.5f), 0, 15);
-                    int b4 = Mathf.Clamp((int)(trailColor.b * 15f + 0.5f), 0, 15);
-                    int colorKey = (r4 << 8) | (g4 << 4) | b4;
+                    // The trail material's tint and blend; its vertex colours are the particles'.
+                    ParticleLook trailLook = GetParticleLook(trailMat, false);
+                    bool trailEmissive = emIntensity > 0f || trailLook.IsAdditive;
+                    Color trailEmission = trailLook.EmissionColor(trailColor);
+                    int r4 = Mathf.Clamp((int)(trailEmission.r * 15f + 0.5f), 0, 15);
+                    int g4 = Mathf.Clamp((int)(trailEmission.g * 15f + 0.5f), 0, 15);
+                    int b4 = Mathf.Clamp((int)(trailEmission.b * 15f + 0.5f), 0, 15);
+                    int colorKey = trailEmissive ? (1 << 12) | (r4 << 8) | (g4 << 4) | b4 : 0;
                     int trailMatId = unchecked(trailMat.GetInstanceID() * 397 ^ colorKey);
 
-                    materialManager.CaptureMaterialTextures(
-                        trailMat, 
-                        trailMatId, 
-                        mpbEmissiveColor: trailColor, 
-                        mpbEmissiveIntensity: emIntensity, 
-                        mpbColor: trailColor,
-                        suppressLightGeneration: true,
-                        renderer: pr
-                    );
+                    if (_capturedParticleMatIds.Add(trailMatId))
+                    {
+                        materialManager.CaptureMaterialTextures(
+                            trailMat,
+                            trailMatId,
+                            mpbEmissiveColor: trailEmissive ? (Color?)new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f) : null,
+                            mpbEmissiveIntensity: trailEmissive ? Mathf.Max(emIntensity, 0.8f) : 0f,
+                            mpbColor: trailLook.MaterialColor,
+                            suppressLightGeneration: true,
+                            renderer: pr
+                        );
+                    }
 
                     ulong trailHash = (ulong)(uint)pr.GetInstanceID() | 0x4800000000000000UL;
                     if (!describedParticleTrails.Contains(pr.GetInstanceID()) &&
@@ -1506,6 +1477,8 @@ namespace UnityRemix
                         for (int v = 0; v < vertexCount; v++)
                             normals[v] = facing;
                     }
+
+                    trailLook.ApplyTo(colors, vertexCount);
 
                     state.skinned.Add(new SkinnedMeshData
                     {
@@ -1660,56 +1633,32 @@ namespace UnityRemix
                     if (trCol.a <= 0.01f && tr.colorGradient != null)
                         trCol = tr.colorGradient.Evaluate(0.5f);
 
-                    // Check material tint using cache
-                    int matInstId = mat.GetInstanceID();
-                    if (!_materialTintCache.TryGetValue(matInstId, out Color matTint))
-                    {
-                        matTint = Color.white;
-                        if (mat.HasProperty("_TintColor"))
-                            matTint = mat.GetColor("_TintColor");
-                        else if (mat.HasProperty("_Color"))
-                            matTint = mat.GetColor("_Color");
-                        else if (mat.HasProperty("_BaseColor"))
-                            matTint = mat.GetColor("_BaseColor");
-                        _materialTintCache[matInstId] = matTint;
-                    }
-
-                    Color finalTrailCol = new Color(
-                        trCol.r * matTint.r,
-                        trCol.g * matTint.g,
-                        trCol.b * matTint.b,
-                        Mathf.Clamp01(Math.Max(trCol.a, matTint.a))
-                    );
-
-                    if (finalTrailCol.r < 0.01f && finalTrailCol.g < 0.01f && finalTrailCol.b < 0.01f)
-                    {
-                        if (trCol.r > 0.05f || trCol.g > 0.05f || trCol.b > 0.05f)
-                            finalTrailCol = trCol;
-                        else if (matTint.r > 0.05f || matTint.g > 0.05f || matTint.b > 0.05f)
-                            finalTrailCol = matTint;
-                    }
-
-                    int r4 = Mathf.Clamp((int)(finalTrailCol.r * 15f + 0.5f), 0, 15);
-                    int g4 = Mathf.Clamp((int)(finalTrailCol.g * 15f + 0.5f), 0, 15);
-                    int b4 = Mathf.Clamp((int)(finalTrailCol.b * 15f + 0.5f), 0, 15);
+                    // The material's tint and blend; the ribbon's colour gradient is its vertex colours.
+                    ParticleLook look = GetParticleLook(mat, false);
+                    Color trailEmission = look.EmissionColor(trCol);
+                    int r4 = Mathf.Clamp((int)(trailEmission.r * 15f + 0.5f), 0, 15);
+                    int g4 = Mathf.Clamp((int)(trailEmission.g * 15f + 0.5f), 0, 15);
+                    int b4 = Mathf.Clamp((int)(trailEmission.b * 15f + 0.5f), 0, 15);
                     int colorKey = (r4 << 8) | (g4 << 4) | b4;
                     Color quantizedColor = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
 
                     int trailMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey);
-                    float emIntensity = (r4 != g4 || g4 != b4) ? 0.8f : 0.2f;
+                    float emIntensity = look.IsMultiply ? 0f : look.IsAdditive || r4 != g4 || g4 != b4 ? 0.8f : 0.2f;
 
                     if (_capturedParticleMatIds.Add(trailMatId))
                     {
                         materialManager.CaptureMaterialTextures(
                             mat,
                             trailMatId,
-                            mpbEmissiveColor: quantizedColor,
+                            mpbEmissiveColor: emIntensity > 0f ? (Color?)quantizedColor : null,
                             mpbEmissiveIntensity: emIntensity,
-                            mpbColor: quantizedColor,
+                            mpbColor: look.MaterialColor,
                             suppressLightGeneration: true,
                             renderer: tr
                         );
                     }
+                    Color32[] trailColors = _reusableTrailRendererMesh.colors32;
+                    look.ApplyTo(trailColors, trailColors != null ? trailColors.Length : 0);
 
                     ulong remixMeshHash = (ulong)(uint)tr.GetInstanceID() | 0x4C00000000000000UL;
 
@@ -1722,7 +1671,7 @@ namespace UnityRemix
                         vertices = verts,
                         normals = _reusableTrailRendererMesh.normals,
                         uvs = _reusableTrailRendererMesh.uv,
-                        colors = _reusableTrailRendererMesh.colors32,
+                        colors = trailColors,
                         triangles = tris,
                         localToWorld = Matrix4x4.identity,
                         boneTransforms = null,

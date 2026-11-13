@@ -316,27 +316,16 @@ namespace UnityRemix
         /// Cached per Texture2D in OpenRemix (where tint is applied in scene.glsl).
         /// </summary>
         private (IntPtr handle, ulong hash) UploadParticleTexture(Texture2D tex, Material mat, Color albedoColor,
-            float coverageScale = 1f, bool additive = false)
+            float coverageScale, ParticleBlendKind kind)
         {
             // coverageScale: the texels' alpha scale (a faint additive glow covers little).
             int coverageKey = Mathf.Clamp(Mathf.RoundToInt(coverageScale * 255f), 1, 255);
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
 
-            bool isAdditiveShader = additive;
-            if (mat != null)
-            {
-                string sName = mat.shader != null ? mat.shader.name : "";
-                string mName = mat.name ?? "";
-                if (sName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    mName.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    (mat.HasProperty("_DstBlend") && Mathf.RoundToInt(mat.GetFloat("_DstBlend")) == 1))
-                {
-                    isAdditiveShader = true;
-                }
-            }
+            bool isAdditiveShader = kind == ParticleBlendKind.Additive;
 
-            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((isAdditiveShader ? 1L : 0L) << 24) ^ ((long)(255 - coverageKey) << 40));
+            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)kind << 24) ^ ((long)(255 - coverageKey) << 40));
 
             lock (pendingTextureLock)
             {
@@ -418,7 +407,8 @@ namespace UnityRemix
 
                 bool hasNoAlphaChannel = opaqueAlphaCount >= (int)(totalPixels * 0.92f);
                 bool hasDarkBorder = borderSamples > 0 && darkBorderCount >= (int)(borderSamples * 0.65f);
-                bool treatAsBlackBgAdditive = isAdditiveShader || (hasNoAlphaChannel && hasDarkBorder);
+                bool multiply = kind == ParticleBlendKind.Multiply || kind == ParticleBlendKind.MultiplyDouble;
+                bool treatAsBlackBgAdditive = isAdditiveShader || (kind == ParticleBlendKind.Alpha && hasNoAlphaChannel && hasDarkBorder);
 
                 byte avgR = weightSum > 0 ? (byte)Mathf.Clamp((int)(sumR / weightSum), 16, 255) : (byte)180;
                 byte avgG = weightSum > 0 ? (byte)Mathf.Clamp((int)(sumG / weightSum), 16, 255) : (byte)180;
@@ -434,7 +424,35 @@ namespace UnityRemix
                     byte a = c.a;
                     int maxCh = Math.Max(r, Math.Max(g, b));
 
-                    if (treatAsBlackBgAdditive)
+                    if (multiply)
+                    {
+                        // A multiply darkens what is behind by its colour (lerped to no change by its
+                        // alpha; the double one's no change is grey): shown as black, covering by
+                        // how much it darkens. (Where a double multiply brightens it shows nothing.)
+                        int neutral = kind == ParticleBlendKind.MultiplyDouble ? 128 : 255;
+                        int cMax = neutral + (maxCh - neutral) * a / 255;
+                        int dark = kind == ParticleBlendKind.MultiplyDouble ? 255 - 2 * cMax : 255 - cMax;
+                        r = g = b = 0;
+                        a = (byte)Mathf.Clamp(dark, 0, 255);
+                    }
+                    else if (kind == ParticleBlendKind.Premultiplied)
+                    {
+                        // Premultiplied colour over: covers by alpha, its colour rgb / alpha; colour
+                        // beyond its alpha adds light (covering by it instead).
+                        int cover = Math.Max(a, maxCh);
+                        if (cover <= 2)
+                        {
+                            r = avgR; g = avgG; b = avgB; a = 0;
+                        }
+                        else
+                        {
+                            r = (byte)Math.Min(255, r * 255 / cover);
+                            g = (byte)Math.Min(255, g * 255 / cover);
+                            b = (byte)Math.Min(255, b * 255 / cover);
+                            a = (byte)cover;
+                        }
+                    }
+                    else if (treatAsBlackBgAdditive)
                     {
                         // Convert black-background luminance into alpha and moderately un-premultiply RGB
                         // so soft edges are translucent rather than dark black outlines
@@ -457,21 +475,15 @@ namespace UnityRemix
                     }
                     else
                     {
-                        // Standard alpha-channel particle sprite: bleed average sprite RGB into near-zero-alpha
-                        // or pitch-black border pixels so bilinear filtering doesn't produce black outlines,
-                        // while preserving the exact authored RGB and alpha of subtle smoke/steam/dust textures.
-                        if (a <= 4 || (a < 64 && maxCh <= 6))
+                        // Standard alpha-channel particle sprite: invisible texels take the sprite's
+                        // average colour so bilinear filtering doesn't draw dark outlines; visible ones
+                        // keep their authored colour and alpha (dark smoke stays dark, faint stays faint).
+                        if (a <= 2)
                         {
                             r = avgR;
                             g = avgG;
                             b = avgB;
                             a = 0;
-                        }
-                        else if (maxCh <= 6)
-                        {
-                            r = avgR;
-                            g = avgG;
-                            b = avgB;
                         }
                     }
 

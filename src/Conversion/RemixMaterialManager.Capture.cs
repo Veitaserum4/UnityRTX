@@ -443,11 +443,14 @@ namespace UnityRemix
                         matData.wrapModeU = matData.wrapModeV = 0; // MDL Clamp
                         matData.mainTexST = new Vector4(1f, 1f, 0f, 0f);
                     }
+                    var blendKind = matData.glowCoverage > 0f ? ParticleBlendKind.Additive : ParticleLook.KindOf(material);
                     var (partHandle, partHash) = UploadParticleTexture(tex, material, effectiveTint,
-                        matData.glowCoverage > 0f ? matData.glowCoverage : 1f, matData.glowCoverage > 0f);
+                        matData.glowCoverage > 0f ? matData.glowCoverage : 1f, blendKind);
                     matData.albedoHandle = partHandle;
                     matData.albedoTextureHash = partHash;
-                    if (isTinted)
+                    if (blendKind == ParticleBlendKind.Multiply || blendKind == ParticleBlendKind.MultiplyDouble)
+                        matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a); // darkening only
+                    else if (isTinted)
                     {
                         Color linTint = (QualitySettings.activeColorSpace == ColorSpace.Linear) ? effectiveTint : effectiveTint.linear;
                         matData.albedoColor = new Color(linTint.r, linTint.g, linTint.b, matData.albedoColor.a);

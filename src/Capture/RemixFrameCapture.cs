@@ -90,7 +90,7 @@ namespace UnityRemix
         private readonly List<ParticleBatchBucket> _activeParticleBatches = new List<ParticleBatchBucket>();
         private readonly List<ParticleBatchBucket> _batchBucketPool = new List<ParticleBatchBucket>();
         private readonly HashSet<int> _capturedParticleMatIds = new HashSet<int>();
-        private readonly Dictionary<int, Color> _materialTintCache = new Dictionary<int, Color>();
+        private readonly Dictionary<int, ParticleLook> _particleLookCache = new Dictionary<int, ParticleLook>();
         // Per (particle renderer, material): name- and shader-derived traits, read once instead of
         // allocating the names every frame.
         private struct ParticleTraits { public bool emissive, jumpPad; }
@@ -1103,7 +1103,7 @@ namespace UnityRemix
             trackedTrailRenderers.Clear();
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
-            _materialTintCache.Clear();
+            _particleLookCache.Clear();
             _particleTraitsCache.Clear();
             logger.LogInfo("Renderer caches invalidated");
         }
@@ -1127,7 +1127,7 @@ namespace UnityRemix
             trackedTrailRenderers.Clear();
             trackedTrailRendererIds.Clear();
             _capturedParticleMatIds.Clear();
-            _materialTintCache.Clear();
+            _particleLookCache.Clear();
             _particleTraitsCache.Clear();
             cachedScrollingMeshes.Clear();
             scrollingRendererIds.Clear();

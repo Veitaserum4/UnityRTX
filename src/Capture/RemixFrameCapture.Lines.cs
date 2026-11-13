@@ -69,25 +69,34 @@ namespace UnityRemix
                     lineBakeMesh.RecalculateBounds();
                     Vector3 offset = line.bounds.center - lineBakeMesh.bounds.center;
 
-                    // The line's colour (its vertices carry the gradient), one material per colour.
-                    Color lineColor = (line.startColor + line.endColor) * 0.5f;
-                    int r4 = Mathf.Clamp((int)(lineColor.r * 15f + 0.5f), 0, 15);
-                    int g4 = Mathf.Clamp((int)(lineColor.g * 15f + 0.5f), 0, 15);
-                    int b4 = Mathf.Clamp((int)(lineColor.b * 15f + 0.5f), 0, 15);
-                    int colorKey = (r4 << 8) | (g4 << 4) | b4;
+                    // The material's tint and blend; the line's gradient is its vertex colours. Additive
+                    // lines (electricity, beams) glow, emitting their colour (one material per colour);
+                    // others (ropes, chains) are lit surfaces.
+                    ParticleLook look = GetParticleLook(mat, false);
+                    bool additive = look.IsAdditive;
+                    int colorKey = 0;
+                    Color emission = Color.black;
+                    if (additive)
+                    {
+                        emission = look.EmissionColor((line.startColor + line.endColor) * 0.5f);
+                        int r4 = Mathf.Clamp((int)(emission.r * 15f + 0.5f), 0, 15);
+                        int g4 = Mathf.Clamp((int)(emission.g * 15f + 0.5f), 0, 15);
+                        int b4 = Mathf.Clamp((int)(emission.b * 15f + 0.5f), 0, 15);
+                        colorKey = (1 << 12) | (r4 << 8) | (g4 << 4) | b4;
+                        emission = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
+                    }
                     int lineMatId = unchecked(mat.GetInstanceID() * 397 ^ colorKey ^ 0x4C494E45);
                     if (_capturedParticleMatIds.Add(lineMatId))
                     {
-                        // Additive lines (electricity, beams) glow; others (ropes, chains) are lit surfaces.
-                        bool additive = IsAdditiveLineMaterial(mat);
-                        Color quantized = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
                         materialManager.CaptureMaterialTextures(mat, lineMatId,
-                            mpbEmissiveColor: additive ? quantized : (Color?)null,
+                            mpbEmissiveColor: additive ? emission : (Color?)null,
                             mpbEmissiveIntensity: additive ? 0.8f : (float?)null,
-                            mpbColor: quantized,
+                            mpbColor: look.MaterialColor,
                             suppressLightGeneration: true,
                             renderer: line);
                     }
+                    var lineColors = lineBakeMesh.colors32;
+                    look.ApplyTo(lineColors, lineColors != null ? lineColors.Length : 0);
 
                     state.skinned.Add(new SkinnedMeshData
                     {
@@ -98,7 +107,7 @@ namespace UnityRemix
                         vertices = verts,
                         normals = lineBakeMesh.normals,
                         uvs = lineBakeMesh.uv,
-                        colors = lineBakeMesh.colors32,
+                        colors = lineColors,
                         triangles = tris,
                         localToWorld = Matrix4x4.Translate(offset),
                         boneTransforms = null,
@@ -113,14 +122,6 @@ namespace UnityRemix
                         logger.LogWarning($"CaptureLineRenderers failed on '{line.name}': {ex.Message}");
                 }
             }
-        }
-
-        private static bool IsAdditiveLineMaterial(Material mat)
-        {
-            string shader = mat.shader != null ? mat.shader.name : "";
-            if (shader.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0)
-                return true;
-            return mat.HasProperty("_DstBlend") && Mathf.RoundToInt(mat.GetFloat("_DstBlend")) == (int)UnityEngine.Rendering.BlendMode.One;
         }
     }
 }
