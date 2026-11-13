@@ -858,6 +858,11 @@ namespace UnityRemix
             // the same rock or plant thousands of times; nothing downstream writes to these arrays).
             var sharedMeshData = new Dictionary<int, (Vector3[] verts, Vector3[] norms, Vector2[] uvs, Color32[] cols, int[][] subIndices)>();
             int sharedMeshReuses = 0;
+            // Shared meshes whose indices were validated this scan (their arrays are shared), and
+            // the hash inputs of meshes and materials (GenerateSharedMeshHash), computed once.
+            var validatedMeshes = new HashSet<int>();
+            var meshHashInputs = new Dictionary<int, ulong[]>();
+            var materialHashInputs = new Dictionary<int, ulong[]>();
 int queued = 0;
             int skippedAlreadyScanned = 0, skippedWrongScene = 0, skippedNoRenderer = 0;
             int skippedInactive = 0, skippedDynamic = 0, skippedLayer = 0;
@@ -1120,8 +1125,10 @@ int queued = 0;
                     continue;
                 }
 
-                // Validate indices across all surfaces
+                // Validate indices across all surfaces (once per shared mesh: same arrays)
                 bool valid = true;
+                bool validated = !isCombinedMesh && !readThisMesh && validatedMeshes.Contains(mesh.GetInstanceID());
+                if (!validated)
                 foreach (var surf in surfaces)
                 {
                     if (surf.Indices.Length % 3 != 0) { valid = false; break; }
@@ -1134,6 +1141,8 @@ int queued = 0;
                 }
                 if (!valid)
                     continue;
+                if (!isCombinedMesh)
+                    validatedMeshes.Add(mesh.GetInstanceID());
 
                 // Panoramic skies take their UVs from their vertex directions, as Unity samples them
                 // (RemixMeshConverter.MapPanoramicSkies), before the mesh is hashed.
@@ -1157,7 +1166,8 @@ int queued = 0;
                 // meshes hold per-renderer world-space slices: one mesh per object.
                 ulong meshHash = isCombinedMesh
                     ? GenerateInstanceMeshHash(mesh, filter.transform)
-                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials, objectUp, AnyTopVariant(surfaces), objectScale);
+                    : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials, objectUp, AnyTopVariant(surfaces), objectScale,
+                                             meshHashInputs, materialHashInputs);
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
 
                 if (colors != null && colors.Length > 0)
@@ -1593,24 +1603,19 @@ int queued = 0;
         // orientationMatters: a top-colored material splits faces by world up, so differently
         // turned copies (up quantized) are different meshes.
         private static ulong GenerateSharedMeshHash(Mesh mesh, Vector3[] vertices, List<SubMeshSurface> surfaces, List<Material> surfaceMaterials,
-                                                   Vector3 objectUp, bool orientationMatters, Vector3 objectScale)
+                                                   Vector3 objectUp, bool orientationMatters, Vector3 objectScale,
+                                                   Dictionary<int, ulong[]> meshInputs, Dictionary<int, ulong[]> materialInputs)
         {
             ulong hash = 14695981039346656037UL;
             void Mix(ulong value) { hash = (hash ^ value) * 1099511628211UL; }
-            void MixString(string text)
-            {
-                if (text == null) { Mix(0); return; }
-                foreach (char c in text) Mix(c);
-                Mix(0xFF);
-            }
-            void MixFloat(float value) { Mix((ulong)BitConverter.ToInt32(BitConverter.GetBytes(value), 0)); }
+            void MixAll(ulong[] values) { for (int i = 0; i < values.Length; i++) Mix(values[i]); }
 
             Mix(0x5348415245444D53UL); // distinct from the per-object hashes
             if (objectScale != Vector3.one)
             {
-                MixFloat(objectScale.x);
-                MixFloat(objectScale.y);
-                MixFloat(objectScale.z);
+                Mix(FloatBits(objectScale.x));
+                Mix(FloatBits(objectScale.y));
+                Mix(FloatBits(objectScale.z));
             }
             if (orientationMatters)
             {
@@ -1619,36 +1624,60 @@ int queued = 0;
                 Mix((ulong)(long)Mathf.Round(up.y * 4f));
                 Mix((ulong)(long)Mathf.Round(up.z * 4f));
             }
-            MixString(mesh.name);
-            Mix((ulong)vertices.Length);
-            int step = Math.Max(1, vertices.Length / 16);
-            for (int i = 0; i < vertices.Length; i += step)
+            int meshId = mesh.GetInstanceID();
+            if (!meshInputs.TryGetValue(meshId, out var meshValues))
             {
-                MixFloat(vertices[i].x);
-                MixFloat(vertices[i].y);
-                MixFloat(vertices[i].z);
+                var list = new List<ulong>(64);
+                AddString(list, mesh.name);
+                list.Add((ulong)vertices.Length);
+                int step = Math.Max(1, vertices.Length / 16);
+                for (int i = 0; i < vertices.Length; i += step)
+                {
+                    list.Add(FloatBits(vertices[i].x));
+                    list.Add(FloatBits(vertices[i].y));
+                    list.Add(FloatBits(vertices[i].z));
+                }
+                meshInputs[meshId] = meshValues = list.ToArray();
             }
+            MixAll(meshValues);
             for (int s = 0; s < surfaces.Count; s++)
             {
                 Mix((ulong)surfaces[s].Indices.Length);
                 var mat = s < surfaceMaterials.Count ? surfaceMaterials[s] : null;
                 if (mat == null) { Mix(0); continue; }
-                MixString(mat.name.Replace(" (Instance)", "").Replace("(Clone)", "").Trim());
-                MixString(mat.shader != null ? mat.shader.name : null);
-                try
+                int matId = mat.GetInstanceID();
+                if (!materialInputs.TryGetValue(matId, out var matValues))
                 {
-                    var tex = mat.HasProperty("_MainTex") ? mat.mainTexture : null;
-                    MixString(tex != null ? tex.name : null);
-                    foreach (var prop in SharedHashColorProps)
+                    var list = new List<ulong>(64);
+                    AddString(list, mat.name.Replace(" (Instance)", "").Replace("(Clone)", "").Trim());
+                    AddString(list, mat.shader != null ? mat.shader.name : null);
+                    try
                     {
-                        if (!mat.HasProperty(prop)) continue;
-                        var c = mat.GetColor(prop);
-                        MixFloat(c.r); MixFloat(c.g); MixFloat(c.b); MixFloat(c.a);
+                        var tex = mat.HasProperty("_MainTex") ? mat.mainTexture : null;
+                        AddString(list, tex != null ? tex.name : null);
+                        foreach (var prop in SharedHashColorProps)
+                        {
+                            if (!mat.HasProperty(prop)) continue;
+                            var c = mat.GetColor(prop);
+                            list.Add(FloatBits(c.r)); list.Add(FloatBits(c.g)); list.Add(FloatBits(c.b)); list.Add(FloatBits(c.a));
+                        }
                     }
+                    catch { }
+                    materialInputs[matId] = matValues = list.ToArray();
                 }
-                catch { }
+                MixAll(matValues);
             }
             return hash == 0 ? 1 : hash;
+        }
+
+        private static ulong FloatBits(float value) => (ulong)BitConverter.ToInt32(BitConverter.GetBytes(value), 0);
+
+        // A string's hash inputs: its characters then 0xFF, or a lone 0 for none.
+        private static void AddString(List<ulong> list, string text)
+        {
+            if (text == null) { list.Add(0); return; }
+            foreach (char c in text) list.Add(c);
+            list.Add(0xFF);
         }
 
         private static readonly string[] SharedHashColorProps = { "_Color", "_BaseColor", "_Tint" };
