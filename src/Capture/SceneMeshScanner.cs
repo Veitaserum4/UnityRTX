@@ -448,7 +448,10 @@ namespace UnityRemix
 
         // A scan in progress (ScanSteps), a slice of ScanSliceMs each frame: a level's thousands
         // of meshes and materials are read over several frames rather than in one long one.
-        private const double ScanSliceMs = 8.0;
+        // Off for now (the whole scan in one frame): once, a sliced scan of 0-1 drew scrambled
+        // geometry (meshes the game rebuilds while loading caught half-built?), not reproduced
+        // since. 8.0 slices it.
+        private const double ScanSliceMs = 1e9;
         private IEnumerator<int> scanJob;
         private bool scanInitial;
         private int lastScanQueued;
