@@ -247,6 +247,9 @@ namespace UnityRemix
                 int id = l.GetInstanceID();
                 if (!cachedSceneLightIds.Add(id))
                     continue;
+                // A light the game profile leaves out (stays in cachedSceneLightIds: not checked again).
+                if (Games.GameProfiles.IsHiddenLight(l))
+                    continue;
 
                 Transform t = l.transform;
                 string path = HashUtils.GetHierarchyPath(t);

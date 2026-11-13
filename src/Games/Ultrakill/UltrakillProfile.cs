@@ -183,6 +183,11 @@ namespace UnityRemix.Games.Ultrakill
         // Layers ULTRAKILL never shows: 16 Invisible (triggers, blockers, collision brushes),
         // 18 PlayerOnly (player barriers), 20 GroundCheck, 28 VirtualRender, 30 Portal. (19,
         // Virtual Screen, is drawn: the Virtual Camera shows it over the scene.)
+        // The player's 'Point Light' (white, intensity 0.5, range 15, in every level): a subtle
+        // fill in the game's vertex lighting, a glaring lamp at the camera when path traced.
+        public override bool IsHiddenLight(Light light) =>
+            light.name == "Point Light" && light.transform.parent != null && light.transform.parent.name == "Player";
+
         public override bool IsNeverRenderedLayer(int layer) =>
             layer == 16 || layer == 18 || layer == 20 || layer == 28 || layer == 30;
 
@@ -614,9 +619,29 @@ namespace UnityRemix.Games.Ultrakill
             }
             if (!bloodStains.IsStainMaterial(material))
                 return;
+            // A level's own blood decals (BloodPlane, ULTRAKILL/Bloodstain_Fallback): the shader
+            // keeps only texels of alpha 1 (discard otherwise) and writes the stain mask.
+            if (IsBloodPlane(material))
+            {
+                alphaMode = RemixMaterialManager.AlphaMode.Cutout;
+                alphaCutoff = 0.99f;
+                albedoColor = new Color(UltrakillBloodStains.Tint.r, UltrakillBloodStains.Tint.g, UltrakillBloodStains.Tint.b, 1f);
+                return;
+            }
             alphaMode = RemixMaterialManager.AlphaMode.Blend;
             alphaCutoff = 0.05f;
             albedoColor = UltrakillBloodStains.Tint;
+        }
+
+        private static bool IsBloodPlane(Material material) =>
+            material.shader != null && material.shader.name == "ULTRAKILL/Bloodstain_Fallback";
+
+        // Bloodstain_Fallback samples its splatter atlas (five cells side by side) at the mesh's
+        // own UVs times (0.2, 1): the first cell, whatever the material's tiling.
+        public override void OverrideTextureTransform(Material material, ref Vector4 scaleOffset)
+        {
+            if (IsBloodPlane(material))
+                scaleOffset = new Vector4(0.2f, 1f, 0f, 0f);
         }
 
         // Weapon colours (GunColorGetter): the weapon's materials are swapped for "colored" copies

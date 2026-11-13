@@ -586,6 +586,8 @@ namespace UnityRemix
                 catch { }
             }
 
+            Games.GameProfiles.OverrideTextureTransform(material, ref matData.mainTexST);
+
             // Fallback: no albedo texture but material has a color — create a 1x1 solid-color texture
             // so Remix renders the surface with the correct color instead of the debug checkerboard.
             if (matData.albedoHandle == IntPtr.Zero && (mpbColor.HasValue || material.HasProperty("_Color") || material.HasProperty("_BaseColor") || material.HasProperty("_Tint") || material.HasProperty("_TintColor") || material.HasProperty("_Color1") || hsbc.HasValue))

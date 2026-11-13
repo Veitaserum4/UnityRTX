@@ -81,6 +81,10 @@ namespace UnityRemix.Games
         // however the material is first captured).
         public virtual void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor) { }
 
+        // The albedo texture's scale and offset (x, y scale; z, w offset) as the game's shader
+        // samples it, where that is not the material's own (_ST) tiling.
+        public virtual void OverrideTextureTransform(Material material, ref Vector4 scaleOffset) { }
+
         // A material the game recolours with player-chosen colours through a mask texture
         // (block: the renderer's property block, empty when it has none): the mask and its
         // colours, applied to the albedo by the material capture.
@@ -104,6 +108,10 @@ namespace UnityRemix.Games
         // A layer whose geometry the game never shows (collision brushes, triggers, player-only
         // barriers): the scene scanner skips it for good.
         public virtual bool IsNeverRenderedLayer(int layer) => false;
+
+        // A light of the game's not converted: one whose look depends on the game's own
+        // lighting (a fill light on the player that path tracing makes glaring). Main thread.
+        public virtual bool IsHiddenLight(Light light) => false;
 
         // A shader of the game's that blends as its _SrcBlend / _DstBlend properties say (as
         // Unity's Standard and Particles/Standard do), so additive ones glow.

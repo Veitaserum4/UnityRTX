@@ -139,6 +139,20 @@ namespace UnityRemix.Games
             return never;
         }
 
+        public static void OverrideTextureTransform(Material material, ref Vector4 scaleOffset)
+        {
+            var st = scaleOffset;
+            Run(nameof(OverrideTextureTransform), p => p.OverrideTextureTransform(material, ref st));
+            scaleOffset = st;
+        }
+
+        public static bool IsHiddenLight(Light light)
+        {
+            bool hidden = false;
+            Run(nameof(IsHiddenLight), p => hidden = p.IsHiddenLight(light));
+            return hidden;
+        }
+
         public static bool ReadsBlendProperties(string shaderName)
         {
             bool reads = false;
