@@ -349,7 +349,7 @@ namespace UnityRemix
                         : "no trails";
                     if (VerboseLog.On) logger.LogInfo($"[ParticleSystem] '{pr.name}': {pr.renderMode}, align {pr.alignment}, space {ps.main.simulationSpace}, {actualAlive} alive, " +
                                    $"mat '{mat.name}' shader '{(mat.shader != null ? mat.shader.name : "-")}' queue {mat.renderQueue}{DescribeBlend(mat)}, " +
-                                   $"tint ({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}) matAlpha {matAlpha:F2} emissive {isEmissiveParticle}, {trailText} | Remix {matDescription}");
+                                   $"look {look.kind} tint ({look.tint.r:F2},{look.tint.g:F2},{look.tint.b:F2}) x{look.alphaScale:F2}, sample ({pCol.r:F2},{pCol.g:F2},{pCol.b:F2},{pCol.a:F2}), size {ps.main.startSizeMultiplier:F1}, emission ({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}) emissive {isEmissiveParticle}, {trailText} | Remix {matDescription}");
                 }
 
                 if (pr.renderMode == ParticleSystemRenderMode.None)
