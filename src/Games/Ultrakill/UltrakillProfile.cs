@@ -66,8 +66,11 @@ namespace UnityRemix.Games.Ultrakill
 
         // Unity's built-in Default-Material appears only on helper shapes the game doesn't show:
         // crusher base boxes, skull altar placeholders, invisible walls.
+        // ULTRAKILL/HeatWave: heat haze, a screen distortion (its texture only bends the view
+        // behind it), drawn in Remix as the texture itself.
         public override bool IsHiddenMaterial(Material material) =>
-            material.name.StartsWith("Default-Material", StringComparison.Ordinal);
+            material.name.StartsWith("Default-Material", StringComparison.Ordinal) ||
+            (material.shader != null && material.shader.name == "ULTRAKILL/HeatWave");
 
         // Limbo's TV-screen walls (LIMBO_WALLS) show _LimboSky in screen space (times their own
         // texture, with glitches): the LimboSkybox camera's view of a miniature scene elsewhere

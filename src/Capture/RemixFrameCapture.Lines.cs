@@ -53,7 +53,7 @@ namespace UnityRemix
                 if (cull && (line.bounds.ClosestPoint(camPos) - camPos).sqrMagnitude > maxDist * maxDist)
                     continue;
                 Material mat = line.sharedMaterial;
-                if (mat == null)
+                if (mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat))
                     continue;
 
                 try

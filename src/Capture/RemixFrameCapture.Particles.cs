@@ -255,7 +255,8 @@ namespace UnityRemix
                     if (mats != null && mats.Length > 0)
                         mat = mats[0];
                 }
-                if (mat == null) continue;
+                // Materials that draw nothing of their own (hidden, or a screen distortion).
+                if (mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat)) continue;
 
                 // Sample color from active particles (fast struct read) or fallback
                 Color pCol = Color.white;
@@ -1386,7 +1387,7 @@ namespace UnityRemix
                             trailMat = mats[1];
                     }
                     // No dedicated trail material → skip rather than using the wrong one.
-                    if (trailMat == null) return;
+                    if (trailMat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(trailMat)) return;
 
                     // The trail material's tint and blend; its vertex colours are the particles'.
                     ParticleLook trailLook = GetParticleLook(trailMat, false);
@@ -1613,7 +1614,7 @@ namespace UnityRemix
                     if (mats != null && mats.Length > 0)
                         mat = mats[0];
                 }
-                if (mat == null)
+                if (mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat))
                     continue;
 
                 try
