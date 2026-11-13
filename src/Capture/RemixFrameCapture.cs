@@ -933,6 +933,42 @@ namespace UnityRemix
         private readonly HashSet<int> playerBodySkinnedIds = new HashSet<int>();
         // Debug toggles (F3): leave out the player's body, or the view-model skinned meshes.
         public static bool DebugHidePlayerBody, DebugHideViewModelSkinned, DebugHideWeaponScreens, DebugHideScanner;
+        public static volatile bool DebugDumpRequested; // F10: DebugDump at the end of the next capture
+
+        // Diagnostics (F10): everything this frame submits within 8 m of the camera, with the
+        // Unity object behind it where its id resolves.
+        public void DebugDump(FrameState state, Camera cam)
+        {
+            if (!DebugDumpRequested || cam == null)
+                return;
+            DebugDumpRequested = false;
+            var names = new Dictionary<int, string>();
+            foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                if (r != null) names[r.GetInstanceID()] = r.GetType().Name + " " + GetHierarchyPath(r.transform);
+            foreach (var g in UnityEngine.Object.FindObjectsOfType<Graphic>())
+                if (g != null) names[g.GetInstanceID()] = g.GetType().Name + " " + GetHierarchyPath(g.transform);
+            foreach (var info in cachedSkinnedInfo.Values)
+                if (info != null && info.transform != null && !names.ContainsKey(info.hierarchyHash))
+                    names[info.hierarchyHash] = "Skinned " + GetHierarchyPath(info.transform);
+            Vector3 eye = cam.transform.position;
+            string Name(int id) => names.TryGetValue(id, out var n) ? n : $"id {id}";
+            int listed = 0;
+            logger.LogInfo($"[Dump] frame {Time.frameCount}: {state.instances.Count} instances, {state.skinned.Count} dynamic meshes; within 8 m of the camera:");
+            foreach (var i in state.instances)
+            {
+                var p = i.localToWorld.GetColumn(3);
+                float d = Vector3.Distance(eye, p);
+                if (d > 8f || listed++ > 200) continue;
+                logger.LogInfo($"[Dump]   instance {Name(i.rendererInstanceId)} mesh {i.meshId} flags 0x{i.categoryFlags:X} at {d:F2} m");
+            }
+            foreach (var s in state.skinned)
+            {
+                var p = s.localToWorld.GetColumn(3);
+                float d = Vector3.Distance(eye, p);
+                if (d > 8f || listed++ > 400) continue;
+                logger.LogInfo($"[Dump]   {s.source} {Name(s.meshId)} flags 0x{s.categoryFlags:X} at {d:F2} m, {(s.vertices != null ? s.vertices.Length : -1)} verts, material {s.materialId}");
+            }
+        }
         private readonly Dictionary<int, bool> playerBodyRenderers = new Dictionary<int, bool>();
         // Skinned id (CachedSkinnedRendererInfo.hierarchyHash) -> the renderer holding it; kept
         // across renderer cache refreshes so twins never swap ids, cleared on scene load.
@@ -2529,12 +2565,14 @@ namespace UnityRemix
                     viewModelSkinnedIds.Add(skinnedId);
                 if (playerBody)
                     playerBodySkinnedIds.Add(skinnedId);
-                // Also register per-submesh sub-keys so they survive the stale-pruning pass
+                // Also register per-submesh sub-keys so they survive the stale-pruning pass and
+                // carry the view-model and player-body flags. Entries exist per submesh, which
+                // can outnumber the materials (V1's body weapons: one material, four submeshes).
                 // Formula: sub0 = skinnedId, sub>0 = skinnedId ^ (sub * KNUTH_PRIME)
                 var smMaterials = info.sharedMaterials;
-                if (smMaterials != null)
+                int registeredSubs = Math.Max(smMaterials != null ? smMaterials.Length : 1, sharedMesh != null ? sharedMesh.subMeshCount : 1);
                 {
-                    for (int sub = 1; sub < smMaterials.Length; sub++)
+                    for (int sub = 1; sub < registeredSubs; sub++)
                     {
                         int subKey = (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                         validSkinnedIds.Add(subKey);
@@ -2728,7 +2766,8 @@ namespace UnityRemix
                         baked++;
                         // Register all per-submesh keys as valid so they aren't pruned
                         var smMatsForBake = GetOrCreateSkinnedInfo(skinned).sharedMaterials;
-                        int subCntBake = (smMatsForBake != null) ? smMatsForBake.Length : 1;
+                        int subCntBake = Math.Max((smMatsForBake != null) ? smMatsForBake.Length : 1,
+                                                  skinned.sharedMesh != null ? skinned.sharedMesh.subMeshCount : 1);
                         for (int sub = 0; sub < subCntBake; sub++)
                         {
                             int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
