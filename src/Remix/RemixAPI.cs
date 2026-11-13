@@ -653,6 +653,17 @@ namespace UnityRemix
         /// </summary>
         public const int REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_ONLY_EXT = 0x7fff1077;
 
+        /// <summary>Optional sphere light pNext: its path-traced reach (fades to nothing at it).</summary>
+        public const int REMIXAPI_STRUCT_TYPE_LIGHT_INFO_RANGE_EXT = 0x7fff107B;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_LightInfoRangeEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+            public float range;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_InstanceInfoCameraOnlyEXT
         {

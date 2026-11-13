@@ -585,6 +585,15 @@ namespace UnityRemix
                 // it to light). Passed as is, coloured lights wash out (orange (1, 0.5, 0) is
                 // (1, 0.21, 0) linear). Intensity stays a linear scale: white lights are unchanged.
                 Color lightColor = light.color.linear * light.intensity * configLightIntensityMultiplier.Value;
+                // A point or spot light's falloff as Unity's: 1 / (1 + 25 d^2 / range^2), which away
+                // from the light is range^2 / (25 d^2); a sphere of radius R and radiance L gives
+                // pi R^2 L / d^2, so L = range^2 / (25 pi R^2). The range itself is its reach
+                // (remixapi_LightInfoRangeEXT).
+                if (light.type == LightType.Point || light.type == LightType.Spot)
+                {
+                    float r = SphereRadius(light.range);
+                    lightColor *= light.range * light.range / (25f * Mathf.PI * r * r);
+                }
                 var radiance = new RemixAPI.remixapi_Float3D(lightColor.r, lightColor.g, lightColor.b);
                 
                 // Create base light info
@@ -631,6 +640,10 @@ namespace UnityRemix
             }
         }
         
+        // The emitting sphere of a point or spot light: a tenth of its range, between 5 cm and 2 m
+        // (a long-range lamp is not a room-sized ball buried in its walls).
+        private static float SphereRadius(float range) => Mathf.Clamp(range * 0.1f, 0.05f, 2f);
+
         private IntPtr CreatePointLight(ref UnityLightData light, RemixAPI.remixapi_LightInfo baseInfo)
         {
             var position = light.position;
@@ -641,12 +654,15 @@ namespace UnityRemix
                 pNext = IntPtr.Zero,
                 // Convert Unity Y-up to Remix Z-up: (x, y, z) -> (x, z, y)
                 position = new RemixAPI.remixapi_Float3D(position.x, position.z, position.y),
-                radius = light.range * 0.1f,
+                radius = SphereRadius(light.range),
                 shaping_hasvalue = 0,
                 shaping_value = new RemixAPI.remixapi_LightInfoLightShaping(),
                 volumetricRadianceScale = 1.0f
             };
             
+            var rangeExt = new RemixAPI.remixapi_LightInfoRangeEXT { sType = RemixAPI.REMIXAPI_STRUCT_TYPE_LIGHT_INFO_RANGE_EXT, range = Mathf.Max(0f, light.range) };
+            GCHandle rangeHandle = GCHandle.Alloc(rangeExt, GCHandleType.Pinned);
+            sphereExt.pNext = rangeHandle.AddrOfPinnedObject();
             GCHandle sphereHandle = GCHandle.Alloc(sphereExt, GCHandleType.Pinned);
             
             try
@@ -671,6 +687,7 @@ namespace UnityRemix
             finally
             {
                 sphereHandle.Free();
+                rangeHandle.Free();
             }
         }
         
@@ -694,12 +711,15 @@ namespace UnityRemix
                 pNext = IntPtr.Zero,
                 // Convert Unity Y-up to Remix Z-up: (x, y, z) -> (x, z, y)
                 position = new RemixAPI.remixapi_Float3D(position.x, position.z, position.y),
-                radius = light.range * 0.1f,
+                radius = SphereRadius(light.range),
                 shaping_hasvalue = 1,
                 shaping_value = shaping,
                 volumetricRadianceScale = 1.0f
             };
             
+            var rangeExt = new RemixAPI.remixapi_LightInfoRangeEXT { sType = RemixAPI.REMIXAPI_STRUCT_TYPE_LIGHT_INFO_RANGE_EXT, range = Mathf.Max(0f, light.range) };
+            GCHandle rangeHandle = GCHandle.Alloc(rangeExt, GCHandleType.Pinned);
+            sphereExt.pNext = rangeHandle.AddrOfPinnedObject();
             GCHandle sphereHandle = GCHandle.Alloc(sphereExt, GCHandleType.Pinned);
             
             try
@@ -724,6 +744,7 @@ namespace UnityRemix
             finally
             {
                 sphereHandle.Free();
+                rangeHandle.Free();
             }
         }
         
