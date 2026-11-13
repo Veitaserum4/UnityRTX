@@ -460,7 +460,7 @@ namespace UnityRemix
 
         // Every mesh path notes it: a spawned or deforming effect (an explosion's sphere) is a
         // dynamic mesh, its handle possibly a destroyed one's.
-        private void NoteBlended(IntPtr handle, int materialId)
+        public void NoteBlended(IntPtr handle, int materialId)
         {
             if (handle == IntPtr.Zero) return;
             if (materialManager.NeedsBlendedInstance(materialId)) blendedMeshes[handle] = 0;
@@ -1275,7 +1275,7 @@ namespace UnityRemix
         /// <summary>
         /// Draw mesh instance with transform
         /// </summary>
-        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null, bool doubleSided = true, bool multiplyPaint = false)
+        public void DrawMeshInstance(IntPtr meshHandle, Matrix4x4 localToWorld, uint objectPickingValue, uint categoryFlags = 0, ulong persistentInstanceId = 0, bool isDynamic = false, Vector4? uvTransform = null, bool doubleSided = true, bool multiplyPaint = false, float glowFade = 1f)
         {
             if (drawInstanceFunc == null || meshHandle == IntPtr.Zero)
                 return;
@@ -1349,6 +1349,12 @@ namespace UnityRemix
                 // stained-glass dark transmission borders), and modulate texture alpha by vertex alpha (Diffuse)
                 // so ColorOverLifetime fade-outs fade alpha rather than turning into black silhouettes.
                 blendExt = ParticleBlend(IntPtr.Zero);
+                // A fading additive glow (an explosion's _Color alpha): its coverage times the fade.
+                if (!isParticleInstance && glowFade < 0.999f)
+                {
+                    blendExt.textureAlphaArg2Source = 3; // TFactor
+                    blendExt.tFactor = ((uint)Mathf.Clamp(Mathf.RoundToInt(glowFade * 255f), 0, 255) << 24) | 0xFFFFFFu;
+                }
             }
 
             unsafe

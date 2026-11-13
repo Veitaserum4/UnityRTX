@@ -1347,6 +1347,7 @@ int queued = 0;
                 // Build one surface per submesh, each with its own material (skipping non-triangle or empty surfaces)
                 var surfaces = new List<RemixAPI.remixapi_MeshInfoSurfaceTriangles>();
                 bool bakeable = true;
+                int blendedMaterialId = 0;
                 for (int s = 0; s < data.Surfaces.Length; s++)
                 {
                     var surf = surfaceList[s];
@@ -1386,8 +1387,11 @@ int queued = 0;
 
                     foreach (var (surfIndices, partMaterialId) in parts)
                     {
-                        if (!materialManager.IsBakeableMaterial(partMaterialId != 0 ? partMaterialId : (data.Surfaces.Length > 0 ? data.Surfaces[0].MaterialId : 0)))
+                        int surfaceMaterialId = partMaterialId != 0 ? partMaterialId : (data.Surfaces.Length > 0 ? data.Surfaces[0].MaterialId : 0);
+                        if (!materialManager.IsBakeableMaterial(surfaceMaterialId))
                             bakeable = false;
+                        if (blendedMaterialId == 0 && materialManager.NeedsBlendedInstance(surfaceMaterialId))
+                            blendedMaterialId = surfaceMaterialId;
                         GCHandle idxHandle = GCHandle.Alloc(surfIndices, GCHandleType.Pinned);
                         indexHandles.Add(idxHandle);
 
@@ -1481,6 +1485,8 @@ int queued = 0;
                     return IntPtr.Zero;
                 }
                 meshConverter.SetBakeable(handle, bakeable);
+                // A particle-like (additive glow) surface: its instances blend.
+                meshConverter.NoteBlended(handle, blendedMaterialId);
                 if (data.CameraOnly)
                     meshConverter.RegisterCameraOnly(handle, $"scanned 0x{data.MeshHash:X16}");
 

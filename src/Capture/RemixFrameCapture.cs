@@ -776,6 +776,7 @@ namespace UnityRemix
             public uint categoryFlags;
             // Multiplicative paint (with a decal category): drawn blending DST_COLOR * ZERO.
             public bool multiplyPaint;
+            public float glowFade;  // an additive glow's live strength over its captured one (0: unset, 1)
             public Vector4 uvST;
             public int bakeFrame;
             // Optional: the vertices this entry's triangles use (triangles index into it).
@@ -2206,7 +2207,9 @@ namespace UnityRemix
                     }
                 }
 
-                ulong remixMeshHash = 0x5343524CUL << 32 | ((uint)rendererId ^ ((uint)s * 0x9E3779B9U));
+                // The material too: a renderer swapping materials (an explosion's white flash, then
+                // its own) is a new mesh, not the first material's kept.
+                ulong remixMeshHash = 0x5343524CUL << 32 | ((uint)rendererId ^ ((uint)s * 0x9E3779B9U) ^ ((uint)matId * 0x85EBCA6BU));
 
                 state.skinned.Add(new SkinnedMeshData
                 {
@@ -2225,7 +2228,8 @@ namespace UnityRemix
                     categoryFlags = catFlags,
                     uvST = uvST,
                     // The geometry is the mesh's own: uploaded once, scrolled by the draw (uvST).
-                    bakeFrame = 1
+                    bakeFrame = 1,
+                    glowFade = materialManager.GlowFade(matId, mat)
                 });
             }
         }

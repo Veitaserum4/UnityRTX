@@ -1038,7 +1038,8 @@ namespace UnityRemix
                         dynUploadMs += RemixProfiler.ElapsedMs(phaseStart);
                         long drawStart = System.Diagnostics.Stopwatch.GetTimestamp();
                         meshConverter.DrawMeshInstance(meshHandle, skinned.localToWorld, objectPickingValue, skinned.categoryFlags, persistentId, isDynamic: true,
-                            uvTransform: scrolling ? skinned.uvST : (UnityEngine.Vector4?)null, multiplyPaint: skinned.multiplyPaint);
+                            uvTransform: scrolling ? skinned.uvST : (UnityEngine.Vector4?)null, multiplyPaint: skinned.multiplyPaint,
+                            glowFade: skinned.glowFade > 0f ? skinned.glowFade : 1f);
                         objectPickingValue++;
                         dynDrawMs += RemixProfiler.ElapsedMs(drawStart);
                         dynDraws++;

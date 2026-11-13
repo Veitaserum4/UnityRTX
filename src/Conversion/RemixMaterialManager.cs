@@ -186,6 +186,7 @@ namespace UnityRemix
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
             public Color glowColor;     // an additive glow on a mesh: its emission (what Unity adds per white texel, over glowCoverage)
             public float glowCoverage;  // its texels' coverage scale, the glow's brightness up to 1 (0: not an additive glow)
+            public float glowStrength;  // the captured glow's brightest channel (GlowFade's reference)
             public bool blendedInstance; // drawn with remixapi_InstanceInfoBlendEXT (a particle-like effect on a mesh)
             public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
             public bool paintFinish; // remixapi_MaterialInfoPaintFinishEXT: multiplicative paint with its own roughness
@@ -335,6 +336,17 @@ namespace UnityRemix
         // A particle-like material on a mesh renderer (an additive glow, a particle shader): its
         // instances blend (remixapi_InstanceInfoBlendEXT) as particles' do, rather than standing
         // as an opaque surface or a tinted sheet.
+        // An additive glow's strength now over when captured (its _Color faded): 1 for others.
+        public float GlowFade(int materialId, Material material)
+        {
+            if (material == null || !materialTextureData.TryGetValue(materialId, out var data) || data.glowStrength <= 0f)
+                return 1f;
+            // (Never 0: SkinnedMeshData.glowFade 0 means unset.)
+            if (!TryGetAdditiveGlow(material, out Color glow))
+                return 1e-4f;
+            return Mathf.Clamp(Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)) / data.glowStrength, 1e-4f, 1f);
+        }
+
         public bool NeedsBlendedInstance(int materialId)
         {
             return materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.blendedInstance;
@@ -811,6 +823,7 @@ namespace UnityRemix
                 suppressLightGeneration = autoSuppressLight,
                 glowColor = additiveGlow ? glow * (1f / glowCoverage) : Color.black,
                 glowCoverage = glowCoverage,
+                glowStrength = additiveGlow ? Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)) : 0f,
                 rayPortalIndex = rayPortalIndices.TryGetValue(materialId, out int portalIndex) ? portalIndex
                                : Games.GameProfiles.OpensViewPortal(material) ? RayPortals.EntranceIndex : -1,
                 rayPortalStandalone = rayPortalIndices.ContainsKey(materialId),
@@ -2086,7 +2099,6 @@ namespace UnityRemix
 
                 ulong hash = XXHash64.ComputeHash(pixelData, 0, pixelData.Length);
                 if (hash == 0) hash = 1;
-
                 lock (pendingTextureLock)
                 {
                     pendingTextureUploads.Enqueue(new PendingTextureUpload
