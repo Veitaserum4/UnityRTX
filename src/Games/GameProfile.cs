@@ -101,6 +101,22 @@ namespace UnityRemix.Games
         // as Remix's reflection-only player body (camera rays pass it), whatever its layer.
         public virtual bool IsPlayerBody(Renderer renderer) => false;
 
+        // A layer whose geometry the game never shows (collision brushes, triggers, player-only
+        // barriers): the scene scanner skips it for good.
+        public virtual bool IsNeverRenderedLayer(int layer) => false;
+
+        // A shader of the game's that blends as its _SrcBlend / _DstBlend properties say (as
+        // Unity's Standard and Particles/Standard do), so additive ones glow.
+        public virtual bool ReadsBlendProperties(string shaderName) => false;
+
+        // The camera is inside a fluid the game shows with an overlay of its own (main thread,
+        // a few times a second): its tint, alpha 0 when it has none. False: not shown.
+        public virtual bool GetUnderwaterTint(out Color tint)
+        {
+            tint = default;
+            return false;
+        }
+
         // The game's portals this frame, nearest the camera first (RayPortals draws as many as
         // Remix has room for).
         public virtual void GetPortals(Camera worldCamera, List<PortalPair> portals) { }

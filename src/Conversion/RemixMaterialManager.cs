@@ -366,9 +366,9 @@ namespace UnityRemix
             bool fixedAdditive = s.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0;
             if (!fixedAdditive)
             {
-                bool blendProperties = s == "ULTRAKILL/Master" || s == "Standard" ||
+                bool blendProperties = s == "Standard" ||
                                        s.StartsWith("Particles/Standard", StringComparison.Ordinal) ||
-                                       s.StartsWith("ULTRAKILL/Particles/Standard", StringComparison.Ordinal);
+                                       Games.GameProfiles.ReadsBlendProperties(s);
                 if (!blendProperties || !material.HasProperty("_SrcBlend") || !material.HasProperty("_DstBlend"))
                     return false;
                 int src = Mathf.RoundToInt(material.GetFloat("_SrcBlend")), dst = Mathf.RoundToInt(material.GetFloat("_DstBlend"));

@@ -180,6 +180,38 @@ namespace UnityRemix.Games.Ultrakill
             ShaderPassThrough.TextureChanged(AccessTools.Field(type2, "processedLUT")?.GetValue(paletteConverter) as Texture);
         }
 
+        // Layers ULTRAKILL never shows: 16 Invisible (triggers, blockers, collision brushes),
+        // 18 PlayerOnly (player barriers), 20 GroundCheck, 28 VirtualRender, 30 Portal. (19,
+        // Virtual Screen, is drawn: the Virtual Camera shows it over the scene.)
+        public override bool IsNeverRenderedLayer(int layer) =>
+            layer == 16 || layer == 18 || layer == 20 || layer == 28 || layer == 30;
+
+        // ULTRAKILL/Master and its particle shaders take _SrcBlend / _DstBlend (its psx
+        // transparent shaders keep stale values and alpha blend).
+        public override bool ReadsBlendProperties(string shaderName) =>
+            shaderName == "ULTRAKILL/Master" || shaderName.StartsWith("ULTRAKILL/Particles/Standard", StringComparison.Ordinal);
+
+        // The HUD's UnderwaterOverlay image (water, or red in blood), found again every few
+        // seconds rather than searched for on each check.
+        private UnityEngine.UI.Graphic underwaterOverlay;
+        private float underwaterSearchTime = -100f;
+
+        public override bool GetUnderwaterTint(out Color tint)
+        {
+            tint = default;
+            if (underwaterOverlay == null && Time.unscaledTime - underwaterSearchTime > 3f)
+            {
+                underwaterSearchTime = Time.unscaledTime;
+                var obj = GameObject.Find("UnderwaterOverlay");
+                underwaterOverlay = obj != null ? obj.GetComponent<UnityEngine.UI.Graphic>() : null;
+            }
+            var image = underwaterOverlay;
+            if (image == null || !image.isActiveAndEnabled || image.color.a <= 0.05f)
+                return false;
+            tint = image.color;
+            return true;
+        }
+
         public override Material PassThroughScreenEffect()
         {
             WatchPalette();

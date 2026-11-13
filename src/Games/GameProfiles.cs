@@ -132,6 +132,29 @@ namespace UnityRemix.Games
             Run(nameof(GetPassThroughRenderers), p => p.GetPassThroughRenderers(worldCamera, renderers));
         }
 
+        public static bool IsNeverRenderedLayer(int layer)
+        {
+            bool never = false;
+            Run(nameof(IsNeverRenderedLayer), p => never = p.IsNeverRenderedLayer(layer));
+            return never;
+        }
+
+        public static bool ReadsBlendProperties(string shaderName)
+        {
+            bool reads = false;
+            Run(nameof(ReadsBlendProperties), p => reads = p.ReadsBlendProperties(shaderName));
+            return reads;
+        }
+
+        public static bool GetUnderwaterTint(out Color tint)
+        {
+            bool shown = false;
+            Color found = default;
+            Run(nameof(GetUnderwaterTint), p => shown = p.GetUnderwaterTint(out found));
+            tint = found;
+            return shown;
+        }
+
         public static Material PassThroughScreenEffect()
         {
             Material material = null;

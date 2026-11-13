@@ -245,42 +245,17 @@ namespace UnityRemix
                 catch { }
             }
 
-            // 3. Game-specific underwater overlay / UI check (e.g. ULTRAKILL 'UnderwaterOverlay') on main thread
+            // 3. The game's own underwater overlay (GameProfile.GetUnderwaterTint), on the main thread
             if (!underwater && (now - lastOverlayCheckTime > 0.2f))
             {
                 lastOverlayCheckTime = now;
-                try
+                overlayUnderwaterDetected = Games.GameProfiles.GetUnderwaterTint(out var tint);
+                if (overlayUnderwaterDetected && tint.a > 0f && (tint.r > 0f || tint.g > 0f || tint.b > 0f))
                 {
-                    // Look for active GameObject named 'UnderwaterOverlay' or similar
-                    var obj = GameObject.Find("UnderwaterOverlay");
-                    if (obj != null && obj.activeInHierarchy)
-                    {
-                        var img = obj.GetComponent<UnityEngine.UI.Graphic>();
-                        if (img != null && img.enabled && img.color.a > 0.05f)
-                        {
-                            overlayUnderwaterDetected = true;
-                            if (img.color.r > 0f || img.color.g > 0f || img.color.b > 0f)
-                            {
-                                detectedColor = new Color(img.color.r, img.color.g, img.color.b, 1.0f);
-                                if (img.color.r > 0.35f && img.color.r > (img.color.g + img.color.b) * 0.7f)
-                                {
-                                    detectedDistance = ConfigBloodClarity.Value;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            overlayUnderwaterDetected = false;
-                        }
-                    }
-                    else
-                    {
-                        overlayUnderwaterDetected = false;
-                    }
-                }
-                catch
-                {
-                    overlayUnderwaterDetected = false;
+                    detectedColor = new Color(tint.r, tint.g, tint.b, 1.0f);
+                    // A red overlay: blood rather than water.
+                    if (tint.r > 0.35f && tint.r > (tint.g + tint.b) * 0.7f)
+                        detectedDistance = ConfigBloodClarity.Value;
                 }
             }
 

@@ -123,13 +123,29 @@ namespace UnityRemix
         // Mesh handle dedup: same geometry → same Remix handle
         private readonly Dictionary<ulong, IntPtr> meshHandles = new Dictionary<ulong, IntPtr>();
 
-        // Diagnostics (LookAtDiagnostics): what each renderer was scanned as. Main thread.
-        private readonly Dictionary<int, string> scannedDescriptions = new Dictionary<int, string>();
+        // Diagnostics (LookAtDiagnostics): what each renderer was scanned as, formatted when asked
+        // (a level scans thousands). Main thread.
+        private struct ScanRecord
+        {
+            public string meshName;
+            public int vertexCount;
+            public bool colors;
+            public Material[] materials;
+            public int[] materialIds;
+        }
+        private readonly Dictionary<int, ScanRecord> scannedDescriptions = new Dictionary<int, ScanRecord>();
 
         public string DescribeScanned(Renderer renderer)
         {
-            if (renderer == null || !scannedDescriptions.TryGetValue(renderer.GetInstanceID(), out string scanned))
+            if (renderer == null || !scannedDescriptions.TryGetValue(renderer.GetInstanceID(), out var record))
                 return null;
+            var described = new System.Text.StringBuilder($"mesh '{record.meshName}' {record.vertexCount} verts, colors {record.colors}");
+            for (int s = 0; s < record.materialIds.Length; s++)
+            {
+                var m = record.materials[s];
+                described.Append($" | surface {s} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' id {record.materialIds[s]}");
+            }
+            string scanned = described.ToString();
             var text = new System.Text.StringBuilder(scanned);
             foreach (System.Text.RegularExpressions.Match id in System.Text.RegularExpressions.Regex.Matches(scanned, @" id (-?\d+)"))
             {
@@ -177,19 +193,9 @@ namespace UnityRemix
         // Scan time: layers never worth reading (a skipped filter is not rescanned).
         private static bool IsLayerNeverRendered(int layer)
         {
-            // Safety fallback exclusions for standard non-rendered geometry in ULTRAKILL / Unity:
-            // Layer 5: UI
-            // Layer 16: Invisible (triggers, blockers, collision brushes)
-            // Layer 18: PlayerOnly (invisible player barriers)
-            // Layer 20: GroundCheck
-            // Layer 28: VirtualRender
-            // Layer 30: Portal
-            // (Layer 19, Virtual Screen, is drawn: ULTRAKILL's Virtual Camera draws it over the
-            // scene. Layers no game camera draws are left out per frame, IsLayerExcluded.)
-            if (layer == 16 || layer == 18 || layer == 20 || layer == 30 || layer == 5 || layer == 28)
-                return true;
-
-            return false;
+            // Unity's built-in UI layer, and the game's own (GameProfile.IsNeverRenderedLayer).
+            // Layers no game camera draws are left out per frame (IsLayerExcluded).
+            return layer == 5 || Games.GameProfiles.IsNeverRenderedLayer(layer);
         }
 
         public static bool IsIntermediateAncestorDisabled(Transform t)
@@ -305,7 +311,13 @@ namespace UnityRemix
         private const float RescanDuration = 30.0f;
         private int visLogTimer;
 
-        private const int MeshesPerFrame = 32;
+        // Streaming: meshes created per render frame until StreamBudgetMs is spent (at least
+        // MinMeshesPerFrame, at most MaxMeshesPerFrame).
+        private const int MinMeshesPerFrame = 8, MaxMeshesPerFrame = 1024;
+        private const double StreamBudgetMs = 4.0;
+        // This load's streaming totals, for the "Streaming complete" line (render thread).
+        private double streamMs, streamTextureMs;
+        private int streamFrames, streamMeshes;
 
         public bool HasData
         {
@@ -834,7 +846,13 @@ namespace UnityRemix
 
         private int ScanScene(Scene scene, bool logDiagnostics)
         {
+            long scanStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            // Phase timings (ms) for the scan line: mesh reads (CPU, GPU readback), triangles,
+            // material capture, combined-mesh compaction, everything else per renderer.
+            double readMs = 0, gpuMs = 0, trianglesMs = 0, materialMs = 0, compactMs = 0;
+            long phase;
             var filters = Resources.FindObjectsOfTypeAll<MeshFilter>();
+            double findMs = RemixProfiler.ElapsedMs(scanStart);
             var combinedDataCache = new Dictionary<int, (Vector3[] verts, Vector3[] norms, Vector2[] uvs, Color32[] cols, int[][] subIndices)>();
             // Every other mesh, read once per scan and shared by all its renderers (a level places
             // the same rock or plant thousands of times; nothing downstream writes to these arrays).
@@ -963,6 +981,7 @@ int queued = 0;
 
                 if (vertices == null)
                 {
+                    phase = System.Diagnostics.Stopwatch.GetTimestamp();
                     if (mesh.isReadable)
                     {
                         try
@@ -983,6 +1002,8 @@ int queued = 0;
                     else if (mesh.vertexCount > 0)
                     {
                         // GPU readback path: vertex data is GPU-only
+                        readMs += RemixProfiler.ElapsedMs(phase);
+                        phase = System.Diagnostics.Stopwatch.GetTimestamp();
                         try
                         {
                             if (ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out subMeshIndices))
@@ -1002,6 +1023,10 @@ int queued = 0;
 
                     if (isCombinedMesh && vertices != null && vertices.Length > 0)
                         combinedDataCache[mesh.GetInstanceID()] = (vertices, normals, uvs, colors, subMeshIndices);
+                    if (gpuReadbackCount > 0 && !mesh.isReadable)
+                        gpuMs += RemixProfiler.ElapsedMs(phase);
+                    else
+                        readMs += RemixProfiler.ElapsedMs(phase);
                 }
 
                 if (vertices == null || vertices.Length == 0)
@@ -1026,6 +1051,7 @@ int queued = 0;
                         continue;
                 }
 
+                phase = System.Diagnostics.Stopwatch.GetTimestamp();
                 if (subMeshIndices == null)
                 {
                     // CPU path — extract per-submesh indices for this renderer's range
@@ -1056,6 +1082,8 @@ int queued = 0;
 
                 if (readThisMesh && !isCombinedMesh)
                     sharedMeshData[mesh.GetInstanceID()] = (vertices, normals, uvs, colors, subMeshIndices);
+                trianglesMs += RemixProfiler.ElapsedMs(phase);
+                phase = System.Diagnostics.Stopwatch.GetTimestamp();
 
                 for (int sub = 0; sub < subMeshIndices.Length; sub++)
                 {
@@ -1078,10 +1106,13 @@ int queued = 0;
                     surfaceMaterials.Add(materials != null && sub < materials.Length ? materials[sub] : null);
                 }
 
+                materialMs += RemixProfiler.ElapsedMs(phase);
+                phase = System.Diagnostics.Stopwatch.GetTimestamp();
                 // For combined meshes, compact vertex arrays so each Remix mesh only
                 // includes the vertices referenced by this renderer's submeshes
                 if (isCombinedMesh && surfaces.Count > 0)
                     CompactMeshData(ref vertices, ref normals, ref uvs, ref colors, surfaces);
+                compactMs += RemixProfiler.ElapsedMs(phase);
 
                 if (surfaces.Count == 0)
                 {
@@ -1132,13 +1163,17 @@ int queued = 0;
                 if (colors != null && colors.Length > 0)
                     vertexColorCount++;
 
-                var scanned = new System.Text.StringBuilder($"mesh '{mesh.name}' {vertices.Length} verts, colors {(colors != null && colors.Length > 0)}");
+                var surfaceIds = new int[surfaces.Count];
                 for (int s = 0; s < surfaces.Count; s++)
+                    surfaceIds[s] = surfaces[s].MaterialId;
+                scannedDescriptions[renderer.GetInstanceID()] = new ScanRecord
                 {
-                    var m = surfaceMaterials[s];
-                    scanned.Append($" | surface {s} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' id {surfaces[s].MaterialId}");
-                }
-                scannedDescriptions[renderer.GetInstanceID()] = scanned.ToString();
+                    meshName = mesh.name,
+                    vertexCount = vertices.Length,
+                    colors = colors != null && colors.Length > 0,
+                    materials = surfaceMaterials.ToArray(),
+                    materialIds = surfaceIds,
+                };
 
                 lock (streamLock)
                 {
@@ -1168,6 +1203,10 @@ int queued = 0;
 
             if (logDiagnostics || queued > 0)
             {
+                double totalMs = RemixProfiler.ElapsedMs(scanStart);
+                logger.LogInfo($"Scene scan '{scene.name}' took {totalMs:F0} ms (find {findMs:F0}, mesh reads {readMs:F0}, GPU readback {gpuMs:F0}, " +
+                               $"triangles {trianglesMs:F0}, materials {materialMs:F0}, compaction {compactMs:F0}, " +
+                               $"other {totalMs - findMs - readMs - gpuMs - trianglesMs - materialMs - compactMs:F0})");
                 logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({sharedMeshData.Count} distinct meshes read, {sharedMeshReuses} reused, {skippedLowerLod} lower LOD levels of {lodGroups} groups skipped; {gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
                     $" | skipped: {skippedWrongScene} wrong scene, {skippedAlreadyScanned} already scanned," +
                     $" {skippedInactive} inactive, {skippedLayer} layer excluded, {skippedDynamic} dynamic/ignored, {skippedNoRenderer} no renderer, {skippedNoMesh} no mesh," +
@@ -1180,33 +1219,45 @@ int queued = 0;
 
         private void DrainStreamingBatch()
         {
+            long start = System.Diagnostics.Stopwatch.GetTimestamp();
             materialManager.ProcessPendingTextureUploads();
+            double textureMs = RemixProfiler.ElapsedMs(start);
 
-            ScannedMeshData[] batch;
             int batchGeneration;
             lock (streamLock)
             {
                 batchGeneration = clearGeneration;
-                int count = Math.Min(MeshesPerFrame, streamingQueue.Count);
-                if (count == 0)
+                if (streamingQueue.Count == 0)
                 {
                     if (streamingActive)
                     {
                         streamingActive = false;
-                        logger.LogInfo($"Streaming complete: {currentInstances.Count} scene mesh instances loaded");
+                        logger.LogInfo($"Streaming complete: {currentInstances.Count} scene mesh instances loaded; " +
+                                       $"{streamMeshes} meshes in {streamMs:F0} ms over {streamFrames} frames " +
+                                       $"(texture uploads {streamTextureMs:F0} ms)");
+                        streamMs = streamTextureMs = 0;
+                        streamFrames = streamMeshes = 0;
                     }
                     return;
                 }
-                batch = new ScannedMeshData[count];
-                for (int i = 0; i < count; i++)
-                    batch[i] = streamingQueue.Dequeue();
             }
 
-            var newInstances = new List<InstanceData>(batch.Length);
-            var newRenderers = new List<ScannedRendererRef>(batch.Length);
+            var newInstances = new List<InstanceData>(64);
+            var newRenderers = new List<ScannedRendererRef>(64);
 
-            foreach (var entry in batch)
+            // As many as fit the frame's budget: small meshes stream in many at a time.
+            for (int taken = 0; taken < MaxMeshesPerFrame; taken++)
             {
+                if (taken >= MinMeshesPerFrame && RemixProfiler.ElapsedMs(start) >= StreamBudgetMs)
+                    break;
+                ScannedMeshData entry;
+                lock (streamLock)
+                {
+                    if (batchGeneration != clearGeneration || streamingQueue.Count == 0)
+                        break;
+                    entry = streamingQueue.Dequeue();
+                }
+                streamMeshes++;
                 IntPtr meshHandle = CreateRemixMesh(entry);
                 if (meshHandle == IntPtr.Zero)
                     continue;
@@ -1240,6 +1291,9 @@ int queued = 0;
                 });
             }
 
+            streamFrames++;
+            streamMs += RemixProfiler.ElapsedMs(start);
+            streamTextureMs += textureMs;
             if (newInstances.Count > 0)
             {
                 lock (streamLock)
