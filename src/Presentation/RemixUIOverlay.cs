@@ -294,7 +294,7 @@ namespace UnityRemix
                 isFirst = false;
             }
 
-            logger?.LogInfo($"[RemixUIOverlay] Configured {uiCameras.Count} UI cameras to render to UI RenderTexture.");
+            if (VerboseLog.On) logger?.LogInfo($"[RemixUIOverlay] Configured {uiCameras.Count} UI cameras to render to UI RenderTexture.");
         }
 
         public void OnRemixUIStateChanged(bool open)
@@ -608,7 +608,7 @@ namespace UnityRemix
 
                         if (readbackCompletionCount <= 5 || currentFrame % 180 == 0)
                         {
-                            logger?.LogInfo($"[RemixUIOverlay] Overlay stats (frame {currentFrame}): total={totalPixels}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, blackOpaque={blackOpaqueCount}, colorOpaque={colorOpaqueCount}, colorSemi={colorSemiCount}, colorZeroA={colorZeroACount}, res={width}x{height}");
+                            if (VerboseLog.On) logger?.LogInfo($"[RemixUIOverlay] Overlay stats (frame {currentFrame}): total={totalPixels}, nonZero={nonZeroPixelCount}, opaque={opaquePixelCount}, blackOpaque={blackOpaqueCount}, colorOpaque={colorOpaqueCount}, colorSemi={colorSemiCount}, colorZeroA={colorZeroACount}, res={width}x{height}");
                         }
 
                         if (nonZeroPixelCount == 0)

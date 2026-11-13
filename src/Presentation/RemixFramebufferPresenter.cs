@@ -191,7 +191,7 @@ namespace UnityRemix
                         if (sceneRefreshCounter > 0) sceneRefreshCounter--;
                         if (canvasCountChanged)
                         {
-                            logger?.LogInfo($"[RemixFramebufferPresenter] Canvas count changed: total={lastCanvasCount}->{currentCanvasCount}, active={lastActiveCanvasCount}->{currentActiveCanvasCount}. Re-evaluating UI detection.");
+                            if (VerboseLog.On) logger?.LogInfo($"[RemixFramebufferPresenter] Canvas count changed: total={lastCanvasCount}->{currentCanvasCount}, active={lastActiveCanvasCount}->{currentActiveCanvasCount}. Re-evaluating UI detection.");
                         }
 
                         lastCameraCount = currentCameraCount;
@@ -370,7 +370,7 @@ namespace UnityRemix
             }
 
             inEngineRenderingSuppressed = true;
-            logger?.LogInfo($"[RemixFramebufferPresenter] In-engine 3D rendering suppressed on {suppressedCount} World Cameras.");
+            if (VerboseLog.On) logger?.LogInfo($"[RemixFramebufferPresenter] In-engine 3D rendering suppressed on {suppressedCount} World Cameras.");
         }
 
         private void SetupEmbeddedUIOverlay()

@@ -260,7 +260,7 @@ namespace UnityRemix
             if (curScene != lastDumpedScene && !string.IsNullOrEmpty(curScene))
             {
                 lastDumpedScene = curScene;
-                DumpUIState($"Scene Transition '{curScene}'");
+                if (VerboseLog.On) DumpUIState($"Scene Transition '{curScene}'");
             }
             else if (!hasDumpedInitialUIState)
             {
@@ -269,7 +269,7 @@ namespace UnityRemix
                 if ((activeCams != null && activeCams.Length > 0) || (activeCanvs != null && activeCanvs.Length > 0))
                 {
                     hasDumpedInitialUIState = true;
-                    DumpUIState("Initial UI Discovery");
+                    if (VerboseLog.On) DumpUIState("Initial UI Discovery");
                 }
             }
 

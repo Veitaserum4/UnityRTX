@@ -33,7 +33,7 @@ namespace UnityRemix
         {
             this.scanner = scanner;
             this.materials = materials;
-            if (camera == null || frameCount % 120 != 0)
+            if (!VerboseLog.On || camera == null || frameCount % 120 != 0)
                 return;
             var ray = new Ray(camera.transform.position, camera.transform.forward);
 

@@ -980,7 +980,7 @@ namespace UnityRemix
                 // in bounce rays: OpenRemix carries light through them, rayPortalLightTeleports.)
                 if (data.CameraOnly)
                     RegisterCameraOnly(handle, data.MeshName);
-                logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
+                if (VerboseLog.On) logger.LogInfo($"Created mesh '{data.MeshName}' with hash: 0x{meshHash:X16} and {surfaces.Count} surfaces{(bakeable ? "" : " (not baked)")}");
 
                 return handle;
             }

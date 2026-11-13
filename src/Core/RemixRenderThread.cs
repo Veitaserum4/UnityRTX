@@ -1072,7 +1072,7 @@ namespace UnityRemix
                     line.Append($" {(RemixFrameCapture.DynamicSource)src} {uploadsBySource[src] / (double)uploadLogFrames:F1} meshes, {uploadVertsBySource[src] / uploadLogFrames} verts, {uploadMsBySource[src] / uploadLogFrames:F2}ms;");
                 }
                 line.Append($" largest {largestUploadSource} 0x{largestUploadHash:X16} {largestUploadVerts} verts");
-                logger.LogInfo(line.ToString());
+                if (VerboseLog.On) logger.LogInfo(line.ToString());
                 uploadLogFrames = 0;
                 Array.Clear(uploadsBySource, 0, uploadsBySource.Length);
                 Array.Clear(uploadVertsBySource, 0, uploadVertsBySource.Length);

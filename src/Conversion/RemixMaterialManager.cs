@@ -4463,7 +4463,7 @@ namespace UnityRemix
             }
             int pendingTex;
             lock (pendingTextureLock) { pendingTex = pendingTextureUploads.Count; }
-            logger.LogInfo($"[MaterialStats] {total} materials captured: {withAlbedo} with albedo, {noAlbedo} without | texCache={textureCache.Count} pendingTex={pendingTex}");
+            if (VerboseLog.On) logger.LogInfo($"[MaterialStats] {total} materials captured: {withAlbedo} with albedo, {noAlbedo} without | texCache={textureCache.Count} pendingTex={pendingTex}");
         }
 
         /// <summary>

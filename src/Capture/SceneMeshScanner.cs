@@ -716,7 +716,7 @@ namespace UnityRemix
                 visLogTimer++;
                 if (visLogTimer % 180 == 1)
                 {
-                    logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={reusableVisibleInstances.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
+                    if (VerboseLog.On) logger.LogInfo($"[VisDiag] total={currentInstances.Count} visible={reusableVisibleInstances.Count} null={culledNull} disabled={culledDisabled} inactive={culledInactive} layer={culledLayer} scale={culledScale} vis={culledVis} dist={culledDist}");
                 }
 
                 // Destroyed renderers never come back: drop them instead of checking them every frame.

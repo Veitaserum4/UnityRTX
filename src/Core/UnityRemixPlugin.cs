@@ -204,6 +204,10 @@ namespace UnityRemix
             configOpenRemixRefreshInPlace = Config.Bind("Native", "RefreshMeshesInPlace", true,
                 "Refit BLAS in-place for dynamic/animated meshes instead of full BVH rebuild from scratch.");
 
+            VerboseLog.Enabled = Config.Bind("Debug", "VerboseLogging", false,
+                "Repeated diagnostics in the log: capture and scan statistics, UI state, first-seen particle systems, " +
+                "primitives and screens, what the camera looks at. Off: events, warnings and errors only.");
+
             Games.Ultrakill.UltrakillBloodStains.Overlay = Config.Bind("Ultrakill", "BloodStainOverlay", false,
                 "ULTRAKILL's blood stains drawn over the frame as the game composites them (exact look, cheaper, " +
                 "in no reflection) instead of path-traced as wet paint (in reflections, glossy).");

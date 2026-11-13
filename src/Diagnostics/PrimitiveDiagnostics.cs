@@ -33,7 +33,7 @@ namespace UnityRemix
             for (var p = renderer.transform.parent; p != null; p = p.parent)
                 path = p.name + "/" + path;
             var go = renderer.gameObject;
-            Logger.LogInfo($"[Primitive] {origin} draws '{path}': mesh '{mesh.name}', layer {LayerMask.LayerToName(go.layer)}({go.layer}), " +
+            if (VerboseLog.On) Logger.LogInfo($"[Primitive] {origin} draws '{path}': mesh '{mesh.name}', layer {LayerMask.LayerToName(go.layer)}({go.layer}), " +
                            $"material '{(material != null ? material.name : "-")}' shader '{(material != null && material.shader != null ? material.shader.name : "-")}', " +
                            $"shadows {renderer.shadowCastingMode}, position {renderer.bounds.center}, size {renderer.bounds.size}");
         }

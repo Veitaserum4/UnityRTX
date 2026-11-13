@@ -254,7 +254,7 @@ namespace UnityRemix
                         sun = light;
                 }
                 if (frameCount % 1800 < 300)
-                    logger?.LogInfo($"[Sun] RenderSettings.sun '{(RenderSettings.sun != null ? RenderSettings.sun.name : "none")}', directional lights:{sb}");
+                    if (VerboseLog.On) logger?.LogInfo($"[Sun] RenderSettings.sun '{(RenderSettings.sun != null ? RenderSettings.sun.name : "none")}', directional lights:{sb}");
             }
             return sun != null ? sun.transform.forward : Vector3.zero;
         }
@@ -307,7 +307,7 @@ namespace UnityRemix
                 drawLightInstanceFunc(handle);
                 if (frameCount % 300 == 1)
                 {
-                    logger?.LogInfo($"[RemixSkyboxManager] Drawn DomeLight handle 0x{handle.ToInt64():X}");
+                    if (VerboseLog.On) logger?.LogInfo($"[RemixSkyboxManager] Drawn DomeLight handle 0x{handle.ToInt64():X}");
                 }
             }
         }

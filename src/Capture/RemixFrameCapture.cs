@@ -1174,7 +1174,7 @@ namespace UnityRemix
             
             rendererCacheFrame = frameCount;
             
-            logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static ({cachedScrollingRenderers.Count} scrolling UV), {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles, {lowerLodRenderers.Count} lower LOD levels skipped");
+            if (VerboseLog.On) logger.LogInfo($"Renderer cache refreshed: {cachedRenderers.Count} static ({cachedScrollingRenderers.Count} scrolling UV), {cachedSkinnedRenderers.Count} skinned, {trackedParticleSystems.Count} particles, {lowerLodRenderers.Count} lower LOD levels skipped");
             
             if (configDebugLogInterval.Value > 0)
             {
@@ -2714,7 +2714,7 @@ namespace UnityRemix
             
             if (frameCount % 60 == 0) // Force log every 60 frames
             {
-                logger.LogInfo($"CaptureSkinnedMeshes: gpuSkinned={gpuSkinned}, baked={baked}, offscreenSkipped={offscreenBakeSkips}, " +
+                if (VerboseLog.On) logger.LogInfo($"CaptureSkinnedMeshes: gpuSkinned={gpuSkinned}, baked={baked}, offscreenSkipped={offscreenBakeSkips}, " +
                     $"skip(null={skipNull},layer={skipLayer},vis={skipVis},dist={skipDist},mesh={skipNoMesh}), " +
                     $"cached={persistentSkinnedData.Count}, total={total}");
             }
@@ -3340,7 +3340,7 @@ namespace UnityRemix
             if (Vector3.Dot(mainCam.transform.position - rect.position, facing) > 0f)
                 facing = -facing; // mirrored canvas: its visible side is +Z
             Matrix4x4 screenToWorld = Matrix4x4.Translate(-facing * (WeaponScreenLift + layer * WeaponScreenLayerLift)) * rect.localToWorldMatrix;
-            if (loggedWeaponScreens.Add(graphicId) && (onViewModel || loggedWorldScreenGraphics++ < 300))
+            if (VerboseLog.On && loggedWeaponScreens.Add(graphicId) && (onViewModel || loggedWorldScreenGraphics++ < 300))
             {
                 Vector3 size = Vector3.Scale(rect.rect.size, rect.lossyScale);
                 var shownTex = g.mainTexture;
@@ -3722,7 +3722,7 @@ namespace UnityRemix
                 {
                     if (loggedParticleSystems.Add(pr.name))
                     {
-                        logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', color=({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}), matAlpha={matAlpha:F2}, em={emIntensity:F1})");
+                        if (VerboseLog.On) logger.LogInfo($"[ParticleSystem] First capture '{pr.name}' (renderMode={pr.renderMode}, alive={actualAlive}, mat='{mat.name}', color=({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}), matAlpha={matAlpha:F2}, em={emIntensity:F1})");
                     }
                 }
 
@@ -3734,7 +3734,7 @@ namespace UnityRemix
                     string trailText = trailsModule.enabled
                         ? $"trails {trailsModule.mode} (texture {trailsModule.textureMode}, ribbons {trailsModule.ribbonCount}, mat '{(pr.trailMaterial != null ? pr.trailMaterial.name : "none")}' shader '{(pr.trailMaterial != null && pr.trailMaterial.shader != null ? pr.trailMaterial.shader.name : "-")}')"
                         : "no trails";
-                    logger.LogInfo($"[ParticleSystem] '{pr.name}': {pr.renderMode}, align {pr.alignment}, space {ps.main.simulationSpace}, {actualAlive} alive, " +
+                    if (VerboseLog.On) logger.LogInfo($"[ParticleSystem] '{pr.name}': {pr.renderMode}, align {pr.alignment}, space {ps.main.simulationSpace}, {actualAlive} alive, " +
                                    $"mat '{mat.name}' shader '{(mat.shader != null ? mat.shader.name : "-")}' queue {mat.renderQueue}{DescribeBlend(mat)}, " +
                                    $"tint ({quantizedColor.r:F2},{quantizedColor.g:F2},{quantizedColor.b:F2}) matAlpha {matAlpha:F2} emissive {isEmissiveParticle}, {trailText} | Remix {matDescription}");
                 }
@@ -4804,7 +4804,7 @@ namespace UnityRemix
                         materialManager.TryDescribeMaterial(trailMatId, out string trailDescription))
                     {
                         describedParticleTrails.Add(pr.GetInstanceID());
-                        logger.LogInfo($"[ParticleTrail] '{pr.name}': {trailMesh.vertexCount} verts, {trailMesh.subMeshCount} submeshes, mat '{trailMat.name}' shader '{(trailMat.shader != null ? trailMat.shader.name : "-")}' queue {trailMat.renderQueue}{DescribeBlend(trailMat)}, " +
+                        if (VerboseLog.On) logger.LogInfo($"[ParticleTrail] '{pr.name}': {trailMesh.vertexCount} verts, {trailMesh.subMeshCount} submeshes, mat '{trailMat.name}' shader '{(trailMat.shader != null ? trailMat.shader.name : "-")}' queue {trailMat.renderQueue}{DescribeBlend(trailMat)}, " +
                                        $"normals {trailMesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Normal)}, colors {trailMesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color)} | Remix {trailDescription}");
                     }
 
