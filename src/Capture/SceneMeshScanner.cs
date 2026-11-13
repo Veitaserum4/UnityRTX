@@ -443,16 +443,53 @@ namespace UnityRemix
             timeSinceSceneLoad = 0f;
             rescanTimer = 0f;
 
-            int queued = ScanScene(scene, logDiagnostics: true);
+            StartScan(scene, initial: true);
+        }
+
+        // A scan in progress (ScanSteps), a slice of ScanSliceMs each frame: a level's thousands
+        // of meshes and materials are read over several frames rather than in one long one.
+        private const double ScanSliceMs = 8.0;
+        private IEnumerator<int> scanJob;
+        private bool scanInitial;
+        private int lastScanQueued;
+        private volatile bool scanInProgress;
+
+        private void StartScan(Scene scene, bool initial)
+        {
+            scanJob = ScanSteps(scene, logDiagnostics: initial);
+            scanInitial = initial;
+            scanInProgress = true;
+            StepScan();
+        }
+
+        // One slice of the scan in progress; at its end, what it queued.
+        private void StepScan()
+        {
+            bool more;
+            try { more = scanJob.MoveNext(); }
+            catch (Exception ex)
+            {
+                logger.LogWarning($"Scene scan failed: {ex.Message}");
+                more = false;
+                lastScanQueued = 0;
+            }
+            if (more)
+            {
+                if (scanJob.Current > 0)
+                    streamingActive = true; // stream what is queued while the scan goes on
+                return;
+            }
+            scanJob = null;
+            scanInProgress = false;
+            int queued = lastScanQueued;
             if (queued > 0)
-            {
                 streamingActive = true;
-                logger.LogInfo($"Scene scan queued {queued} meshes for streaming (rescanning for {RescanDuration}s to catch async-loaded objects)");
-            }
-            else
-            {
-                logger.LogInfo($"Scene scan found no meshes yet in '{scene.name}' (will rescan for {RescanDuration}s)");
-            }
+            if (scanInitial)
+                logger.LogInfo(queued > 0
+                    ? $"Scene scan queued {queued} meshes for streaming (rescanning for {RescanDuration}s to catch async-loaded objects)"
+                    : $"Scene scan found no meshes yet (will rescan for {RescanDuration}s)");
+            else if (queued > 0)
+                logger.LogInfo($"Rescan found {queued} new meshes ({timeSinceSceneLoad:F0}s after scene load)");
         }
 
         /// <summary>
@@ -461,6 +498,11 @@ namespace UnityRemix
         /// </summary>
         public void Update(float deltaTime)
         {
+            if (scanJob != null)
+            {
+                StepScan();
+                return;
+            }
             if (!activeScene.IsValid())
                 return;
 
@@ -476,12 +518,7 @@ namespace UnityRemix
                 return;
             rescanTimer = 0f;
 
-            int queued = ScanScene(activeScene, logDiagnostics: false);
-            if (queued > 0)
-            {
-                streamingActive = true;
-                logger.LogInfo($"Rescan found {queued} new meshes ({timeSinceSceneLoad:F0}s after scene load)");
-            }
+            StartScan(activeScene, initial: false);
         }
 
         /// <summary>
@@ -822,6 +859,8 @@ namespace UnityRemix
             scannedFilterIds.Clear();
             scannedDescriptions.Clear();
             activeScene = default;
+            scanJob = null;
+            scanInProgress = false;
         }
 
         private static InstanceFlags DetermineInstanceFlags(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
@@ -844,9 +883,13 @@ namespace UnityRemix
             return Games.GameProfiles.IsDynamicObject(filter, renderer);
         }
 
-        private int ScanScene(Scene scene, bool logDiagnostics)
+        // The scan as slices: yields what it has queued so far each time ScanSliceMs is spent (the
+        // caller resumes it next frame); lastScanQueued holds the total at its end.
+        private IEnumerator<int> ScanSteps(Scene scene, bool logDiagnostics)
         {
             long scanStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            long sliceStart = scanStart;
+            double workMs = 0; // time spent scanning, not the frames between slices
             // Phase timings (ms) for the scan line: mesh reads (CPU, GPU readback), triangles,
             // material capture, combined-mesh compaction, everything else per renderer.
             double readMs = 0, gpuMs = 0, trianglesMs = 0, materialMs = 0, compactMs = 0;
@@ -874,6 +917,17 @@ int queued = 0;
 
             foreach (var filter in filters)
             {
+                if (RemixProfiler.ElapsedMs(sliceStart) >= ScanSliceMs)
+                {
+                    workMs += RemixProfiler.ElapsedMs(sliceStart);
+                    yield return queued;
+                    if (!scene.IsValid() || !scene.isLoaded)
+                    {
+                        lastScanQueued = queued;
+                        yield break;
+                    }
+                    sliceStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                }
                 if (filter == null)
                     continue;
 
@@ -1213,8 +1267,8 @@ int queued = 0;
 
             if (logDiagnostics || queued > 0)
             {
-                double totalMs = RemixProfiler.ElapsedMs(scanStart);
-                logger.LogInfo($"Scene scan '{scene.name}' took {totalMs:F0} ms (find {findMs:F0}, mesh reads {readMs:F0}, GPU readback {gpuMs:F0}, " +
+                double totalMs = workMs + RemixProfiler.ElapsedMs(sliceStart);
+                logger.LogInfo($"Scene scan '{scene.name}' took {totalMs:F0} ms over {RemixProfiler.ElapsedMs(scanStart):F0} ms (find {findMs:F0}, mesh reads {readMs:F0}, GPU readback {gpuMs:F0}, " +
                                $"triangles {trianglesMs:F0}, materials {materialMs:F0}, compaction {compactMs:F0}, " +
                                $"other {totalMs - findMs - readMs - gpuMs - trianglesMs - materialMs - compactMs:F0})");
                 logger.LogInfo($"Scene scan '{scene.name}': {filters.Length} total MeshFilters, {queued} queued ({sharedMeshData.Count} distinct meshes read, {sharedMeshReuses} reused, {skippedLowerLod} lower LOD levels of {lodGroups} groups skipped; {gpuReadbackCount} via GPU readback, {vertexColorCount} with vertex colors)" +
@@ -1224,7 +1278,7 @@ int queued = 0;
                 materialManager.LogMaterialStats();
             }
 
-            return queued;
+            lastScanQueued = queued;
         }
 
         private void DrainStreamingBatch()
@@ -1239,7 +1293,7 @@ int queued = 0;
                 batchGeneration = clearGeneration;
                 if (streamingQueue.Count == 0)
                 {
-                    if (streamingActive)
+                    if (streamingActive && !scanInProgress)
                     {
                         streamingActive = false;
                         logger.LogInfo($"Streaming complete: {currentInstances.Count} scene mesh instances loaded; " +
