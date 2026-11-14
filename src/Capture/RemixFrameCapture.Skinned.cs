@@ -285,7 +285,11 @@ namespace UnityRemix
                         // Unique key per submesh: xor with Knuth multiplied submesh index
                         int subSkinnedId = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                         ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
-                        
+                        // A Remix mesh carries its material, and this mesh is created once per hash. The
+                        // material is part of the hash so a renderer whose property block changes its look
+                        // (or two renderers of one mesh that look different) gets its own mesh.
+                        subMeshHash = (subMeshHash ^ (ulong)(uint)subMatId) * 1099511628211UL;
+
                         persistentSkinnedData[subSkinnedId] = new SkinnedMeshData
                         {
                             meshId = subSkinnedId,
