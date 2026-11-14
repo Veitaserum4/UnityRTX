@@ -1330,6 +1330,12 @@ namespace UnityRemix
             lastSyncedRemixOpen = false;
             UpdateCursorVisibility(false);
             EnforceCursorVisible();
+            // Unity destroys its window after the managed runtime has shut down, so a
+            // subclass left on it would call into a dead delegate. Only the window's own
+            // thread can remove it; a call from the render thread leaves it for the main one.
+            if (gameWindowSubclassed && gameWindow != IntPtr.Zero &&
+                RemoveWindowSubclass(gameWindow, gameWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_GAME_WINDOW))
+                gameWindowSubclassed = false;
             if (remixWindow != IntPtr.Zero)
             {
                 IntPtr wnd = remixWindow;

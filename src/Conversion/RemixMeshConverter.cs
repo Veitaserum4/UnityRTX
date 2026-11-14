@@ -266,6 +266,31 @@ namespace UnityRemix
         private readonly RemixMaterialManager materialManager;
         private readonly ConfigEntry<int> configDebugLogInterval;
         private readonly object apiLock;
+
+        // OpenRemix rejects a second instance with an identity already drawn this frame
+        // (INVALID_ARGUMENTS), and two draws can carry one: a renderer captured by two
+        // producers, or ids that fall back to the same value. A repeat gets the mesh mixed
+        // in, which stays the same from frame to frame while the draw order does.
+        private readonly HashSet<ulong> frameInstanceIds = new HashSet<ulong>();
+        private readonly HashSet<IntPtr> repeatedIdMeshes = new HashSet<IntPtr>(), failedDrawMeshes = new HashSet<IntPtr>();
+
+        /// <summary>Starts a frame's draws: instance ids are unique within one frame.</summary>
+        public void BeginInstanceFrame() => frameInstanceIds.Clear();
+
+        private ulong UniqueInstanceId(ulong id, IntPtr meshHandle)
+        {
+            if (id == 0 || frameInstanceIds.Add(id))
+                return id;
+            if (repeatedIdMeshes.Add(meshHandle) && repeatedIdMeshes.Count <= 64)
+                logger.LogInfo($"Instance id 0x{id:X} drawn twice in a frame (second on mesh 0x{meshHandle.ToInt64():X}); the repeat gets its own id");
+            ulong mixed = id;
+            do
+            {
+                mixed = (mixed ^ (ulong)meshHandle.ToInt64()) * 0x9E3779B97F4A7C15UL;
+                if (mixed == 0) mixed = 1;
+            } while (!frameInstanceIds.Add(mixed));
+            return mixed;
+        }
         
         // Cached delegates
         private RemixAPI.PFN_remixapi_CreateMesh createMeshFunc;
@@ -1307,7 +1332,7 @@ namespace UnityRemix
             bool isParticleInstance = (categoryFlags & (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE) != 0;
             RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
             bool hasIdentity = false;
-            ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
+            ulong targetInstanceId = UniqueInstanceId(persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue, meshHandle);
             if (targetInstanceId != 0)
             {
                 uint classification = isParticleInstance && RasterParticles != null && RasterParticles.Value
@@ -1412,9 +1437,10 @@ namespace UnityRemix
                     result = drawInstanceFunc(ref instanceInfo);
                 }
                 
-                if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                if (result != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS &&
+                    failedDrawMeshes.Add(meshHandle) && failedDrawMeshes.Count <= 64)
                 {
-                    logger.LogWarning($"DrawInstance failed for mesh 0x{meshHandle.ToInt64():X}: {result}");
+                    logger.LogWarning($"DrawInstance failed for mesh 0x{meshHandle.ToInt64():X}: {result} (category 0x{categoryFlags:X}, id 0x{targetInstanceId:X}; logged once per mesh)");
                 }
             }
         }
@@ -1621,7 +1647,7 @@ namespace UnityRemix
                 };
                 
                 RemixAPI.remixapi_InstanceIdentityEXT identityExt = default;
-                ulong targetInstanceId = persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue;
+                ulong targetInstanceId = UniqueInstanceId(persistentInstanceId != 0 ? persistentInstanceId : (ulong)objectPickingValue, meshHandle);
                 if (targetInstanceId != 0)
                 {
                     identityExt = new RemixAPI.remixapi_InstanceIdentityEXT

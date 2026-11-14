@@ -402,6 +402,7 @@ namespace UnityRemix
                 double presentMs = 0;
 
                 bool hasGeometry = false;
+                meshConverter.BeginInstanceFrame();
                 if (configUseGameGeometry.Value)
                 {
                     // Process queued mesh creation on render thread (prevents main thread deadlocks)

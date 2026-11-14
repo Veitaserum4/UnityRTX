@@ -23,6 +23,20 @@ namespace urtx {
     std::unordered_map<ID3D11Buffer *, BufferShadow> g_buffers;
     FILE *g_log = nullptr;
 
+    // Shadows are keyed by address, and a released buffer's address can come back as
+    // another buffer or a texture (only buffer creation is hooked). A shadow is used
+    // only while the resource is still a buffer of its size and binding.
+    bool sameBuffer(ID3D11Resource *r, const BufferShadow &b) {
+      D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+      r->GetType(&dim);
+      if (dim != D3D11_RESOURCE_DIMENSION_BUFFER)
+        return false;
+      D3D11_BUFFER_DESC desc{};
+      static_cast<ID3D11Buffer *>(r)->GetDesc(&desc);
+      return desc.ByteWidth == b.desc.ByteWidth && desc.BindFlags == b.desc.BindFlags &&
+             b.data.size() <= desc.ByteWidth;
+    }
+
     // Originals by vtable and slot: the runtime implements a context's (and a
     // device's) interface versions with more than one vtable, and a call
     // through any of them reaches the hook, which forwards it to that vtable's
@@ -108,7 +122,11 @@ namespace urtx {
     HRESULT STDMETHODCALLTYPE hCreateBuffer(ID3D11Device *d, const D3D11_BUFFER_DESC *desc,
                                             const D3D11_SUBRESOURCE_DATA *init, ID3D11Buffer **out) {
       HRESULT hr = original<CreateBufferFn>(d, 3)(d, desc, init, out);
-      if (SUCCEEDED(hr) && out && *out && desc && (desc->BindFlags & D3D11_BIND_CONSTANT_BUFFER)) {
+      if (SUCCEEDED(hr) && out && *out && desc && !(desc->BindFlags & D3D11_BIND_CONSTANT_BUFFER)) {
+        // The address may be a released buffer's; its shadow is not this buffer's.
+        std::lock_guard l(g_lock);
+        g_buffers.erase(*out);
+      } else if (SUCCEEDED(hr) && out && *out && desc) {
         std::lock_guard l(g_lock);
         auto &b = g_buffers[*out];
         b = {};
@@ -267,8 +285,12 @@ namespace urtx {
       if (SUCCEEDED(hr) && mapped && type != D3D11_MAP_READ) {
         std::lock_guard l(g_lock);
         auto it = g_buffers.find(reinterpret_cast<ID3D11Buffer *>(r));
-        if (it != g_buffers.end())
-          it->second.mapped = mapped->pData;
+        if (it != g_buffers.end()) {
+          if (sameBuffer(r, it->second))
+            it->second.mapped = mapped->pData;
+          else
+            g_buffers.erase(it);
+        }
       }
       return hr;
     }
@@ -298,6 +320,10 @@ namespace urtx {
       auto it = g_buffers.find(reinterpret_cast<ID3D11Buffer *>(r));
       if (it == g_buffers.end() || !data)
         return;
+      if (!sameBuffer(r, it->second)) {
+        g_buffers.erase(it);
+        return;
+      }
       auto &b = it->second;
       if (b.desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) {
         const uint32_t from = box ? box->left : 0, to = box ? box->right : uint32_t(b.data.size());
