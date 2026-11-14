@@ -1204,7 +1204,7 @@ namespace UnityRemix
                 Default("rtx.native.pathtrace.sky", "true");
                 Default("rtx.native.pathtrace.viewModel", "true");
                 Default("rtx.native.pathtrace.viewModelScale", "0.15");
-                Default("rtx.native.pathtrace.dlssRayReconstructionPresetOverride", "true");
+                Default("rtx.native.pathtrace.dlssRayReconstructionPresetOverride", "1"); // a choice of "0" or "1", not a bool
                 Default("rtx.native.pathtrace.dlssRayReconstructionPreset", "F");
                 // Unity games' own exposure: fixed, without Prism's tone curve, a little contrast.
                 Default("rtx.native.pathtrace.prism", "false");
