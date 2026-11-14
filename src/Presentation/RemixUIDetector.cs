@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using System.Collections.Generic;
 using System.Linq;
 using BepInEx.Configuration;
@@ -731,6 +732,62 @@ namespace UnityRemix
         /// Routes VideoPlayer components (e.g. intro cutscenes) targeting suppressed world cameras
         /// to render through the UI camera so they display on the transparent UI overlay.
         /// </summary>
+        // A video drawn on a camera keeps drawing its last frame there once it ends: on its own
+        // camera, which usually goes with its scene, that is harmless; on the UI camera, which
+        // stays, the frame would stay on screen for good (Gloomwood's intro). A routed player
+        // draws on the UI camera only while it plays or is paused, then goes back.
+        private struct RoutedVideoPlayer
+        {
+            public Component player;
+            public Camera camera;
+            public object mode;
+        }
+        private readonly List<RoutedVideoPlayer> routedVideoPlayers = new List<RoutedVideoPlayer>();
+        private static PropertyInfo videoIsPlaying, videoIsPaused, videoTargetCamera, videoRenderMode;
+        private static bool videoPropertiesFound;
+
+        private static void FindVideoProperties(Type vpType)
+        {
+            if (videoPropertiesFound || vpType == null)
+                return;
+            videoPropertiesFound = true;
+            videoIsPlaying = vpType.GetProperty("isPlaying");
+            videoIsPaused = vpType.GetProperty("isPaused");
+            videoTargetCamera = vpType.GetProperty("targetCamera");
+            videoRenderMode = vpType.GetProperty("renderMode");
+        }
+
+        private static bool IsVideoShowing(object player)
+        {
+            FindVideoProperties(player.GetType());
+            return (videoIsPlaying?.GetValue(player, null) is bool playing && playing) ||
+                   (videoIsPaused?.GetValue(player, null) is bool paused && paused);
+        }
+
+        /// <summary>Each frame: routed video players that stopped go back to their own camera.</summary>
+        public void ReleaseStoppedVideoPlayers()
+        {
+            for (int i = routedVideoPlayers.Count - 1; i >= 0; i--)
+            {
+                var routed = routedVideoPlayers[i];
+                if (routed.player == null)
+                {
+                    routedVideoPlayers.RemoveAt(i);
+                    continue;
+                }
+                if (IsVideoShowing(routed.player))
+                    continue;
+                try
+                {
+                    videoTargetCamera?.SetValue(routed.player, routed.camera, null);
+                    videoRenderMode?.SetValue(routed.player, routed.mode, null);
+                }
+                catch { }
+                routedVideoPlayers.RemoveAt(i);
+                logger?.LogInfo($"[RemixUIDetector] VideoPlayer '{routed.player.name}' stopped: back to camera '{(routed.camera != null ? routed.camera.name : "none")}'");
+            }
+        }
+
         public void RouteVideoPlayersToCamera(Camera uiCamera)
         {
             if (uiCamera == null) return;
@@ -757,8 +814,11 @@ namespace UnityRemix
                         if (mode == 0 || mode == 1)
                         {
                             var curCam = targetCamProp?.GetValue(vp) as Camera;
-                            if (curCam != uiCamera)
+                            if (curCam != uiCamera && IsVideoShowing(vp))
                             {
+                                var component = vp as Component;
+                                if (component != null && !routedVideoPlayers.Exists(r => r.player == component))
+                                    routedVideoPlayers.Add(new RoutedVideoPlayer { player = component, camera = curCam, mode = modeObj });
                                 targetCamProp?.SetValue(vp, uiCamera);
                                 renderModeProp?.SetValue(vp, Enum.ToObject(renderModeProp.PropertyType, 1));
                                 logger?.LogInfo($"[RemixUIDetector] Routed VideoPlayer '{(vp as Component)?.name}' to UI camera '{uiCamera.name}'");

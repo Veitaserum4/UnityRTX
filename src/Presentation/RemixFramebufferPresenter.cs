@@ -232,6 +232,7 @@ namespace UnityRemix
                     {
                         uiDetector.SyncDedicatedUICameraTransform(worldCam);
                     }
+                    uiDetector.ReleaseStoppedVideoPlayers();
 
                     // Sync embedded window bounds periodically or on resolution change
                     if (windowManager != null && (resolutionChanged || shouldCheck || (frameCount % 15 == 0)))
