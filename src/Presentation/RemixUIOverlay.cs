@@ -288,6 +288,14 @@ namespace UnityRemix
                         clearFlags = cam.clearFlags,
                         backgroundColor = cam.backgroundColor
                     };
+                    // What else draws through this camera (image effects write its output with
+                    // OnRenderImage, after its clear), once per camera.
+                    var behaviours = new List<string>();
+                    foreach (var b in cam.GetComponents<Behaviour>())
+                        if (b != null && !(b is Camera) && !(b is RemixUICameraHook))
+                            behaviours.Add(b.GetType().Name + (b.enabled ? "" : " (off)"));
+                    logger?.LogInfo($"[RemixUIOverlay] UI camera '{cam.name}': depth {cam.depth}, clear {cam.clearFlags}, " +
+                        $"target '{(cam.targetTexture != null ? cam.targetTexture.name : "screen")}', components: {(behaviours.Count > 0 ? string.Join(", ", behaviours) : "none")}");
                 }
 
                 var targetClear = isFirst ? CameraClearFlags.SolidColor : CameraClearFlags.Depth;

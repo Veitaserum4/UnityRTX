@@ -202,6 +202,15 @@ namespace UnityRemix
                 catch { }
 
                 logger?.LogInfo($"[RemixUIDetector]   Camera '{cam.name}' [{GetHierarchyPath(cam.transform)}]: class={classification}, depth={cam.depth}, clear={cam.clearFlags}, bg=RGBA({cam.backgroundColor.r:F2},{cam.backgroundColor.g:F2},{cam.backgroundColor.b:F2},{cam.backgroundColor.a:F2}), mask=0x{cam.cullingMask:X} ({GetLayerNames(cam.cullingMask)}), target='{targetTexStr}', active={cam.gameObject.activeInHierarchy}, enabled={cam.enabled}{urpInfo}");
+                // Its behaviours (image effects draw over its output with OnRenderImage) and the
+                // target the game gave it.
+                var behaviours = new List<string>();
+                foreach (var b in cam.GetComponents<Behaviour>())
+                    if (b != null && !(b is Camera))
+                        behaviours.Add(b.GetType().Name + (b.enabled ? "" : " (off)"));
+                var gameTarget = RemixUIOverlay.GetOriginalTargetTexture(cam);
+                logger?.LogInfo($"[RemixUIDetector]     components: {(behaviours.Count > 0 ? string.Join(", ", behaviours) : "none")}; " +
+                    $"game target '{(gameTarget != null ? $"{gameTarget.name} ({gameTarget.width}x{gameTarget.height})" : "screen")}'");
             }
 
             var allCanvases = Resources.FindObjectsOfTypeAll<Canvas>();
