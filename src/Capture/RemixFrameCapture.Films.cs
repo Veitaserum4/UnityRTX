@@ -65,7 +65,24 @@ namespace UnityRemix
                     }
                     filmUvScratch.Clear();
                 }
+                else
+                {
+                    values = SkinnedMeshGpuReader.TryReadComponent(mesh,
+                        (UnityEngine.Rendering.VertexAttribute)((int)UnityEngine.Rendering.VertexAttribute.TexCoord0 + film.coverageChannel),
+                        film.coverageAxis);
+                }
                 filmCoverageValues[valuesKey] = values;
+                if (values != null)
+                {
+                    float min = float.MaxValue, max = float.MinValue;
+                    foreach (var x in values) { if (x < min) min = x; if (x > max) max = x; }
+                    logger.LogInfo($"[Films] '{mesh.name}': partial film coverage from UV{film.coverageChannel}.{"xyzw"[film.coverageAxis]} " +
+                        $"({(mesh.isReadable ? "readable" : "GPU readback")}), {min:0.##}..{max:0.##}");
+                }
+                else
+                {
+                    logger.LogInfo($"[Films] '{mesh.name}': no UV{film.coverageChannel} to split a partial film by; coated whole");
+                }
             }
             if (values == null)
                 return false;

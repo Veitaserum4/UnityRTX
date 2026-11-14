@@ -184,6 +184,37 @@ namespace UnityRemix
             }
         }
 
+        /// <summary>
+        /// One component of a non-readable mesh's vertex attribute (a texture coordinate's .y, say)
+        /// read back from its GPU vertex buffer, or null when it is missing or cannot be read.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public static float[] TryReadComponent(Mesh mesh, VertexAttribute attribute, int component)
+        {
+            try
+            {
+                var a = Find(mesh, attribute);
+                int vertexCount = mesh.vertexCount;
+                if (!a.present || component >= a.dimension || vertexCount == 0)
+                    return null;
+                if (!NativeMeshReader.ReadVertexBuffer(mesh, a.stream, out byte[] bytes))
+                    return null;
+                int stride = mesh.GetVertexBufferStride(a.stream);
+                if (stride <= 0 || bytes.Length < stride * vertexCount)
+                    return null;
+                var streams = new Dictionary<int, byte[]> { [a.stream] = bytes };
+                var strides = new Dictionary<int, int> { [a.stream] = stride };
+                var values = new float[vertexCount];
+                for (int v = 0; v < vertexCount; v++)
+                    values[v] = Component(streams, strides, a, v, component);
+                return values;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static Attribute Find(Mesh mesh, VertexAttribute attribute)
         {
             if (!mesh.HasVertexAttribute(attribute))
