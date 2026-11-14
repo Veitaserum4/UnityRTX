@@ -170,6 +170,47 @@ namespace UnityRemix
             this.framebufferPresenter = presenter;
         }
 
+        private const float BgRecaptureStep = 0.02f;
+
+        private static float ColorDistance(Color a, Color b) =>
+            Mathf.Max(Mathf.Abs(a.r - b.r), Mathf.Max(Mathf.Abs(a.g - b.g), Mathf.Abs(a.b - b.b)));
+
+        private CameraClearFlags OriginalClearFlags(Camera cam) =>
+            framebufferPresenter != null ? framebufferPresenter.GetOriginalClearFlags(cam) : cam.clearFlags;
+
+        private Camera[] skyCameraScratch = new Camera[16];
+
+        // The camera whose clear is the sky behind mainCam: mainCam itself unless it only clears
+        // depth (or nothing); then the enabled game camera drawn just before it (lower depth, to
+        // the screen) that clears to a colour or a skybox.
+        private Camera SkyCamera(Camera mainCam)
+        {
+            var flags = OriginalClearFlags(mainCam);
+            if (flags != CameraClearFlags.Depth && flags != CameraClearFlags.Nothing)
+                return mainCam;
+            Camera best = null;
+            if (skyCameraScratch.Length < Camera.allCamerasCount)
+                skyCameraScratch = new Camera[Camera.allCamerasCount * 2];
+            int count = Camera.GetAllCameras(skyCameraScratch);
+            for (int i = 0; i < count; i++)
+            {
+                var cam = skyCameraScratch[i];
+                if (cam == null || cam == mainCam || cam.depth >= mainCam.depth || cam.name.StartsWith("UnityRemix_") ||
+                    cam.name == "RemixSkyboxCaptureCamera" || RemixUIOverlay.GetOriginalTargetTexture(cam) != null)
+                    continue;
+                var f = OriginalClearFlags(cam);
+                if (f != CameraClearFlags.Skybox && f != CameraClearFlags.SolidColor)
+                    continue;
+                if (best == null || cam.depth > best.depth)
+                    best = cam;
+            }
+            if (best != null && best != lastSkyCamera)
+                logger?.LogInfo($"[RemixSkyboxManager] Sky from camera '{best.name}' ({OriginalClearFlags(best)}), drawn before '{mainCam.name}' which clears {flags}");
+            lastSkyCamera = best;
+            return best ?? mainCam;
+        }
+        private Camera lastSkyCamera;
+
         public void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene)
         {
             needsCapture = true;
@@ -196,16 +237,19 @@ namespace UnityRemix
 
             Material currentSkyMat = RenderSettings.skybox;
 
+            // A camera that only clears depth draws over cameras before it: the sky is the
+            // clear of the camera drawn just before (ATLYSS: each area's sky camera, coloured
+            // by its day/night cycle, under the main camera).
+            Camera skyCam = SkyCamera(mainCam);
+
             // Check if camera has a Skybox component that overrides RenderSettings.skybox
-            var camSkyboxComp = mainCam.GetComponent<Skybox>();
+            var camSkyboxComp = skyCam.GetComponent<Skybox>();
             if (camSkyboxComp != null && camSkyboxComp.material != null)
             {
                 currentSkyMat = camSkyboxComp.material;
             }
 
-            CameraClearFlags curFlags = framebufferPresenter != null
-                ? framebufferPresenter.GetOriginalClearFlags(mainCam)
-                : mainCam.clearFlags;
+            CameraClearFlags curFlags = OriginalClearFlags(skyCam);
 
             // If the camera is suppressed (Nothing) but a sky material exists, treat as Skybox
             if (curFlags == CameraClearFlags.Nothing && currentSkyMat != null)
@@ -213,11 +257,12 @@ namespace UnityRemix
                 curFlags = CameraClearFlags.Skybox;
             }
 
-            Color curBg = mainCam.backgroundColor;
+            Color curBg = skyCam.backgroundColor;
 
             bool matChanged = (currentSkyMat != lastCapturedSkyMat);
             bool flagsChanged = (curFlags != lastCapturedClearFlags);
-            bool bgChanged = (currentSkyMat == null && curBg != lastCapturedBgColor);
+            // A colour fading (a day/night cycle) recaptures in steps, not every frame.
+            bool bgChanged = currentSkyMat == null && ColorDistance(curBg, lastCapturedBgColor) > BgRecaptureStep;
 
             Vector3 sunDirection = SunDirection(frameCount);
             bool sunMoved = lastCaptureProcedural && sunDirection != Vector3.zero && capturedSunDirection != Vector3.zero &&
