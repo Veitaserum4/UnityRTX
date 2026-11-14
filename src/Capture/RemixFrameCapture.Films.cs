@@ -21,6 +21,10 @@ namespace UnityRemix
             // material is part of the hash so a renderer whose property block changes its look
             // (or two renderers of one mesh that look different) gets its own mesh.
             meshHash = (meshHash ^ (ulong)(uint)materialId) * 1099511628211UL;
+            // So is the triangle count: a partial film's bare part keeps the plain material, and
+            // without it would reuse the whole submesh's mesh (drawn over the coated part). The
+            // coated sets grow with the coverage, so equal counts are equal triangle sets.
+            meshHash = (meshHash ^ (ulong)(uint)triangles.Length) * 1099511628211UL;
             persistentSkinnedData[key] = new SkinnedMeshData
             {
                 meshId = key,

@@ -317,6 +317,17 @@ namespace UnityRemix.Games.Ultrakill
                 float meanCover = film ? MeanCover(atlasPixels) : 0f;
                 int width = CellSize * 5, height = CellSize;
                 var pixels = new Color32[width * height];
+                // The texels outside a stain (alpha 0) carry the stain's colour where it is flat,
+                // so filtering at a stain's edge blends no white into it (a light rim, which
+                // showed inside overlapping stains).
+                var outside = new Color32(255, 255, 255, 0);
+                if (film)
+                {
+                    var flat = new Color(Mathf.Clamp01(meanRamp.r * meanCover + 0.32f), Mathf.Clamp01(meanRamp.g * meanCover),
+                                         Mathf.Clamp01(meanRamp.b * meanCover + 0.55f), 1f);
+                    outside = linearSpace ? (Color32)flat.gamma : (Color32)flat;
+                    outside.a = 0;
+                }
                 for (int y = 0; y < height; y++)
                 {
                     float v = (y + 0.5f) / height;
@@ -327,7 +338,7 @@ namespace UnityRemix.Games.Ultrakill
                         Color splat = atlasPixels.GetPixelBilinear(u, v);
                         if (splat.a - splat.r <= 0.01f)
                         {
-                            pixels[y * width + x] = new Color32(255, 255, 255, 0);
+                            pixels[y * width + x] = outside;
                             continue;
                         }
                         float lu = (x % CellSize + 0.5f) / CellSize;
