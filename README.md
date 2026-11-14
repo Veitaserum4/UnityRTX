@@ -69,8 +69,12 @@ native/                  native code (Meson, clang-cl)
   deps/dxbc/             DXVK's DXBC to SPIR-V compiler, standalone
 scripts/                 build and deploy (build.ps1 for Windows, build.sh for Linux/Proton)
 tests/                   API compatibility checks
+docs/agents/             contributor guides (game profiles, pass-through, investigation)
 tools/investigation/     one-off scripts from investigating games' assets and code
 ```
+
+Adding support for a game (game profiles, shader pass-through, investigating a game): see
+[AGENTS.md](AGENTS.md) and [docs/agents/](docs/agents/).
 
 ## Building
 
