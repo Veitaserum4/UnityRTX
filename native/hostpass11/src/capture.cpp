@@ -107,11 +107,28 @@ namespace urtx {
     }
     d.vertexCount = last > first ? last - first : 0;
     for (uint32_t slot = 0; slot < 4; ++slot) {
-      if (!s.vb[slot] || !s.vbStride[slot])
+      if (!s.vb[slot])
         continue;
       std::vector<uint8_t> vb;
       if (!bufferData(context, s.vb[slot], vb))
         continue;
+      if (!s.vbStride[slot]) {
+        // Stride 0: every vertex reads the same values (Unity binds one for attributes the
+        // mesh lacks, a white COLOR): repeated per vertex, kConstantStride bytes each.
+        constexpr uint32_t kConstantStride = 32;
+        VertexStream stream;
+        stream.slot = slot;
+        stream.stride = kConstantStride;
+        uint8_t element[kConstantStride] = {};
+        const size_t from = s.vbOffset[slot];
+        if (from < vb.size())
+          std::memcpy(element, vb.data() + from, std::min<size_t>(kConstantStride, vb.size() - from));
+        stream.data.resize(size_t(d.vertexCount) * kConstantStride);
+        for (uint32_t v = 0; v < d.vertexCount; ++v)
+          std::memcpy(stream.data.data() + size_t(v) * kConstantStride, element, kConstantStride);
+        d.streams.push_back(std::move(stream));
+        continue;
+      }
       VertexStream stream;
       stream.slot = slot;
       stream.stride = s.vbStride[slot];

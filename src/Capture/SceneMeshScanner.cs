@@ -152,6 +152,36 @@ namespace UnityRemix
                 if (materialManager.TryDescribeMaterial(int.Parse(id.Groups[1].Value), out string description))
                     text.Append($" || material {id.Groups[1].Value}: {description}");
             }
+            text.Append(DescribeInstances(renderer));
+            return text.ToString();
+        }
+
+        // The scanned instances of a renderer as drawn now: why one is left out of the frame.
+        private string DescribeInstances(Renderer renderer)
+        {
+            var text = new System.Text.StringBuilder();
+            lock (instanceLock)
+            {
+                var snapshot = Volatile.Read(ref visibleSnapshot);
+                int found = 0;
+                for (int i = 0; i < currentInstances.Count && i < instanceRenderers.Count; i++)
+                {
+                    if (instanceRenderers[i].Renderer != renderer)
+                        continue;
+                    var inst = currentInstances[i];
+                    bool visible = false;
+                    if (snapshot != null)
+                        for (int v = 0; v < snapshot.Count && !visible; v++)
+                            visible = snapshot.Buffer[v].MeshHandle == inst.MeshHandle && snapshot.Buffer[v].RendererInstanceId == inst.RendererInstanceId;
+                    var go = instanceRenderers[i].GameObject;
+                    text.Append($" || instance {i}: handle {(inst.MeshHandle != IntPtr.Zero ? "yes" : "NONE")}, scan layer {inst.Layer}{(IsLayerExcluded(inst.Layer) ? " (EXCLUDED)" : "")}, " +
+                                $"flags {inst.Flags}, enabled {renderer.enabled}, renderingOff {IsRenderingOff(renderer)}, active {(go != null && go.activeInHierarchy)}, " +
+                                $"bounds centre {inst.BoundsCenter}, in the visible list {visible}");
+                    found++;
+                }
+                if (found == 0)
+                    text.Append($" || NO INSTANCE drawn for it ({currentInstances.Count} instances)");
+            }
             return text.ToString();
         }
 

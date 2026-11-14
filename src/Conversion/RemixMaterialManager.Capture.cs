@@ -132,6 +132,11 @@ namespace UnityRemix
 
         public void SetRayPortalIndex(int materialId, int index) => rayPortalIndices[materialId] = index;
 
+        // Unity's unlit alpha-blended shaders, which show their texture times their tint as is.
+        private static bool IsUnlitSheetShader(string shaderName) =>
+            shaderName == "Sprites/Default" || shaderName.EndsWith("/Sprites/Default", StringComparison.Ordinal) ||
+            shaderName == "UI/Default" || shaderName.StartsWith("Unlit/Transparent", StringComparison.Ordinal);
+
         public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null)
         {
             if (material == null)
@@ -872,6 +877,22 @@ namespace UnityRemix
                     hasEmission = true;
                     logger.LogInfo($"[Glow] '{material.name}' ({shaderName}) on {(renderer != null ? renderer.name : "?")}: additive, " +
                                    $"coverage x{matData.glowCoverage:F2}, emission ({matData.glowColor.r:F2},{matData.glowColor.g:F2},{matData.glowColor.b:F2})");
+                }
+                else if (!isParticleOrTrailRenderer && matData.alphaMode == AlphaMode.Blend &&
+                         matData.albedoHandle != IntPtr.Zero && IsUnlitSheetShader(shaderName))
+                {
+                    // An unlit see-through sheet on a mesh (Sprites/Default, Unlit/Transparent,
+                    // UI/Default): Unity shows its own colour whatever lights it. Black (nothing
+                    // lights it), emitting its texture times its tint, covering by its alpha:
+                    // composed as Unity alpha-blends it. Lit, a blue glow quad came out grey.
+                    matData.emissiveHandle = matData.albedoHandle;
+                    matData.emissiveTextureHash = matData.albedoTextureHash;
+                    matData.emissiveColor = new Color(matData.albedoColor.r, matData.albedoColor.g, matData.albedoColor.b, 1f);
+                    matData.emissiveIntensity = 1f;
+                    matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a);
+                    matData.translucentKind = TranslucentKind.None;
+                    matData.suppressLightGeneration = true;
+                    hasEmission = true;
                 }
                 else if (matData.glowCoverage > 0f && matData.glowStrength <= 0f)
                 {
