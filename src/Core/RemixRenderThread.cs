@@ -133,6 +133,11 @@ namespace UnityRemix
             Interlocked.Exchange(ref needClearRetained, 1);
         }
 
+        // An area added or removed without a scene change (an additive load or an unload): the
+        // level is baked again once it settles, keeping the retained instances.
+        private int needRebake = 0;
+        public void RequestRebake() => Interlocked.Exchange(ref needRebake, 1);
+
         private static bool TransformEquals(in RemixAPI.remixapi_Transform a, in RemixAPI.remixapi_Transform b)
         {
             unsafe
@@ -583,9 +588,16 @@ namespace UnityRemix
             
             if (Interlocked.Exchange(ref needClearRetained, 0) != 0)
             {
+                Interlocked.Exchange(ref needRebake, 0);
                 bakeScene?.Reset();
                 lightConverter?.ThawBakeLights();
                 ClearRetainedSceneInstances();
+            }
+            else if (Interlocked.Exchange(ref needRebake, 0) != 0 && bakeScene != null && bakeScene.Published)
+            {
+                logger.LogInfo("[Bake] an area was added or removed: baking the level again once it settles");
+                bakeScene.Reset();
+                lightConverter?.ThawBakeLights();
             }
 
             long retainedStart = System.Diagnostics.Stopwatch.GetTimestamp();

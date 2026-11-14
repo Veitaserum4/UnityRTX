@@ -164,6 +164,7 @@ namespace UnityRemix
 
             // Subscribe to scene events
             UnityEngine.SceneManagement.SceneManager.sceneLoaded += OnSceneLoaded;
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded += OnSceneUnloaded;
             
             // Load Remix API
             try
@@ -402,6 +403,14 @@ namespace UnityRemix
             LogSource.LogInfo($"  Single Window: {configSingleWindow.Value} (SuppressInEngine: {configDisableInEngineRendering.Value}, AutoDetectUI: {configAutoDetectUI.Value}, EngineFPSLimit: {configEngineFPSLimit.Value})");
         }
         
+        // An additively loaded area unloading (a Single load unloads too, then clears all).
+        private void OnSceneUnloaded(UnityEngine.SceneManagement.Scene scene)
+        {
+            renderThread?.RequestRebake();
+            fogManager?.MarkDirty();
+            lightConverter?.RefreshLightCache();
+        }
+
         private void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene, UnityEngine.SceneManagement.LoadSceneMode mode)
         {
             LogSource.LogInfo($"Scene loaded: {scene.name}, mode: {mode}");
@@ -428,6 +437,10 @@ namespace UnityRemix
                 renderThread?.RequestClearRetainedSceneInstances();
                 Games.GameProfiles.OnSceneLoaded();
                 PrimitiveDiagnostics.Clear();
+            }
+            else
+            {
+                renderThread?.RequestRebake();
             }
             
             // Trigger scene scan
@@ -1026,6 +1039,7 @@ namespace UnityRemix
             
             LogSource.LogInfo("OnDestroy called during quit - cleaning up...");
             UnityEngine.SceneManagement.SceneManager.sceneLoaded -= OnSceneLoaded;
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded -= OnSceneUnloaded;
             CleanupRemix();
         }
         
