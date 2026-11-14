@@ -71,6 +71,11 @@ namespace UnityRemix.Games
         // are not drawn.
         public virtual bool IsHiddenMaterial(Material material) => false;
 
+        // A renderer not path-traced, whatever its materials (one the profile passes through,
+        // whose material other renderers share). Main thread; called when renderers are
+        // cached or scanned, not every frame.
+        public virtual bool IsHiddenRenderer(Renderer renderer) => false;
+
         // Adds the game's own per-frame meshes (geometry Unity's renderers don't show).
         public virtual void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) { }
 

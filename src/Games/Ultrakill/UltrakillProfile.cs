@@ -109,9 +109,18 @@ namespace UnityRemix.Games.Ultrakill
                     foreach (var m in r.sharedMaterials)
                         if (m != null && (m.IsKeywordEnabled("LIMBO_WALLS") || IsFresnelGlass(m)))
                         {
+                            // A soul orb's glow quad (its sibling, drawn just before it) too.
+                            if (IsFresnelGlass(m) && r.transform.parent != null)
+                                foreach (var sibling in r.transform.parent.GetComponentsInChildren<MeshRenderer>(true))
+                                    if (sibling != r && IsOrbGlow(sibling) && !limboWalls.Contains(sibling))
+                                        limboWalls.Add(sibling);
                             limboWalls.Add(r);
                             break;
                         }
+                passedThroughGlows.Clear();
+                foreach (var r in limboWalls)
+                    if (r != null && IsOrbGlow(r))
+                        passedThroughGlows.Add(r.GetInstanceID());
             }
             foreach (var r in limboWalls)
                 if (r != null)
@@ -133,6 +142,27 @@ namespace UnityRemix.Games.Ultrakill
         // ULTRAKILL/Master's unlit see-through FRESNEL variant (soul orbs and other bonus
         // crystals): texture x _Color plus _FresnelColor towards the rim, more opaque there. It
         // passes through as the game draws it; path-traced, it was a dim grey lit sheet.
+        // A soul orb's glow: a camera-facing quad beside it in Sprites/Default, drawn just before
+        // it (queue 2999, no depth). Path-traced it covered the orb (the replay depth-tests against
+        // it) and blended unlike the game; it passes through with the orb.
+        private static bool IsOrbGlow(Renderer renderer)
+        {
+            var m = renderer.sharedMaterial;
+            return m != null && m.shader != null && m.shader.name.EndsWith("Sprites/Default", StringComparison.Ordinal) &&
+                   renderer.GetComponent<MeshFilter>() != null;
+        }
+
+        private readonly HashSet<int> passedThroughGlows = new HashSet<int>();
+
+        public override bool IsHiddenRenderer(Renderer renderer)
+        {
+            if (!ShaderPassThrough.Installed)
+                return false;
+            if (Time.frameCount - limboWallsFrame >= 600)
+                GetPassThroughRenderers(null, new List<Renderer>()); // the scan the replay uses
+            return passedThroughGlows.Contains(renderer.GetInstanceID());
+        }
+
         private static bool IsFresnelGlass(Material material) =>
             material != null && material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
             material.IsKeywordEnabled("FRESNEL") && material.IsKeywordEnabled("TRANSPARENCY");

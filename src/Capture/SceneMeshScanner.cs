@@ -280,6 +280,8 @@ namespace UnityRemix
 
         public static bool IsRendererInvisible(Renderer renderer)
         {
+            if (Games.GameProfiles.IsHiddenRenderer(renderer))
+                return true;
             var materials = renderer.sharedMaterials;
             if (materials == null || materials.Length == 0)
                 return false;
@@ -986,6 +988,11 @@ int queued = 0;
                 }
 
                 var renderer = filter.GetComponent<MeshRenderer>();
+                if (renderer != null && Games.GameProfiles.IsHiddenRenderer(renderer))
+                {
+                    scannedFilterIds.Add(filterId);
+                    continue;
+                }
                 if (renderer == null)
                 {
                     skippedNoRenderer++;

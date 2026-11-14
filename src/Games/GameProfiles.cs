@@ -64,6 +64,13 @@ namespace UnityRemix.Games
 
         public static void OnSceneLoaded() => Run(nameof(OnSceneLoaded), p => p.OnSceneLoaded());
 
+        public static bool IsHiddenRenderer(Renderer renderer)
+        {
+            bool hidden = false;
+            Run(nameof(IsHiddenRenderer), p => hidden = p.IsHiddenRenderer(renderer));
+            return hidden;
+        }
+
         public static bool IsHiddenMaterial(Material material)
         {
             bool hidden = false;
