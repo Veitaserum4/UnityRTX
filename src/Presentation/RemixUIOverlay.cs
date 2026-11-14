@@ -269,6 +269,7 @@ namespace UnityRemix
                     cam.backgroundColor = savedState.backgroundColor;
                     originalCameraStates.Remove(cam);
                     managedCameras.Remove(cam);
+                    ResumeImageEffects(cam);
                     logger?.LogInfo($"[RemixUIOverlay] Restored unmanaged camera '{cam.name}' to original targetTexture ({savedState.targetTexture?.name ?? "null"}).");
                 }
             }
@@ -297,6 +298,7 @@ namespace UnityRemix
                     logger?.LogInfo($"[RemixUIOverlay] UI camera '{cam.name}': depth {cam.depth}, clear {cam.clearFlags}, " +
                         $"target '{(cam.targetTexture != null ? cam.targetTexture.name : "screen")}', components: {(behaviours.Count > 0 ? string.Join(", ", behaviours) : "none")}");
                 }
+                PauseImageEffects(cam);
 
                 var targetClear = isFirst ? CameraClearFlags.SolidColor : CameraClearFlags.Depth;
                 var targetBg = new Color(0, 0, 0, 0);
@@ -734,6 +736,41 @@ namespace UnityRemix
             }
         }
 
+        // Image effects on a UI camera (OnRenderImage behaviours) are a game's grading of the
+        // whole finished screen, drawn by its last camera (Gloomwood's BrightnessContrastGamma
+        // on its UI camera). Over the UI texture alone they tint every transparent pixel and keep
+        // old UI on screen, so they are off while UnityRTX manages the camera.
+        private readonly Dictionary<Camera, List<Behaviour>> pausedImageEffects = new Dictionary<Camera, List<Behaviour>>();
+
+        private void PauseImageEffects(Camera cam)
+        {
+            if (pausedImageEffects.ContainsKey(cam))
+                return;
+            var paused = new List<Behaviour>();
+            foreach (var b in cam.GetComponents<Behaviour>())
+            {
+                if (b == null || !b.enabled || b is Camera || b is RemixUICameraHook)
+                    continue;
+                var method = b.GetType().GetMethod("OnRenderImage",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                if (method == null)
+                    continue;
+                b.enabled = false;
+                paused.Add(b);
+                logger?.LogInfo($"[RemixUIOverlay] UI camera '{cam.name}': image effect {b.GetType().Name} off while it draws the UI texture");
+            }
+            pausedImageEffects[cam] = paused;
+        }
+
+        private void ResumeImageEffects(Camera cam)
+        {
+            if (cam == null || !pausedImageEffects.TryGetValue(cam, out var paused))
+                return;
+            foreach (var b in paused)
+                if (b != null) b.enabled = true;
+            pausedImageEffects.Remove(cam);
+        }
+
         public void RestoreUICameras()
         {
             foreach (var kvp in originalCameraStates)
@@ -741,6 +778,7 @@ namespace UnityRemix
                 var cam = kvp.Key;
                 if (cam != null)
                 {
+                    ResumeImageEffects(cam);
                     var hook = cam.GetComponent<RemixUICameraHook>();
                     if (hook != null) UnityEngine.Object.Destroy(hook);
 
