@@ -228,7 +228,7 @@ namespace UnityRemix
             if (cam != null && managedCameras.Contains(cam))
             {
                 // In SRP/URP, when a managed UI camera finishes rendering, trigger overlay presentation immediately
-                UpdateOverlay();
+                UpdateOverlay(endOfFrame: false);
             }
         }
 
@@ -361,7 +361,8 @@ namespace UnityRemix
         /// Updates the OpenRemix native screen overlay with the contents of the UI RenderTexture.
         /// Uses non-blocking AsyncGPUReadback to eliminate GPU stalls and Parallel.For for scanline conversion.
         /// </summary>
-        public void UpdateOverlay()
+        // endOfFrame: called after every camera has drawn (not from one camera's SRP callback).
+        public void UpdateOverlay(bool endOfFrame = true)
         {
             if (RemixAPI.DrawScreenOverlayFunc == null) return;
 
@@ -423,6 +424,17 @@ namespace UnityRemix
             {
                 isReadbackPending = true;
                 AsyncGPUReadback.Request(uiRenderTexture, 0, TextureFormat.RGBA32, OnAsyncReadbackCompleted);
+            }
+
+            // The UI cameras clear the texture only when they draw: a game that turns its UI camera
+            // off (Gloomwood between menus) would leave its last UI on screen for good. Cleared
+            // here, after the readback was requested (the GPU copies it first), for the next frame.
+            if (endOfFrame)
+            {
+                var previous = RenderTexture.active;
+                RenderTexture.active = uiRenderTexture;
+                GL.Clear(true, true, new Color(0f, 0f, 0f, 0f));
+                RenderTexture.active = previous;
             }
         }
 

@@ -656,6 +656,11 @@ namespace UnityRemix
                     continue;
                 }
 
+                // A nested canvas draws as part of its root (and reports the root's render mode):
+                // only root canvases are rebound.
+                if (!canvas.isRootCanvas)
+                    continue;
+
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
                 bool needsRebinding = canvas.renderMode == RenderMode.ScreenSpaceCamera && 
                     (canvas.worldCamera == null || !uiCameras.Contains(canvas.worldCamera) || !canvas.worldCamera.enabled || !canvas.worldCamera.gameObject.activeInHierarchy);
