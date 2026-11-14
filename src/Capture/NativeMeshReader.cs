@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using BepInEx.Logging;
@@ -30,6 +31,7 @@ namespace UnityRemix
         static bool loggedInit;
 
         public static void SetLogger(ManualLogSource log) => logger = log;
+        internal static void LogLayout(string message) => logger?.LogInfo(message);
 
         // Unity's GraphicsBuffer readback (2021.2+). The type is missing before 2020.1 (DUSK's
         // 2018.2), and a class naming it fails to load there: it is used only in GpuBuffers,
@@ -700,6 +702,7 @@ namespace UnityRemix
     {
         private static MethodInfo _hasChannelMethod;
         private static bool _hasChannelSearched;
+        private static readonly HashSet<int> loggedLayoutMismatch = new HashSet<int>();
 
         public static bool TryGetLayout(Mesh mesh, out NativeVertexLayout layout)
         {
@@ -716,6 +719,11 @@ namespace UnityRemix
             int stride = (int)(byteWidth / (uint)vertexCount);
             if (stride < 12) return false;
 
+            // Unity's single-stream vertex layout is its channels in a fixed order: position
+            // (float3), normal (float3), tangent (float4), colour (4 bytes), then texture
+            // coordinate sets 0-7 (float2 each, as static batching writes them). A static batch
+            // carries lightmap UVs (set 1) after set 0, so every channel present is counted:
+            // set 0 sits right after the colour, whatever follows it.
             bool hasNorm = HasChannel(mesh, 1 /* Normal */);
             bool hasTan  = HasChannel(mesh, 2 /* Tangent */);
             bool hasCol  = HasChannel(mesh, 3 /* Color */);
@@ -725,30 +733,21 @@ namespace UnityRemix
             int normOffset = -1;
             int uvOffset = -1;
 
-            if (_hasChannelMethod != null && (hasNorm || hasTan || hasCol || hasUV0))
+            if (_hasChannelMethod != null)
             {
-                int currentOffset = 12; // after Position (Float3)
-                if (hasNorm)
+                int offset = 12;
+                if (hasNorm) { normOffset = offset; offset += 12; }
+                if (hasTan) offset += 16;
+                if (hasCol) offset += 4;
+                if (hasUV0) { uvOffset = offset; offset += 8; }
+                for (int set = 1; set < 8; set++)
+                    if (HasChannel(mesh, 4 + set)) offset += 8;
+                if (offset != stride && !loggedLayoutMismatch.Contains(mesh.GetInstanceID()))
                 {
-                    normOffset = currentOffset;
-                    currentOffset += 12;
-                }
-                if (hasTan)
-                {
-                    int remaining = stride - currentOffset;
-                    int uvBytes = hasUV0 ? 8 : 0;
-                    int colBytes = hasCol ? 4 : 0;
-                    int tanBytes = remaining - uvBytes - colBytes;
-                    currentOffset += tanBytes > 0 ? tanBytes : 16;
-                }
-                if (hasCol)
-                {
-                    currentOffset += 4;
-                }
-                if (hasUV0)
-                {
-                    uvOffset = currentOffset;
-                    currentOffset += 8;
+                    // Formats other than the assumed ones (half UVs, float4 colours): offsets past
+                    // the first differing channel are guesses.
+                    loggedLayoutMismatch.Add(mesh.GetInstanceID());
+                    NativeMeshReader.LogLayout($"[NativeMeshReader] '{mesh.name}': channels sum to {offset} bytes, the buffer's stride is {stride}; UVs at {uvOffset} may be off");
                 }
             }
             else
