@@ -66,6 +66,17 @@ namespace UnityRemix
         private readonly List<IntPtr> createdMeshHandles = new List<IntPtr>();
         private readonly List<Texture2D> createdTextures = new List<Texture2D>();
 
+        // Each processed terrain, its baked textures and chunk meshes. A game that loads areas
+        // additively (ATLYSS's zones) destroys a terrain without a Single scene load: its chunks
+        // leave with it. A disabled terrain's chunks are hidden until it is enabled again.
+        private readonly Dictionary<int, Terrain> processedTerrains = new Dictionary<int, Terrain>();
+        private readonly Dictionary<int, List<Texture2D>> terrainTextures = new Dictionary<int, List<Texture2D>>();
+        private readonly Dictionary<int, bool> terrainShown = new Dictionary<int, bool>();
+        private readonly List<int> goneTerrains = new List<int>();
+        // Meshes of a gone terrain, destroyed once the render thread has stopped drawing them.
+        private readonly List<KeyValuePair<IntPtr, int>> retiredMeshes = new List<KeyValuePair<IntPtr, int>>();
+        private const int RetireFrames = 4;
+
         // Periodic rescan timer for dynamically/async loaded terrains
         private float rescanTimer;
         private const float RescanInterval = 1.0f;
@@ -190,6 +201,7 @@ namespace UnityRemix
 
             int terrainId = terrain.GetInstanceID();
             processedTerrainIds.Add(terrainId);
+            processedTerrains[terrainId] = terrain;
 
             int hRes = tData.heightmapResolution;
             Vector3 size = tData.size;
@@ -202,6 +214,7 @@ namespace UnityRemix
             var (bakedAlbedo, bakedNormal) = BakeTerrainTextures(terrain, tData, bakeRes);
             if (bakedAlbedo != null) createdTextures.Add(bakedAlbedo);
             if (bakedNormal != null) createdTextures.Add(bakedNormal);
+            terrainTextures[terrainId] = new List<Texture2D> { bakedAlbedo, bakedNormal };
 
             // 2. Register material with RemixMaterialManager
             string matName = $"Terrain_{terrain.name}_{terrainId}";
@@ -649,6 +662,7 @@ namespace UnityRemix
         /// </summary>
         public void UpdateVisibility(Vector3 cameraPosition, bool useDistanceCulling, float maxRenderDistance)
         {
+            DropGoneTerrains();
             lock (instanceLock)
             {
                 if (currentInstances.Count == 0)
@@ -665,6 +679,8 @@ namespace UnityRemix
                     var instance = currentInstances[i];
 
                     if (isLayerDisabled != null && isLayerDisabled(instance.Layer))
+                        continue;
+                    if (terrainShown.TryGetValue(instance.TerrainId, out bool shown) && !shown)
                         continue;
 
                     if (useDistanceCulling)
@@ -831,6 +847,85 @@ namespace UnityRemix
             }
         }
 
+        // Main thread, each frame: which terrains are shown, and the chunks of destroyed ones
+        // retired (their meshes destroyed RetireFrames later, their textures now).
+        private void DropGoneTerrains()
+        {
+            int frame = Time.frameCount;
+            if (retiredMeshes.Count > 0)
+            {
+                var destroyMeshFunc = meshConverter.GetDestroyMeshFunc();
+                for (int i = retiredMeshes.Count - 1; i >= 0; i--)
+                {
+                    if (frame - retiredMeshes[i].Value < RetireFrames)
+                        continue;
+                    if (destroyMeshFunc != null)
+                    {
+                        try { lock (apiLock) destroyMeshFunc(retiredMeshes[i].Key); } catch { }
+                    }
+                    retiredMeshes.RemoveAt(i);
+                }
+            }
+            goneTerrains.Clear();
+            foreach (var kv in processedTerrains)
+            {
+                var t = kv.Value;
+                if (t == null)
+                    goneTerrains.Add(kv.Key);
+                else
+                    terrainShown[kv.Key] = t.enabled && t.drawHeightmap && t.gameObject.activeInHierarchy;
+            }
+            foreach (int id in goneTerrains)
+                processedTerrains.Remove(id);
+
+            // Chunks of any terrain no longer tracked (one that went this frame, or a chunk
+            // still in flight on the render thread when it went).
+            lock (instanceLock)
+            {
+                for (int i = currentInstances.Count - 1; i >= 0; i--)
+                {
+                    if (processedTerrains.ContainsKey(currentInstances[i].TerrainId))
+                        continue;
+                    var handle = currentInstances[i].MeshHandle;
+                    currentInstances.RemoveAt(i);
+                    lock (createdMeshHandles)
+                        createdMeshHandles.Remove(handle);
+                    retiredMeshes.Add(new KeyValuePair<IntPtr, int>(handle, frame));
+                }
+            }
+            if (goneTerrains.Count == 0)
+                return;
+            lock (streamLock)
+            {
+                if (streamingQueue.Count > 0)
+                {
+                    var keep = new Queue<TerrainChunkData>();
+                    foreach (var chunk in streamingQueue)
+                        if (!goneTerrains.Contains(chunk.TerrainId))
+                            keep.Enqueue(chunk);
+                    streamingQueue.Clear();
+                    foreach (var chunk in keep)
+                        streamingQueue.Enqueue(chunk);
+                }
+            }
+            foreach (int id in goneTerrains)
+            {
+                processedTerrainIds.Remove(id);
+                terrainShown.Remove(id);
+                if (terrainTextures.TryGetValue(id, out var textures))
+                {
+                    foreach (var tex in textures)
+                    {
+                        if (tex == null) continue;
+                        createdTextures.Remove(tex);
+                        UnityEngine.Object.Destroy(tex);
+                    }
+                    terrainTextures.Remove(id);
+                }
+                logger.LogInfo($"[RemixTerrain] Terrain id={id} is gone (its area unloaded): its chunks removed");
+            }
+        }
+
         /// <summary>
         /// Clears all cached terrain data, queues, and instances on scene unload.
         /// </summary>
@@ -848,6 +943,9 @@ namespace UnityRemix
             }
 
             processedTerrainIds.Clear();
+            processedTerrains.Clear();
+            terrainTextures.Clear();
+            terrainShown.Clear();
             Volatile.Write(ref visibleInstances, null);
             activeScene = default;
 
