@@ -585,7 +585,7 @@ namespace UnityRemix
             return Vector2.zero;
         }
 
-        static float HalfToFloat(ushort half)
+        internal static float HalfToFloat(ushort half)
         {
             int sign = (half >> 15) & 1;
             int exp = (half >> 10) & 0x1F;
@@ -742,12 +742,32 @@ namespace UnityRemix
                 if (hasUV0) { uvOffset = offset; offset += 8; }
                 for (int set = 1; set < 8; set++)
                     if (HasChannel(mesh, 4 + set)) offset += 8;
-                if (offset != stride && !loggedLayoutMismatch.Contains(mesh.GetInstanceID()))
+                if (offset != stride)
                 {
-                    // Formats other than the assumed ones (half UVs, float4 colours): offsets past
-                    // the first differing channel are guesses.
-                    loggedLayoutMismatch.Add(mesh.GetInstanceID());
-                    NativeMeshReader.LogLayout($"[NativeMeshReader] '{mesh.name}': channels sum to {offset} bytes, the buffer's stride is {stride}; UVs at {uvOffset} may be off");
+                    // Some channels are compressed (Unity's vertex compression: half normals,
+                    // tangents and UVs). The formats are not exposed before 2019.3, so they are
+                    // inferred from the data.
+                    var normalFormat = NativeVertexFormat.Float32;
+                    var uvFormat = NativeVertexFormat.Float32;
+                    bool resolved = ResolveCompressed(mesh, stride, hasNorm, hasTan, hasCol, hasUV0,
+                        ref normOffset, ref normalFormat, ref uvOffset, ref uvFormat, out string how);
+                    if (loggedLayoutMismatch.Add(mesh.GetInstanceID()))
+                        NativeMeshReader.LogLayout($"[NativeMeshReader] '{mesh.name}': channels sum to {offset} bytes at full precision, the stride is {stride}: " +
+                            (resolved ? how : "no compressed layout fits; UVs may be off"));
+                    if (resolved)
+                    {
+                        layout = new NativeVertexLayout
+                        {
+                            Stride = stride,
+                            PositionOffset = 0,
+                            PositionFormat = NativeVertexFormat.Float32,
+                            NormalOffset = normOffset,
+                            NormalFormat = normalFormat,
+                            UVOffset = uvOffset,
+                            UVFormat = uvFormat
+                        };
+                        return true;
+                    }
                 }
             }
             else
@@ -792,6 +812,132 @@ namespace UnityRemix
                 UVFormat = NativeVertexFormat.Float32
             };
             return true;
+        }
+
+        // Candidate formats per channel (bytes; the first is full precision): normal float3 /
+        // half4, tangent float4 / half4, colour unorm8x4 / float4, texture coordinates float2 /
+        // half2.
+        private static readonly int[][] ChannelSizes =
+        {
+            new[] { 12, 8 },
+            new[] { 16, 8 },
+            new[] { 4, 16 },
+            new[] { 8, 4 }
+        };
+
+        // Every combination of the present channels' formats that fills the stride exactly, scored
+        // on sampled vertices (unit normals and tangents, plausible UV0, lightmap UVs in 0..1).
+        private static bool ResolveCompressed(Mesh mesh, int stride, bool hasNorm, bool hasTan, bool hasCol, bool hasUV0,
+            ref int normOffset, ref NativeVertexFormat normalFormat, ref int uvOffset, ref NativeVertexFormat uvFormat, out string how)
+        {
+            how = null;
+            var kinds = new List<int>(); // 0 normal, 1 tangent, 2 colour, 3 + n texture set n
+            if (hasNorm) kinds.Add(0);
+            if (hasTan) kinds.Add(1);
+            if (hasCol) kinds.Add(2);
+            for (int set = 0; set < 8; set++)
+                if (set == 0 ? hasUV0 : HasChannel(mesh, 4 + set)) kinds.Add(3 + set);
+            if (kinds.Count == 0 || kinds.Count > 10)
+                return false;
+            if (!NativeMeshReader.ReadVertexBuffer(mesh, 0, out byte[] data) || data == null)
+                return false;
+            int vertexCount = Math.Min(mesh.vertexCount, data.Length / stride);
+            if (vertexCount <= 0)
+                return false;
+
+            int[] choice = new int[kinds.Count];
+            int[] best = null;
+            float bestScore = float.MinValue;
+            int combos = 1 << kinds.Count;
+            for (int mask = 0; mask < combos; mask++)
+            {
+                int size = 12;
+                for (int k = 0; k < kinds.Count; k++)
+                {
+                    choice[k] = (mask >> k) & 1;
+                    size += ChannelSizes[Math.Min(kinds[k], 3)][choice[k]];
+                }
+                if (size != stride)
+                    continue;
+                // Ties go to fewer reduced channels (Unity keeps most at full precision).
+                float score = Score(data, stride, vertexCount, kinds, choice) - 0.001f * BitCount(mask);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = (int[])choice.Clone();
+                }
+            }
+            if (best == null)
+                return false;
+
+            int at = 12;
+            var parts = new List<string>();
+            for (int k = 0; k < kinds.Count; k++)
+            {
+                int kind = kinds[k];
+                bool reduced = best[k] == 1;
+                bool half = kind != 2 && reduced;
+                if (kind == 0) { normOffset = at; normalFormat = half ? NativeVertexFormat.Float16 : NativeVertexFormat.Float32; }
+                if (kind == 3) { uvOffset = at; uvFormat = half ? NativeVertexFormat.Float16 : NativeVertexFormat.Float32; }
+                string name = kind == 0 ? "normal" : kind == 1 ? "tangent" : kind == 2 ? "colour" : "uv" + (kind - 3);
+                string format = kind == 2 ? (reduced ? "float4" : "unorm8x4") : half ? "half" : "float";
+                parts.Add(name + " " + format + "@" + at);
+                at += ChannelSizes[Math.Min(kind, 3)][best[k]];
+            }
+            how = "inferred " + string.Join(", ", parts) + " (score " + bestScore.ToString("F2") + ")";
+            return true;
+        }
+
+        private static int BitCount(int v)
+        {
+            int c = 0;
+            for (; v != 0; v &= v - 1) c++;
+            return c;
+        }
+
+        private static float Component(byte[] data, int at, bool half) =>
+            half ? NativeMeshReader.HalfToFloat(BitConverter.ToUInt16(data, at)) : BitConverter.ToSingle(data, at);
+
+        // The share of checks on sampled vertices whose channels look like what they claim to be.
+        private static float Score(byte[] data, int stride, int vertexCount, List<int> kinds, int[] choice)
+        {
+            int samples = Math.Min(vertexCount, 256);
+            float total = 0f;
+            int checks = 0;
+            for (int s = 0; s < samples; s++)
+            {
+                int v = (int)((long)s * vertexCount / samples);
+                int at = v * stride + 12;
+                for (int k = 0; k < kinds.Count; k++)
+                {
+                    int kind = kinds[k];
+                    bool half = kind != 2 && choice[k] == 1;
+                    int step = half ? 2 : 4;
+                    if (kind == 0 || kind == 1)
+                    {
+                        float x = Component(data, at, half), y = Component(data, at + step, half), z = Component(data, at + 2 * step, half);
+                        float len = (float)Math.Sqrt(x * x + y * y + z * z);
+                        bool ok = !float.IsNaN(len) && Math.Abs(len - 1f) < 0.05f;
+                        if (kind == 1)
+                            ok &= Math.Abs(Math.Abs(Component(data, at + 3 * step, half)) - 1f) < 0.01f;
+                        total += ok ? 1f : 0f;
+                        checks++;
+                    }
+                    else if (kind >= 3)
+                    {
+                        float u = Component(data, at, half), w = Component(data, at + step, half);
+                        bool finite = !float.IsNaN(u) && !float.IsInfinity(u) && !float.IsNaN(w) && !float.IsInfinity(w);
+                        bool ok = kind == 3
+                            ? finite && Math.Abs(u) < 256f && Math.Abs(w) < 256f &&
+                              (u == 0f || Math.Abs(u) > 1e-6f) && (w == 0f || Math.Abs(w) > 1e-6f)
+                            : finite && u >= -0.01f && u <= 1.01f && w >= -0.01f && w <= 1.01f;
+                        total += ok ? 1f : 0f;
+                        checks++;
+                    }
+                    at += ChannelSizes[Math.Min(kind, 3)][choice[k]];
+                }
+            }
+            return checks > 0 ? total / checks : 0f;
         }
 
         private static bool HasChannel(Mesh mesh, int channelIndex)
