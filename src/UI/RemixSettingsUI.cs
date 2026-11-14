@@ -321,7 +321,8 @@ namespace UnityRemix
                         fog.ConfigFogDensityMultiplier.Value = densMult;
                         fog.MarkDirty();
                     }
-                    Tooltip("Scales exponential fog density.");
+                    Tooltip("Thickens or thins the game's fog. Exponential fog: its density (1 = Unity's x0.05). " +
+                            "Linear fog (start/end distances): its ramp from start to fully fogged, divided by this.");
                     float distMult = fog.ConfigFogDistanceMultiplier.Value;
                     if (RemixImGui.SliderFloat("Distance multiplier", ref distMult, 0.1f, 5.0f))
                     {

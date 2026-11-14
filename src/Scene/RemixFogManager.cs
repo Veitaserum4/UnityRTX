@@ -164,8 +164,11 @@ namespace UnityRemix
                     {
                         case FogMode.Linear:
                             mode = 3; // D3DFOG_LINEAR
+                            // Linear fog has no density: Density thickens it by shortening its
+                            // ramp (the distance from start to fully fogged), 1 leaving it as is.
                             scale = Mathf.Max(rawStart * distMult, 0f);
-                            end = Mathf.Max(rawEnd * distMult, scale + 0.1f);
+                            end = Mathf.Max(scale + (rawEnd - rawStart) * distMult / Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f),
+                                            scale + 0.1f);
                             active = end > 0.5f;
                             break;
 

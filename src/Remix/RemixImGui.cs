@@ -508,8 +508,38 @@ namespace UnityRemix
         }
 
         public static bool RadioButton(string label, bool active) => _radioButton?.Invoke(label, active ? 1 : 0) != 0;
-        public static bool SliderFloat(string label, ref float v, float min, float max, string format = null) => _sliderFloat?.Invoke(label, ref v, min, max, format) != 0;
-        public static bool SliderInt(string label, ref int v, int min, int max, string format = null) => _sliderInt?.Invoke(label, ref v, min, max, format) != 0;
+        // Single-value "sliders" are ImGui drag widgets: drag to change (Shift faster, Alt finer),
+        // double-click or Ctrl+click to type an exact value. A typed value outside the range is
+        // clamped to it.
+        private const float DragPixelsAcrossRange = 400f;
+
+        public static bool SliderFloat(string label, ref float v, float min, float max, string format = null)
+        {
+            if (_dragFloat == null)
+                return _sliderFloat?.Invoke(label, ref v, min, max, format) != 0;
+            float speed = Math.Max((max - min) / DragPixelsAcrossRange, 1e-5f);
+            bool changed = _dragFloat(label, ref v, speed, min, max, format) != 0;
+            if (min < max && (v < min || v > max))
+            {
+                v = Math.Min(Math.Max(v, min), max);
+                changed = true;
+            }
+            return changed;
+        }
+
+        public static bool SliderInt(string label, ref int v, int min, int max, string format = null)
+        {
+            if (_dragInt == null)
+                return _sliderInt?.Invoke(label, ref v, min, max, format) != 0;
+            float speed = Math.Max((max - min) / DragPixelsAcrossRange, 0.05f);
+            bool changed = _dragInt(label, ref v, speed, min, max, format) != 0;
+            if (min < max && (v < min || v > max))
+            {
+                v = Math.Min(Math.Max(v, min), max);
+                changed = true;
+            }
+            return changed;
+        }
         public static bool SliderFloat2(string label, float[] v, float min, float max, string format = null) => _sliderFloat2?.Invoke(label, v, min, max, format) != 0;
         public static bool SliderFloat3(string label, float[] v, float min, float max, string format = null) => _sliderFloat3?.Invoke(label, v, min, max, format) != 0;
         public static bool DragFloat(string label, ref float v, float speed = 1, float min = 0, float max = 0, string format = null) => _dragFloat?.Invoke(label, ref v, speed, min, max, format) != 0;
