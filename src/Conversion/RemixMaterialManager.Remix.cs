@@ -375,7 +375,7 @@ namespace UnityRemix
                     // Unity's emission is what it shows unlit; Remix radiance in the scene's light units.
                     // A backdrop (a panoramic sky) keeps the value Unity shows: it lights nothing, and the
                     // game shows it as drawn whatever the scene's light.
-                    if ((EmissionInLightUnits == null || EmissionInLightUnits.Value) && !matData.emissionAsShown)
+                    if ((EmissionInLightUnits == null || EmissionInLightUnits.Value) && !matData.emissionAsShown && !matData.unlitSheet)
                         emCombinedIntensity *= UnlitRadianceScale;
                     if (!IsFinite(emCombinedIntensity) || emCombinedIntensity < 0f) emCombinedIntensity = 0f;
                     

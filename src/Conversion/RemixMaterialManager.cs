@@ -182,6 +182,7 @@ namespace UnityRemix
             public float emissiveIntensity;
             public bool useEmissiveBlend;  // Use kAlphaEmissive blend instead of kAlpha
             public bool emissionAsShown;  // a backdrop (panoramic sky): its emission is what Unity shows, not scaled to light units
+            public bool unlitSheet;       // an unlit see-through sheet on a mesh (Sprites/Default): emits what Unity shows, and blends
             public bool suppressLightGeneration; // OpenRemix: visible emission without analytic triangle light generation in LightBvh
             public int rayPortalIndex;  // remixapi_MaterialInfoPortalEXT index its surfaces open, -1 none
             public Color glowColor;     // an additive glow on a mesh: its emission (what Unity adds per white texel, over glowCoverage)

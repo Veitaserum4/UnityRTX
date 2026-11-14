@@ -1246,7 +1246,7 @@ int queued = 0;
                 // same rock thousands of times); each keeps its own instance. Combined static-batch
                 // meshes hold per-renderer world-space slices: one mesh per object.
                 ulong meshHash = isCombinedMesh
-                    ? GenerateInstanceMeshHash(mesh, filter.transform)
+                    ? GenerateInstanceMeshHash(mesh, filter.transform, renderer)
                     : GenerateSharedMeshHash(mesh, vertices, surfaces, surfaceMaterials, objectUp, AnyTopVariant(surfaces), objectScale,
                                              meshHashInputs, materialHashInputs);
                 var dedupeKey = StaticGeometryDedupe.BuildKey(renderer, mesh);
@@ -1763,12 +1763,26 @@ int queued = 0;
 
         private static readonly string[] SharedHashColorProps = { "_Color", "_BaseColor", "_Tint" };
 
-        private static ulong GenerateInstanceMeshHash(Mesh mesh, Transform transform)
+        private static ulong GenerateInstanceMeshHash(Mesh mesh, Transform transform, Renderer renderer)
         {
             ulong hash = 14695981039346656037UL; // FNV offset basis
 
             // Include transform hierarchy hash so each object gets a persistent unique Remix mesh
             hash ^= HashUtils.GetHierarchyHash(transform);
+            hash *= 1099511628211UL;
+
+            // and the renderer's own slice of the combined mesh, and where it is: two objects of
+            // the same name at the same place in the hierarchy (two root "Cube"s in one static
+            // batch) shared one Remix mesh, the second drawing the first's slice (ULTRAKILL 0-1's
+            // missing end-room floor).
+            hash ^= (ulong)(uint)(renderer is MeshRenderer meshRenderer ? meshRenderer.subMeshStartIndex : 0);
+            hash *= 1099511628211UL;
+            Vector3 centre = renderer.bounds.center;
+            hash ^= (ulong)(uint)Mathf.RoundToInt(centre.x * 100f);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)(uint)Mathf.RoundToInt(centre.y * 100f);
+            hash *= 1099511628211UL;
+            hash ^= (ulong)(uint)Mathf.RoundToInt(centre.z * 100f);
             hash *= 1099511628211UL;
 
             if (!string.IsNullOrEmpty(mesh.name))
