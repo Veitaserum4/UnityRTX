@@ -235,6 +235,23 @@ namespace UnityRemix
 
         private Mesh skinningValidationMesh;
 
+        // BakeMesh bakes relative to the renderer's position and rotation only, keeping a
+        // mirroring (negative) scale in the vertices; skinned meshes are drawn with the scale's
+        // signs in their transform (winding follows), so the bake is taken back into that space.
+        // Without it a mirrored renderer (ULTRAKILL's mirrored Cerberus statues) was mirrored twice.
+        private static void ToMirroredSpace(SkinnedMeshRenderer skinned, Vector3[] vertices, Vector3[] normals)
+        {
+            var ls = skinned.transform.lossyScale;
+            if (ls.x >= 0f && ls.y >= 0f && ls.z >= 0f)
+                return;
+            var sign = new Vector3(Mathf.Sign(ls.x), Mathf.Sign(ls.y), Mathf.Sign(ls.z));
+            for (int i = 0; i < vertices.Length; i++)
+                vertices[i] = Vector3.Scale(vertices[i], sign);
+            if (normals != null)
+                for (int i = 0; i < normals.Length; i++)
+                    normals[i] = Vector3.Scale(normals[i], sign);
+        }
+
         // Skins the data on the CPU as the renderer will on the GPU (bones relative to the
         // unscaled renderer transform, blendshapes at the current weights) and compares with
         // BakeMesh of the same pose. False also when the data cannot be compared.
@@ -249,6 +266,7 @@ namespace UnityRemix
             int count = data.bindVertices.Length;
             if (baked == null || baked.Length != count)
                 return false;
+            ToMirroredSpace(skinned, baked, null);
 
             var vertices = (Vector3[])data.bindVertices.Clone();
             var normals = (Vector3[])data.bindNormals.Clone();
@@ -686,6 +704,7 @@ namespace UnityRemix
                 var norms = bakedMesh.normals;
                 if (verts == null || verts.Length == 0)
                     return false;
+                ToMirroredSpace(skinned, verts, norms);
 
                 if (!bakedTopology.TryGetValue(skinnedId, out var topo) || topo.sharedMeshId != sharedMeshId || topo.vertexCount != verts.Length)
                 {

@@ -70,7 +70,8 @@ namespace UnityRemix.Games.Ultrakill
         // behind it): not path-traced, passed through (GetPassThroughRenderers).
         public override bool IsHiddenMaterial(Material material) =>
             material.name.StartsWith("Default-Material", StringComparison.Ordinal) ||
-            (material.shader != null && material.shader.name == "ULTRAKILL/HeatWave");
+            (material.shader != null && material.shader.name == "ULTRAKILL/HeatWave") ||
+            (ShaderPassThrough.Installed && IsFresnelGlass(material));
 
         // Limbo's TV-screen walls (LIMBO_WALLS) show _LimboSky in screen space (times their own
         // texture, with glitches): the LimboSkybox camera's view of a miniature scene elsewhere
@@ -101,11 +102,12 @@ namespace UnityRemix.Games.Ultrakill
         {
             if (Time.frameCount - limboWallsFrame >= 600)
             {
+                // Inactive ones too: soul orbs wait in rooms not yet reached.
                 limboWallsFrame = Time.frameCount;
                 limboWalls.Clear();
-                foreach (var r in UnityEngine.Object.FindObjectsOfType<MeshRenderer>())
+                foreach (var r in UnityCompat.FindSceneComponentsIncludingInactive<MeshRenderer>())
                     foreach (var m in r.sharedMaterials)
-                        if (m != null && m.IsKeywordEnabled("LIMBO_WALLS"))
+                        if (m != null && (m.IsKeywordEnabled("LIMBO_WALLS") || IsFresnelGlass(m)))
                         {
                             limboWalls.Add(r);
                             break;
@@ -127,6 +129,13 @@ namespace UnityRemix.Games.Ultrakill
                 if (r != null)
                     renderers.Add(r);
         }
+
+        // ULTRAKILL/Master's unlit see-through FRESNEL variant (soul orbs and other bonus
+        // crystals): texture x _Color plus _FresnelColor towards the rim, more opaque there. It
+        // passes through as the game draws it; path-traced, it was a dim grey lit sheet.
+        private static bool IsFresnelGlass(Material material) =>
+            material != null && material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
+            material.IsKeywordEnabled("FRESNEL") && material.IsKeywordEnabled("TRANSPARENCY");
 
         // ULTRAKILL/HeatWave: heat haze, the view behind it bent by scrolling noise. Its pass 0
         // is a GrabPass (_GrabTexture), pass 1 the distortion, which the replay draws over the

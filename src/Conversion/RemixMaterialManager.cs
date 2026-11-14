@@ -348,6 +348,8 @@ namespace UnityRemix
             return materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.blendedInstance;
         }
 
+        // True for any additive material, its glow black when it adds nothing (a light shaft's
+        // "off" twin): drawn as a glow of no coverage rather than as a solid surface.
         // Additive blending (SrcAlpha or One, One): ULTRAKILL/Additive and the legacy additive
         // particle shaders (fixed blend; 2 x _TintColor), and shaders reading _SrcBlend/_DstBlend
         // (ULTRAKILL/Master, Standard, Particles/Standard) set to it. glow: what Unity adds for a
@@ -388,7 +390,7 @@ namespace UnityRemix
                     glow = new Color(glow.r + e.r, glow.g + e.g, glow.b + e.b, 1f);
                 }
             }
-            return Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)) > 0.001f;
+            return true;
         }
 
         public bool TryGetMaterialData(int materialId, out MaterialTextureData data)

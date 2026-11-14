@@ -154,7 +154,9 @@ namespace UnityRemix
             // particles are (UploadParticleTexture: its brightness as coverage), emitting.
             Color glow = Color.black;
             bool additiveGlow = !isParticleOrTrailRenderer && TryGetAdditiveGlow(material, out glow);
-            float glowCoverage = additiveGlow ? Mathf.Clamp(Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)), 0.02f, 1f) : 0f;
+            float glowMax = Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b));
+            // (One that adds nothing covers nothing: the texture's smallest alpha scale.)
+            float glowCoverage = !additiveGlow ? 0f : glowMax <= 0.001f ? 1f / 255f : Mathf.Clamp(glowMax, 0.02f, 1f);
             bool autoSuppressLight = additiveGlow || suppressLightGeneration || isParticleOrTrailRenderer ||
                 shaderName.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 (shaderName.IndexOf("TextMeshPro", StringComparison.OrdinalIgnoreCase) >= 0 && shaderName.IndexOf("Distance Field", StringComparison.OrdinalIgnoreCase) >= 0) ||
@@ -870,6 +872,13 @@ namespace UnityRemix
                     hasEmission = true;
                     logger.LogInfo($"[Glow] '{material.name}' ({shaderName}) on {(renderer != null ? renderer.name : "?")}: additive, " +
                                    $"coverage x{matData.glowCoverage:F2}, emission ({matData.glowColor.r:F2},{matData.glowColor.g:F2},{matData.glowColor.b:F2})");
+                }
+                else if (matData.glowCoverage > 0f && matData.glowStrength <= 0f)
+                {
+                    // An untextured additive material that adds nothing: fully transparent.
+                    matData.alphaMode = AlphaMode.Blend;
+                    matData.albedoColor = new Color(0f, 0f, 0f, 0f);
+                    matData.translucentKind = TranslucentKind.None;
                 }
 
                 // Safety net: if no path confirmed real emission, ensure emissive state is clean.
