@@ -594,6 +594,20 @@ namespace UnityRemix
         /// Routes ScreenSpaceOverlay Canvases to render through the dedicated UI camera in ScreenSpaceCamera mode
         /// so their contents can be captured into a transparent UI texture.
         /// </summary>
+        private static readonly List<Canvas> parentCanvasScratch = new List<Canvas>();
+
+        private static bool HasParentCanvas(Canvas canvas)
+        {
+            var parent = canvas.transform.parent;
+            if (parent == null)
+                return false;
+            parentCanvasScratch.Clear();
+            parent.GetComponentsInParent(true, parentCanvasScratch);
+            bool found = parentCanvasScratch.Count > 0;
+            parentCanvasScratch.Clear();
+            return found;
+        }
+
         public void RouteOverlayCanvasesToCamera(Camera targetCam = null)
         {
             Camera uiCamera = targetCam ?? DedicatedUICamera ?? (uiCameras.Count > 0 ? uiCameras[0] : null);
@@ -657,8 +671,11 @@ namespace UnityRemix
                 }
 
                 // A nested canvas draws as part of its root (and reports the root's render mode):
-                // only root canvases are rebound.
-                if (!canvas.isRootCanvas)
+                // only root canvases are rebound. isRootCanvas alone is not enough: a canvas
+                // whose parent canvas is inactive reports itself as a root (Gloomwood's menu
+                // windows while MainWindow is hidden), and rebound then it keeps a camera mode
+                // of its own once its parent shows again, laid out in a corner.
+                if (!canvas.isRootCanvas || HasParentCanvas(canvas))
                     continue;
 
                 bool isOverlay = canvas.renderMode == RenderMode.ScreenSpaceOverlay;
