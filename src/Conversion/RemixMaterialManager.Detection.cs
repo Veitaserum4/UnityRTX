@@ -415,7 +415,7 @@ namespace UnityRemix
                     }
                 }
 
-                if (mat.HasProperty("_MainTex") && mat.mainTexture is Texture2D tex && tex.isReadable)
+                if (mat.HasProperty("_MainTex") && mat.mainTexture is Texture2D tex && UnityCompat.IsReadable(tex))
                 {
                     try
                     {
@@ -455,7 +455,7 @@ namespace UnityRemix
                     }
                 }
 
-                if (candidate == Color.clear && mat.HasProperty("_MainTex") && mat.mainTexture is Texture2D tex && tex.isReadable)
+                if (candidate == Color.clear && mat.HasProperty("_MainTex") && mat.mainTexture is Texture2D tex && UnityCompat.IsReadable(tex))
                 {
                     try
                     {

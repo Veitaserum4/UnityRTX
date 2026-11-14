@@ -58,7 +58,9 @@ namespace UnityRemix
         public static Color32[] TryReadColors(Mesh mesh) =>
             UnityCompat.HasMeshVertexAttributes ? TryReadColorsLayout(mesh) : null;
 
-        public static float[] TryReadComponent(Mesh mesh, VertexAttribute attribute, int component) =>
+        // attribute: UnityEngine.Rendering.VertexAttribute's value (an int, so callers compile
+        // where that type is missing).
+        public static float[] TryReadComponent(Mesh mesh, int attribute, int component) =>
             UnityCompat.HasMeshVertexAttributes ? TryReadComponentLayout(mesh, attribute, component) : null;
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -209,8 +211,9 @@ namespace UnityRemix
         /// read back from its GPU vertex buffer, or null when it is missing or cannot be read.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static float[] TryReadComponentLayout(Mesh mesh, VertexAttribute attribute, int component)
+        private static float[] TryReadComponentLayout(Mesh mesh, int attributeValue, int component)
         {
+            var attribute = (VertexAttribute)attributeValue;
             try
             {
                 var a = Find(mesh, attribute);

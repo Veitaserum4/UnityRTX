@@ -207,11 +207,14 @@ namespace UnityRemix
             Vector3 size = tData.size;
             int quadRes = hRes - 1;
 
-            logger.LogInfo($"[RemixTerrain] Processing terrain '{terrain.name}' (id={terrainId}): size={size}, heightmapRes={hRes}, layers={(tData.terrainLayers != null ? tData.terrainLayers.Length : 0)}, alphamaps={(tData.alphamapTextures != null ? tData.alphamapTextures.Length : 0)}");
+            logger.LogInfo($"[RemixTerrain] Processing terrain '{terrain.name}' (id={terrainId}): size={size}, heightmapRes={hRes}, layers={(UnityCompat.HasTerrainLayers ? LayerCount(tData) : -1)}, alphamaps={(tData.alphamapTextures != null ? tData.alphamapTextures.Length : 0)}");
 
             // 1. Bake composite albedo and normal textures
             int bakeRes = configBakeResolution != null ? Mathf.Clamp(configBakeResolution.Value, 512, 4096) : 2048;
-            var (bakedAlbedo, bakedNormal) = BakeTerrainTextures(terrain, tData, bakeRes);
+            // TerrainLayer is Unity 2018.3+: before, the terrain keeps a flat colour.
+            var (bakedAlbedo, bakedNormal) = UnityCompat.HasTerrainLayers
+                ? BakeTerrainTextures(terrain, tData, bakeRes)
+                : (FlatTerrainTexture(terrain), (Texture2D)null);
             if (bakedAlbedo != null) createdTextures.Add(bakedAlbedo);
             if (bakedNormal != null) createdTextures.Add(bakedNormal);
             terrainTextures[terrainId] = new List<Texture2D> { bakedAlbedo, bakedNormal };
@@ -225,12 +228,11 @@ namespace UnityRemix
 
             // Check for terrain holes
             bool[,] holes = null;
+            int holesResolution = 0;
             try
             {
-                if (tData.holesResolution > 0)
-                {
-                    holes = tData.GetHoles(0, 0, tData.holesResolution, tData.holesResolution);
-                }
+                if (UnityCompat.HasTerrainHoles)
+                    holes = ReadHoles(tData, out holesResolution);
             }
             catch { }
 
@@ -320,8 +322,8 @@ namespace UnityRemix
                             // Check hole
                             if (holes != null)
                             {
-                                int hx = Mathf.Clamp(Mathf.RoundToInt(((x0 + qx) / (float)quadRes) * (tData.holesResolution - 1)), 0, tData.holesResolution - 1);
-                                int hz = Mathf.Clamp(Mathf.RoundToInt(((z0 + qz) / (float)quadRes) * (tData.holesResolution - 1)), 0, tData.holesResolution - 1);
+                                int hx = Mathf.Clamp(Mathf.RoundToInt(((x0 + qx) / (float)quadRes) * (holesResolution - 1)), 0, holesResolution - 1);
+                                int hz = Mathf.Clamp(Mathf.RoundToInt(((z0 + qz) / (float)quadRes) * (holesResolution - 1)), 0, holesResolution - 1);
                                 if (!holes[hz, hx])
                                     continue; // Skip hole quad
                             }
@@ -384,6 +386,31 @@ namespace UnityRemix
         /// <summary>
         /// Bake composite albedo and normal textures from terrain layers and alphamaps.
         /// </summary>
+        // Terrain holes (2019.3) and layers (2018.3) are in methods of their own, compiled only
+        // where Unity has them (a method naming a missing member fails as a whole).
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool[,] ReadHoles(TerrainData tData, out int resolution)
+        {
+            resolution = tData.holesResolution;
+            return resolution > 0 ? tData.GetHoles(0, 0, resolution, resolution) : null;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static int LayerCount(TerrainData tData) => tData.terrainLayers != null ? tData.terrainLayers.Length : 0;
+
+        private static Texture2D FlatTerrainTexture(Terrain terrain)
+        {
+            var color = terrain.materialTemplate != null && terrain.materialTemplate.HasProperty("_Color")
+                ? terrain.materialTemplate.GetColor("_Color") : Color.gray;
+            var tex = new Texture2D(4, 4, TextureFormat.RGBA32, false);
+            var pixels = new Color[16];
+            for (int i = 0; i < pixels.Length; i++) pixels[i] = color;
+            tex.SetPixels(pixels);
+            tex.Apply();
+            return tex;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private (Texture2D albedo, Texture2D normal) BakeTerrainTextures(Terrain terrain, TerrainData tData, int resolution)
         {
             try
@@ -630,7 +657,7 @@ namespace UnityRemix
         private static Texture2D EnsureReadable(Texture2D tex, bool linear)
         {
             if (tex == null) return null;
-            if (tex.isReadable) return tex;
+            if (UnityCompat.IsReadable(tex)) return tex;
 
             try
             {

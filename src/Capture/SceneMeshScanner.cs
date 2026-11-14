@@ -252,7 +252,7 @@ namespace UnityRemix
                 return;
             if (colors == null || colors.Length == 0)
             {
-                logger.LogInfo($"[VertexColors] shader '{shaderName}' mesh '{mesh.name}': none ({(mesh.isReadable ? "readable" : "GPU readback")}, mesh has colors: {mesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color)})");
+                logger.LogInfo($"[VertexColors] shader '{shaderName}' mesh '{mesh.name}': none ({(mesh.isReadable ? "readable" : "GPU readback")}, mesh has colors: {UnityCompat.MeshHasAttribute(mesh, UnityCompat.AttributeColor)?.ToString() ?? "unknown"})");
                 return;
             }
             long r = 0, g = 0, b = 0, a = 0;
@@ -276,7 +276,7 @@ namespace UnityRemix
         // Enabled, but drawn by Unity only into shadow maps or not at all: checked per frame
         // (both can change at runtime), next to renderer.enabled.
         public static bool IsRenderingOff(Renderer renderer) =>
-            renderer.forceRenderingOff || renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
+            UnityCompat.IsForceRenderingOff(renderer) || renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
 
         public static bool IsRendererInvisible(Renderer renderer)
         {

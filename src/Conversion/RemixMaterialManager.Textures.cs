@@ -88,7 +88,7 @@ namespace UnityRemix
                 byte[] pixelData;
                 byte[] hashSourceData;
                 RemixAPI.remixapi_Format format;
-                uint actualMipLevels = (uint)unityTexture.mipmapCount;
+                uint actualMipLevels = (uint)UnityCompat.MipmapCount(unityTexture);
                 
                 // DXT5nm normal maps pack X in alpha and Y in green. Raw DXT5 upload
                 // would pass the packed channels to Remix unchanged, so we must decompress
@@ -97,7 +97,7 @@ namespace UnityRemix
                     (unityTexture.format == TextureFormat.DXT5 || unityTexture.format == TextureFormat.DXT5Crunched);
                 
                 // Readable DXT5nm: decompress on CPU to avoid GPU stall
-                if (isDXT5nm && unityTexture.isReadable)
+                if (isDXT5nm && UnityCompat.IsReadable(unityTexture))
                 {
                     Color32[] pixels = unityTexture.GetPixels32();
                     pixelData = new byte[pixels.Length * 4];
@@ -116,7 +116,7 @@ namespace UnityRemix
                         logger.LogInfo($"Unpacked readable DXT5nm normal map '{unityTexture.name}' ({unityTexture.width}x{unityTexture.height})");
                 }
                 // Handle non-readable textures via GPU readback
-                else if (!unityTexture.isReadable)
+                else if (!UnityCompat.IsReadable(unityTexture))
                 {
                     if (verboseTextureLogging.Value)
                         logger.LogInfo($"Texture '{unityTexture.name}' is not readable - forcing GPU readback");
@@ -338,7 +338,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (tex.isReadable)
+                if (UnityCompat.IsReadable(tex))
                 {
                     pixels = tex.GetPixels32();
                 }
@@ -535,7 +535,7 @@ namespace UnityRemix
         // A texture's top-level pixels (a GPU copy when it isn't readable).
         private static Color32[] ReadPixels32(Texture2D tex, bool linear)
         {
-            if (tex.isReadable)
+            if (UnityCompat.IsReadable(tex))
                 return tex.GetPixels32();
             var tmp = RenderTexture.GetTemporary(tex.width, tex.height, 0, RenderTextureFormat.ARGB32,
                 linear ? RenderTextureReadWrite.Linear : RenderTextureReadWrite.sRGB);
@@ -745,7 +745,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (tex.isReadable)
+                if (UnityCompat.IsReadable(tex))
                 {
                     pixels = tex.GetPixels32();
                 }
@@ -924,7 +924,7 @@ namespace UnityRemix
             try
             {
                 Color32[] pixels;
-                if (tex.isReadable)
+                if (UnityCompat.IsReadable(tex))
                 {
                     pixels = tex.GetPixels32();
                 }

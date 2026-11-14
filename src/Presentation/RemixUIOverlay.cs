@@ -150,7 +150,22 @@ namespace UnityRemix
 
         private bool srpEventSubscribed = false;
 
+        // RenderPipelineManager's camera events are Unity 2019.1+: older Unity (no SRP) skips them,
+        // and the subscribing code sits in methods of its own, compiled only where they exist.
         private void SubscribeSRPEvents()
+        {
+            if (UnityCompat.HasSrpCameraEvents)
+                SubscribeSRPEventsCore();
+        }
+
+        private void UnsubscribeSRPEvents()
+        {
+            if (UnityCompat.HasSrpCameraEvents)
+                UnsubscribeSRPEventsCore();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private void SubscribeSRPEventsCore()
         {
             if (!srpEventSubscribed)
             {
@@ -160,7 +175,8 @@ namespace UnityRemix
             }
         }
 
-        private void UnsubscribeSRPEvents()
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private void UnsubscribeSRPEventsCore()
         {
             if (srpEventSubscribed)
             {

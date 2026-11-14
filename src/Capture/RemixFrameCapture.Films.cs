@@ -72,7 +72,7 @@ namespace UnityRemix
                 else
                 {
                     values = SkinnedMeshGpuReader.TryReadComponent(mesh,
-                        (UnityEngine.Rendering.VertexAttribute)((int)UnityEngine.Rendering.VertexAttribute.TexCoord0 + film.coverageChannel),
+                        UnityCompat.AttributeTexCoord0 + film.coverageChannel,
                         film.coverageAxis);
                 }
                 filmCoverageValues[valuesKey] = values;

@@ -431,7 +431,7 @@ namespace UnityRemix
 
                 // Clamp processing resolution to at most 1024x1024 for instant processing (<1ms)
                 int maxDim = 1024;
-                if (w > maxDim || h > maxDim || !albedoTex.isReadable)
+                if (w > maxDim || h > maxDim || !UnityCompat.IsReadable(albedoTex))
                 {
                     int targetW = Mathf.Min(w, maxDim);
                     int targetH = Mathf.Min(h, maxDim);

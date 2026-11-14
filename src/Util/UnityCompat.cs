@@ -108,9 +108,116 @@ namespace UnityRemix
             typeof(Shader).Assembly.GetType("UnityEngine.Rendering.ShaderPropertyType") != null;
         public static readonly bool HasGraphicsBuffer =
             typeof(Mesh).Assembly.GetType("UnityEngine.GraphicsBuffer") != null;
-        // Mesh.GetVertexAttributeDimension and its family (2019.3).
-        public static readonly bool HasMeshVertexAttributes =
-            typeof(Mesh).GetMethod("GetVertexAttributeDimension", new[] { typeof(UnityEngine.Rendering.VertexAttribute) }) != null;
+        // Mesh.GetVertexAttributeDimension and its family (2019.3). Found by name: the
+        // VertexAttribute type itself is missing before 2019 (DUSK's 2018.2), and naming it
+        // here would fail this class's initializer.
+        public static readonly bool HasMeshVertexAttributes = HasMethod(typeof(Mesh), "GetVertexAttributeDimension");
+        // Mesh.HasVertexAttribute (2019.3).
+        public static readonly bool HasMeshAttributeQuery = HasMethod(typeof(Mesh), "HasVertexAttribute");
+        // SkinnedMeshRenderer.BakeMesh(Mesh, bool useScale) (2020.2).
+        public static readonly bool HasBakeMeshUseScale =
+            typeof(SkinnedMeshRenderer).GetMethod("BakeMesh", new[] { typeof(Mesh), typeof(bool) }) != null;
+        // TerrainData.holesResolution / GetHoles (2019.3) and terrainLayers (2018.3).
+        public static readonly bool HasTerrainHoles = HasMethod(typeof(TerrainData), "GetHoles");
+        public static readonly bool HasTerrainLayers = typeof(TerrainData).GetProperty("terrainLayers") != null;
+        // RenderPipelineManager's camera events (2019.1).
+        public static readonly bool HasSrpCameraEvents =
+            typeof(Camera).Assembly.GetType("UnityEngine.Rendering.RenderPipelineManager") != null;
+
+        private static bool HasMethod(Type type, string name)
+        {
+            foreach (var m in type.GetMethods())
+                if (m.Name == name) return true;
+            return false;
+        }
+
+        private static Func<T, R> Getter<T, R>(string property)
+        {
+            try
+            {
+                var getter = typeof(T).GetProperty(property)?.GetGetMethod();
+                return getter == null || getter.ReturnType != typeof(R) || getter.DeclaringType != typeof(T) ? null
+                    : (Func<T, R>)Delegate.CreateDelegate(typeof(Func<T, R>), getter);
+            }
+            catch { return null; }
+        }
+
+        private static readonly Func<Renderer, bool> forceRenderingOff = Getter<Renderer, bool>("forceRenderingOff");
+        private static readonly Func<Texture, bool> textureIsReadable = Getter<Texture, bool>("isReadable");
+        private static readonly Func<Texture, int> textureMipmapCount = Getter<Texture, int>("mipmapCount");
+        private static readonly Func<ParticleSystemRenderer, Vector3> particleFlip = Getter<ParticleSystemRenderer, Vector3>("flip");
+        private static readonly Func<CanvasRenderer, float> inheritedAlpha = CreateInheritedAlpha();
+
+        private static Func<CanvasRenderer, float> CreateInheritedAlpha()
+        {
+            var method = typeof(CanvasRenderer).GetMethod("GetInheritedAlpha", Type.EmptyTypes);
+            return method == null ? null : (Func<CanvasRenderer, float>)Delegate.CreateDelegate(typeof(Func<CanvasRenderer, float>), method);
+        }
+
+        /// <summary>Renderer.forceRenderingOff (2019.3); false where Unity lacks it.</summary>
+        public static bool IsForceRenderingOff(Renderer renderer) => forceRenderingOff != null && forceRenderingOff(renderer);
+
+        /// <summary>CanvasRenderer.GetInheritedAlpha (2019.1); 1 where Unity lacks it.</summary>
+        public static float GetInheritedAlpha(CanvasRenderer renderer) => inheritedAlpha != null ? inheritedAlpha(renderer) : 1f;
+
+        /// <summary>ParticleSystemRenderer.flip (2018.3); none where Unity lacks it.</summary>
+        public static Vector3 GetParticleFlip(ParticleSystemRenderer renderer) => particleFlip != null ? particleFlip(renderer) : Vector3.zero;
+
+        // Texture.isReadable and mipmapCount moved to Texture in 2018.3/2019; before, each texture
+        // class declares its own (looked up on the texture's type, by reflection, rarely).
+        private static readonly Dictionary<Type, System.Reflection.PropertyInfo> readableProps = new Dictionary<Type, System.Reflection.PropertyInfo>();
+        private static readonly Dictionary<Type, System.Reflection.PropertyInfo> mipProps = new Dictionary<Type, System.Reflection.PropertyInfo>();
+
+        private static object OwnProperty(Texture texture, Dictionary<Type, System.Reflection.PropertyInfo> cache, string name)
+        {
+            var type = texture.GetType();
+            System.Reflection.PropertyInfo prop;
+            lock (cache)
+            {
+                if (!cache.TryGetValue(type, out prop))
+                    cache[type] = prop = type.GetProperty(name);
+            }
+            return prop?.GetValue(texture, null);
+        }
+
+        public static bool IsReadable(Texture texture)
+        {
+            if (texture == null) return false;
+            if (textureIsReadable != null) return textureIsReadable(texture);
+            return OwnProperty(texture, readableProps, "isReadable") is bool readable && readable;
+        }
+
+        public static int MipmapCount(Texture texture)
+        {
+            if (texture == null) return 1;
+            if (textureMipmapCount != null) return textureMipmapCount(texture);
+            return OwnProperty(texture, mipProps, "mipmapCount") is int count ? count : 1;
+        }
+
+        /// <summary>Mesh.HasVertexAttribute (2019.3) for UnityEngine.Rendering.VertexAttribute's value; null where Unity lacks it.</summary>
+        public static bool? MeshHasAttribute(Mesh mesh, int attribute) =>
+            HasMeshAttributeQuery && mesh != null ? QueryMeshAttribute(mesh, attribute) : (bool?)null;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool QueryMeshAttribute(Mesh mesh, int attribute) =>
+            mesh.HasVertexAttribute((UnityEngine.Rendering.VertexAttribute)attribute);
+
+        // UnityEngine.Rendering.VertexAttribute's values (stable across versions).
+        public const int AttributeNormal = 1, AttributeColor = 3, AttributeTexCoord0 = 4;
+
+        /// <summary>SkinnedMeshRenderer.BakeMesh with useScale (2020.2); older Unity bakes with the scale already.</summary>
+        public static void BakeMeshScaled(SkinnedMeshRenderer skinned, Mesh mesh)
+        {
+            if (HasBakeMeshUseScale) BakeWithScale(skinned, mesh);
+            else skinned.BakeMesh(mesh);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void BakeWithScale(SkinnedMeshRenderer skinned, Mesh mesh) => skinned.BakeMesh(mesh, true);
+
+        /// <summary>GraphicsSettings.currentRenderPipeline (2019.3), null where Unity lacks it.</summary>
+        public static object CurrentRenderPipeline() =>
+            typeof(UnityEngine.Rendering.GraphicsSettings).GetProperty("currentRenderPipeline")?.GetValue(null, null);
 
         /// <summary>Keeps a particle system simulating while off screen (where Unity has the setting).</summary>
         public static void KeepSimulating(ParticleSystem system)

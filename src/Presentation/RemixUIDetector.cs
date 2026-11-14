@@ -573,7 +573,7 @@ namespace UnityRemix
                         // Enable alpha output on URP asset so intermediate blits / passes preserve alpha
                         try
                         {
-                            var pipeAsset = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline;
+                            var pipeAsset = UnityCompat.CurrentRenderPipeline();
                             if (pipeAsset != null)
                             {
                                 var alphaField = pipeAsset.GetType().GetField("m_AllowPostProcessAlphaOutput", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);

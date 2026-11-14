@@ -127,7 +127,7 @@ namespace UnityRemix
             var text = $"renderer '{renderer.name}' ({renderer.GetType().Name}) path '{Path(renderer.transform)}' layer {LayerMask.LayerToName(go.layer)}({go.layer}), shadows {renderer.shadowCastingMode}, mesh '{(mesh != null ? mesh.name : "-")}'";
             if (mesh != null)
             {
-                text += $" {mesh.vertexCount} verts, readable {mesh.isReadable}, colors {mesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color)}";
+                text += $" {mesh.vertexCount} verts, readable {mesh.isReadable}, colors {UnityCompat.MeshHasAttribute(mesh, UnityCompat.AttributeColor)}";
                 var t = renderer.transform;
                 text += $", rotation {t.rotation.eulerAngles}, scale {t.lossyScale}";
             }
@@ -204,7 +204,7 @@ namespace UnityRemix
         {
             if (!(m.mainTexture is Texture2D tex))
                 return "";
-            string info = $" mainTex '{tex.name}' {tex.width}x{tex.height} {tex.format} mips {tex.mipmapCount} filter {tex.filterMode} wrap {tex.wrapMode} readable {tex.isReadable}";
+            string info = $" mainTex '{tex.name}' {tex.width}x{tex.height} {tex.format} mips {UnityCompat.MipmapCount(tex)} filter {tex.filterMode} wrap {tex.wrapMode} readable {UnityCompat.IsReadable(tex)}";
             if (!dumpedTextures.Add(tex.GetInstanceID()))
                 return info;
             try

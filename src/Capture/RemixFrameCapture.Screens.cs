@@ -178,7 +178,7 @@ namespace UnityRemix
                     baked.MarkDynamic();
                     previewBakedMeshes[rid] = baked;
                 }
-                skinned.BakeMesh(baked, true);
+                UnityCompat.BakeMeshScaled(skinned, baked);
                 data = new PreviewMesh
                 {
                     vertices = baked.vertices,
@@ -458,7 +458,7 @@ namespace UnityRemix
             Color col = g.color;
             // CanvasGroup fades (a shop page switching) multiply in.
             if (screenRenderer != null)
-                col.a *= screenRenderer.GetInheritedAlpha();
+                col.a *= UnityCompat.GetInheritedAlpha(screenRenderer);
             if (col.a <= 0.001f)
                 return;
 

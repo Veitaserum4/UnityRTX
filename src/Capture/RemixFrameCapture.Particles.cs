@@ -1138,7 +1138,7 @@ namespace UnityRemix
             string reason = null;
             if (space == ParticleSystemSimulationSpace.Custom) reason = "custom simulation space";
             else if (mesh == null || pr.meshCount != 1) reason = "not exactly one mesh";
-            else if (pr.flip != Vector3.zero) reason = "flipped particles";
+            else if (UnityCompat.GetParticleFlip(pr) != Vector3.zero) reason = "flipped particles";
             else if (!ReferenceEquals(inst.mesh, mesh) && !PrepareMeshParticleInstancing(inst, pr, mesh, out reason)) { }
             if (reason != null)
             {
@@ -1414,7 +1414,7 @@ namespace UnityRemix
                     {
                         describedParticleTrails.Add(pr.GetInstanceID());
                         if (VerboseLog.On) logger.LogInfo($"[ParticleTrail] '{pr.name}': {trailMesh.vertexCount} verts, {trailMesh.subMeshCount} submeshes, mat '{trailMat.name}' shader '{(trailMat.shader != null ? trailMat.shader.name : "-")}' queue {trailMat.renderQueue}{DescribeBlend(trailMat)}, " +
-                                       $"normals {trailMesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Normal)}, colors {trailMesh.HasVertexAttribute(UnityEngine.Rendering.VertexAttribute.Color)} | Remix {trailDescription}");
+                                       $"normals {UnityCompat.MeshHasAttribute(trailMesh, UnityCompat.AttributeNormal)}, colors {UnityCompat.MeshHasAttribute(trailMesh, UnityCompat.AttributeColor)} | Remix {trailDescription}");
                     }
 
                     // Use the full local-to-world matrix so position is correctly applied.
