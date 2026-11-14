@@ -177,6 +177,8 @@ namespace UnityRemix
                 
                 Material primaryMat = info.primarySharedMaterial;
                 int matId = ResolveMaterial(skinned, primaryMat, doLog);
+                var primaryFilm = resolvedPartialFilm;
+                int primaryBareMatId = resolvedBareMatId;
                 int sharedMeshId = sharedMesh.GetInstanceID();
 
                 // Compute BlendShape hash from active weights to support custom character creator proportions (belly, torso, etc.)
@@ -275,36 +277,32 @@ namespace UnityRemix
                         
                         // Resolve per-submesh material
                         int subMatId = matId; // default to renderer-best material
-                        if (smMaterials != null && sub < smMaterials.Length && smMaterials[sub] != null)
+                        var subFilm = primaryFilm;
+                        int bareMatId = primaryBareMatId;
+                        if (smMaterials != null && sub < smMaterials.Length && smMaterials[sub] != null && sub != 0)
                         {
-                            var subMat = smMaterials[sub];
-                            subMatId = (sub == 0) ? matId : ResolveMaterial(skinned, subMat, doLog);
-                            if (subMatId == 0) subMatId = matId;
+                            subMatId = ResolveMaterial(skinned, smMaterials[sub], doLog);
+                            subFilm = resolvedPartialFilm;
+                            bareMatId = resolvedBareMatId;
+                            if (subMatId == 0) { subMatId = matId; subFilm = primaryFilm; bareMatId = primaryBareMatId; }
                         }
                         
                         // Unique key per submesh: xor with Knuth multiplied submesh index
                         int subSkinnedId = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                         ulong subMeshHash = (sub == 0) ? combinedMeshHash : combinedMeshHash ^ ((ulong)(uint)sub * 2654435761UL);
-                        // A Remix mesh carries its material, and this mesh is created once per hash. The
-                        // material is part of the hash so a renderer whose property block changes its look
-                        // (or two renderers of one mesh that look different) gets its own mesh.
-                        subMeshHash = (subMeshHash ^ (ulong)(uint)subMatId) * 1099511628211UL;
 
-                        persistentSkinnedData[subSkinnedId] = new SkinnedMeshData
+                        // A partial film: the coated triangles under the filmed material, the rest
+                        // under the bare one (each its own key and mesh).
+                        if (subFilm.HasValue && SplitByFilm(sharedMesh, sub, subTris, subFilm.Value, out var coated, out var bare))
                         {
-                            meshId = subSkinnedId,
-                            remixMeshHash = subMeshHash,
-                            materialId = subMatId,
-                            vertices = skinData.bindVertices,
-                            normals = skinData.bindNormals,
-                            uvs = skinData.uvs,
-                            colors = skinData.colors,
-                            triangles = subTris,
-                            localToWorld = unscaledMatrix,
-                            boneTransforms = boneMatrices,
-                            skinningData = skinData
-                        };
-                        validSkinnedIds.Add(subSkinnedId);
+                            int filmKey = (int)((uint)subSkinnedId ^ 0x5F11C0A7u);
+                            AddGpuSkinned(subSkinnedId, subMeshHash, bareMatId, bare, skinData, unscaledMatrix, boneMatrices);
+                            AddGpuSkinned(filmKey, subMeshHash ^ 0x5F11C0A75F11C0A7UL, subMatId, coated, skinData, unscaledMatrix, boneMatrices);
+                            if (viewModel) viewModelSkinnedIds.Add(filmKey);
+                            if (playerBody) playerBodySkinnedIds.Add(filmKey);
+                            continue;
+                        }
+                        AddGpuSkinned(subSkinnedId, subMeshHash, subMatId, subTris, skinData, unscaledMatrix, boneMatrices);
                     }
                     gpuSkinned++;
                     continue;

@@ -769,8 +769,12 @@ namespace UnityRemix.Games.Ultrakill
         // in each of its renderers' property blocks. ULTRAKILL/Master's ENEMY variant fills the
         // enemy with oil from the bottom up as it rises (with _SandTex noise), the oil 75% of the
         // colour: _OilSlick's interference ramp, black facing the camera and rainbow towards the
-        // rim. Path-traced, that is a dark, smooth surface under a thin film. Coverage is taken
-        // as uniform, its amount in fifths (one material per fifth).
+        // rim. Path-traced, that is a dark, smooth surface under a thin film.
+        // Coverage: the oil coats where h - amount + 0.4 n < 0 (else the bare colour), h the
+        // mesh's baked height (TEXCOORD2.y, -1 at the feet to 1 at the top) * 0.5 + 0.5, n
+        // screen-space _SandTex noise in -1.5..0.5 (mean -0.5): in TEXCOORD2.y units, below
+        // 2 amount - 0.6 give or take 0.8. The coated triangles are split off (partial film), in
+        // tenths of the amount (one mesh per tenth); a full film where a mesh can't be split.
         private static readonly int OiledAmount = Shader.PropertyToID("_OiledAmount");
 
         public override bool GetIridescence(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Iridescence film)
@@ -778,22 +782,27 @@ namespace UnityRemix.Games.Ultrakill
             film = default;
             if (block == null || block.isEmpty || !material.IsKeywordEnabled("ENEMY"))
                 return false;
-            float amount = Mathf.Ceil(Mathf.Clamp01(block.GetFloat(OiledAmount)) * 5f) / 5f;
+            float amount = Mathf.Ceil(Mathf.Clamp01(block.GetFloat(OiledAmount)) * 10f) / 10f;
             if (amount <= 0f || material.shader == null || material.shader.name != "ULTRAKILL/Master")
                 return false;
             // Stronger than a real oil film (index 1.45, a few percent reflectance), so the rainbow
             // reads as boldly as the game's ramp; the flow swirls the thickness through 100-900 nm.
             film = new RemixMaterialManager.Iridescence
             {
-                strength = Mathf.Lerp(0.7f, 1f, amount),
+                strength = 1f,
                 filmIndex = 1.9f,
                 thickness = 500f,
                 flowAmplitude = 400f,
                 flowScale = 0.44f,
                 flowSpeed = 0.3f,
-                structural = Mathf.Lerp(0.5f, 0.9f, amount), // the rainbow in the diffuse colour too, as the game's unlit oil
-                albedoScale = 0.7f * (1f - 0.6f * amount),
-                roughness = Mathf.Lerp(0.35f, 0.05f, amount)
+                structural = 0.9f, // the rainbow in the diffuse colour too, as the game's unlit oil
+                albedoScale = 0.28f,
+                roughness = 0.05f,
+                partial = amount < 1f,
+                coverageChannel = 2,
+                coverageAxis = 1,
+                coverageBelow = 2f * amount - 0.6f,
+                coverageNoise = 0.35f
             };
             return true;
         }

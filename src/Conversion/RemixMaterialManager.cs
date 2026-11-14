@@ -153,14 +153,35 @@ namespace UnityRemix
             public float flowAmplitude, flowScale, flowSpeed;
             public float structural;
             public float albedoScale, roughness;
+            // Partial coverage: the film coats only the triangles whose vertices' UV set
+            // coverageChannel, component coverageAxis, average below coverageBelow (each
+            // vertex moved by up to +-coverageNoise, fixed per vertex, for a ragged edge); the
+            // rest keep the bare material. Applied where the capture can split a mesh (GPU-
+            // skinned meshes); elsewhere the film coats the whole surface.
+            public bool partial;
+            public int coverageChannel, coverageAxis;
+            public float coverageBelow, coverageNoise;
 
             public int Hash()
             {
                 unchecked
                 {
                     int h = 0x1f11;
-                    foreach (var v in new[] { strength, filmIndex, thickness, flowAmplitude, flowScale, flowSpeed, structural, albedoScale, roughness })
-                        h = h * 397 ^ Mathf.RoundToInt(v * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(strength * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(filmIndex * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(thickness * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(flowAmplitude * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(flowScale * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(flowSpeed * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(structural * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(albedoScale * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(roughness * 1000f);
+                    if (partial)
+                    {
+                        h = h * 397 ^ (coverageChannel * 8 + coverageAxis + 1);
+                        h = h * 397 ^ Mathf.RoundToInt(coverageBelow * 1000f);
+                        h = h * 397 ^ Mathf.RoundToInt(coverageNoise * 1000f);
+                    }
                     return h;
                 }
             }

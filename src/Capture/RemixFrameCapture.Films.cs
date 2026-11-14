@@ -1,0 +1,121 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace UnityRemix
+{
+    // Partial thin films (RemixMaterialManager.Iridescence.partial) on GPU-skinned meshes: a
+    // submesh splits into the triangles the film coats and the rest, each drawn as its own mesh.
+    public partial class RemixFrameCapture
+    {
+        private readonly Dictionary<long, float[]> filmCoverageValues = new Dictionary<long, float[]>();
+        private readonly Dictionary<long, KeyValuePair<int[], int[]>> filmSplits = new Dictionary<long, KeyValuePair<int[], int[]>>();
+        private readonly List<Vector4> filmUvScratch = new List<Vector4>();
+        private readonly List<int> filmCoated = new List<int>(), filmBare = new List<int>();
+
+        private void AddGpuSkinned(int key, ulong meshHash, int materialId, int[] triangles, CachedSkinningData skinData,
+                                   Matrix4x4 localToWorld, Matrix4x4[] boneMatrices)
+        {
+            if (triangles == null || triangles.Length == 0)
+                return;
+            // A Remix mesh carries its material, and this mesh is created once per hash. The
+            // material is part of the hash so a renderer whose property block changes its look
+            // (or two renderers of one mesh that look different) gets its own mesh.
+            meshHash = (meshHash ^ (ulong)(uint)materialId) * 1099511628211UL;
+            persistentSkinnedData[key] = new SkinnedMeshData
+            {
+                meshId = key,
+                remixMeshHash = meshHash,
+                materialId = materialId,
+                vertices = skinData.bindVertices,
+                normals = skinData.bindNormals,
+                uvs = skinData.uvs,
+                colors = skinData.colors,
+                triangles = triangles,
+                localToWorld = localToWorld,
+                boneTransforms = boneMatrices,
+                skinningData = skinData
+            };
+            reusableValidSkinnedIds.Add(key);
+        }
+
+        // The submesh's triangles the film coats (their vertices' coverage values, each moved by a
+        // fixed per-vertex noise, average below coverageBelow) and the rest; cached per mesh,
+        // submesh and coverage. False: no split (not partial, or the mesh lacks the UV set).
+        private bool SplitByFilm(Mesh mesh, int sub, int[] triangles, RemixMaterialManager.Iridescence film,
+                                 out int[] coated, out int[] bare)
+        {
+            coated = bare = null;
+            if (!film.partial || mesh == null || triangles == null || film.coverageChannel < 0 || film.coverageChannel > 7 ||
+                film.coverageAxis < 0 || film.coverageAxis > 3)
+                return false;
+            int meshId = mesh.GetInstanceID();
+            long valuesKey = ((long)meshId << 32) | (uint)(film.coverageChannel * 4 + film.coverageAxis);
+            if (!filmCoverageValues.TryGetValue(valuesKey, out var values))
+            {
+                values = null;
+                if (mesh.isReadable)
+                {
+                    filmUvScratch.Clear();
+                    mesh.GetUVs(film.coverageChannel, filmUvScratch);
+                    if (filmUvScratch.Count == mesh.vertexCount && filmUvScratch.Count > 0)
+                    {
+                        values = new float[filmUvScratch.Count];
+                        for (int v = 0; v < values.Length; v++)
+                            values[v] = filmUvScratch[v][film.coverageAxis];
+                    }
+                    filmUvScratch.Clear();
+                }
+                filmCoverageValues[valuesKey] = values;
+            }
+            if (values == null)
+                return false;
+
+            long splitKey;
+            unchecked
+            {
+                splitKey = valuesKey * 31 + sub;
+                splitKey = splitKey * 397 ^ Mathf.RoundToInt(film.coverageBelow * 1000f);
+                splitKey = splitKey * 397 ^ Mathf.RoundToInt(film.coverageNoise * 1000f);
+                splitKey = splitKey * 397 ^ triangles.Length;
+            }
+            if (filmSplits.TryGetValue(splitKey, out var split))
+            {
+                coated = split.Key;
+                bare = split.Value;
+                return true;
+            }
+            if (filmSplits.Count > 512)
+                filmSplits.Clear();
+
+            filmCoated.Clear();
+            filmBare.Clear();
+            for (int t = 0; t + 2 < triangles.Length; t += 3)
+            {
+                float sum = 0f;
+                for (int k = 0; k < 3; k++)
+                {
+                    int v = triangles[t + k];
+                    sum += v < values.Length ? values[v] + film.coverageNoise * VertexNoise(v) : float.MaxValue;
+                }
+                var into = sum / 3f < film.coverageBelow ? filmCoated : filmBare;
+                into.Add(triangles[t]);
+                into.Add(triangles[t + 1]);
+                into.Add(triangles[t + 2]);
+            }
+            coated = filmCoated.ToArray();
+            bare = filmBare.ToArray();
+            filmSplits[splitKey] = new KeyValuePair<int[], int[]>(coated, bare);
+            return true;
+        }
+
+        // -1..1, fixed per vertex index.
+        private static float VertexNoise(int v)
+        {
+            uint h = (uint)v * 0x9E3779B1u;
+            h ^= h >> 15;
+            h *= 0x85EBCA77u;
+            h ^= h >> 13;
+            return (h & 0xFFFF) / 32767.5f - 1f;
+        }
+    }
+}

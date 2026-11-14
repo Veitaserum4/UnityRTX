@@ -17,10 +17,12 @@ namespace UnityRemix
     {
         // The profile's per-renderer looks for a material (GameProfile.GetColorMask and
         // GetIridescence, read from the renderer's property block), each folded into matId.
+        // bareMatId: the same material without the film (what a partial film leaves bare).
         private RemixMaterialManager.ColorMask? ResolveColorMask(Renderer renderer, Material material, ref int matId,
-            out RemixMaterialManager.Iridescence? film)
+            out RemixMaterialManager.Iridescence? film, out int bareMatId)
         {
             film = null;
+            bareMatId = matId;
             if (renderer == null || material == null)
                 return null;
             if (colorMaskBlock == null)
@@ -28,16 +30,28 @@ namespace UnityRemix
             colorMaskBlock.Clear();
             if (renderer.HasPropertyBlock())
                 renderer.GetPropertyBlock(colorMaskBlock);
+            RemixMaterialManager.ColorMask? mask = null;
+            if (Games.GameProfiles.GetColorMask(material, colorMaskBlock, out var colorMask))
+            {
+                matId = HashCombine(matId, colorMask.Hash());
+                mask = colorMask;
+            }
+            bareMatId = matId;
             if (Games.GameProfiles.GetIridescence(material, colorMaskBlock, out var f))
             {
                 film = f;
                 matId = HashCombine(matId, f.Hash());
             }
-            if (!Games.GameProfiles.GetColorMask(material, colorMaskBlock, out var colorMask))
-                return null;
-            matId = HashCombine(matId, colorMask.Hash());
-            return colorMask;
+            return mask;
         }
+
+        private RemixMaterialManager.ColorMask? ResolveColorMask(Renderer renderer, Material material, ref int matId,
+            out RemixMaterialManager.Iridescence? film) =>
+            ResolveColorMask(renderer, material, ref matId, out film, out _);
+
+        // What the last ResolveMaterial found: a partial film, and the material it leaves bare.
+        private RemixMaterialManager.Iridescence? resolvedPartialFilm;
+        private int resolvedBareMatId;
         
         /// <summary>
         /// Resolve the best material for a skinned mesh renderer. Returns material instance ID.
@@ -96,6 +110,7 @@ namespace UnityRemix
         private int ResolveMaterial(SkinnedMeshRenderer skinned, Material targetMat = null, bool doLog = false)
         {
             int matId = 0;
+            resolvedPartialFilm = null;
             Material bestMaterial = targetMat;
             
             if (bestMaterial == null)
@@ -248,8 +263,14 @@ namespace UnityRemix
                     catch { }
                 }
 
-                var colorMask = ResolveColorMask(skinned, bestMaterial, ref matId, out var film);
+                var colorMask = ResolveColorMask(skinned, bestMaterial, ref matId, out var film, out int bareMatId);
                 materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask, film: film);
+                if (film.HasValue && film.Value.partial)
+                {
+                    materialManager.CaptureMaterialTextures(bestMaterial, bareMatId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask);
+                    resolvedPartialFilm = film;
+                    resolvedBareMatId = bareMatId;
+                }
                 
 
             }

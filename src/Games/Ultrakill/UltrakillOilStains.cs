@@ -310,8 +310,11 @@ namespace UnityRemix.Games.Ultrakill
                 var slickPixels = Readable(slick);
                 var sandPixels = Readable(sand);
                 bool linearSpace = QualitySettings.activeColorSpace == ColorSpace.Linear;
-                // With the film, the ramp's mean colour: the film draws the rainbow itself.
+                // With the film, one flat colour for every stain texel: the ramp's mean at the
+                // mean coverage. The film draws the rainbow itself, and overlapping stains (which
+                // tint once, by the darkest) then show no stain's outline inside another.
                 Color meanRamp = film ? Mean(slickPixels) : Color.clear;
+                float meanCover = film ? MeanCover(atlasPixels) : 0f;
                 int width = CellSize * 5, height = CellSize;
                 var pixels = new Color32[width * height];
                 for (int y = 0; y < height; y++)
@@ -330,7 +333,7 @@ namespace UnityRemix.Games.Ultrakill
                         float lu = (x % CellSize + 0.5f) / CellSize;
                         float n = sandPixels.GetPixelBilinear(lu * 0.35f + cell * 0.37f, v * 0.35f + cell * 0.61f).r;
                         Color ramp = film ? meanRamp : slickPixels.GetPixelBilinear(n + AverageGrazing, n * 5f);
-                        float cover = splat.r * splat.r;
+                        float cover = film ? meanCover : splat.r * splat.r;
                         var m = new Color(
                             Mathf.Clamp01(ramp.r * cover + 0.32f),
                             Mathf.Clamp01(ramp.g * cover),
@@ -363,6 +366,21 @@ namespace UnityRemix.Games.Ultrakill
                 logger.LogWarning($"[UltrakillOilStains] baking the oil paint failed: {e.Message}");
             }
             return paintMaterialId;
+        }
+
+        // The mean red squared over the atlas texels a stain keeps (alpha - red > 0.01).
+        private static float MeanCover(Texture2D atlas)
+        {
+            var pixels = atlas.GetPixels();
+            float sum = 0f;
+            int kept = 0;
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                if (pixels[i].a - pixels[i].r <= 0.01f) continue;
+                sum += pixels[i].r * pixels[i].r;
+                kept++;
+            }
+            return kept > 0 ? sum / kept : 0f;
         }
 
         private static Color Mean(Texture2D texture)
