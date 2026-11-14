@@ -669,6 +669,9 @@ namespace UnityRemix
                 {
                     SanitizeAndIncludeCanvasLayers(uiCamera, canvas.gameObject);
 
+                    string original = loggedRoutedCanvases.Contains(canvas.GetInstanceID()) ? null : $"was {canvas.renderMode}" + (canvas.renderMode == RenderMode.ScreenSpaceCamera
+                        ? $" on '{(canvas.worldCamera != null ? canvas.worldCamera.name : "none")}' at {canvas.planeDistance:F2}" : "") +
+                        $", scale {canvas.transform.lossyScale.x:G3}, scaler {(canvas.GetComponent<UnityEngine.UI.CanvasScaler>()?.uiScaleMode.ToString() ?? "none")}";
                     if (!originalCanvasRenderModes.ContainsKey(canvas))
                     {
                         originalCanvasRenderModes[canvas] = canvas.renderMode;
@@ -696,7 +699,7 @@ namespace UnityRemix
 
                     if (loggedRoutedCanvases.Add(canvas.GetInstanceID()))
                     {
-                        logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X})");
+                        logger?.LogInfo($"[RemixUIDetector] Routed Canvas '{canvas.name}' [{GetHierarchyPath(canvas.transform)}] to ScreenSpaceCamera (cam: '{uiCamera.name}', planeDist: {canvas.planeDistance:F2}, mask: 0x{uiCamera.cullingMask:X}; {original})");
                     }
                 }
                 else if (canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera == uiCamera)
