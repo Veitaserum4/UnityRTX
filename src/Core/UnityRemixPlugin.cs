@@ -253,7 +253,7 @@ namespace UnityRemix
             configEnableParticleDistanceCulling = Config.Bind("Rendering", "EnableParticleDistanceCulling", false,
                 "Enable distance-based culling for particle systems. When enabled, particle systems beyond ParticleMaxDistance are not rendered.");
 
-            configRasterParticles = Config.Bind("Rendering", "RasterParticles", false,
+            configRasterParticles = Config.Bind("Rendering", "RasterParticles", true,
                 "Draw particle systems and trails with OpenRemix's raster backend over the path-traced image instead of path tracing them. " +
                 "Cheaper with many particles; they are not lit, reflected, refracted or shadowed by the path tracer.");
             
@@ -282,7 +282,7 @@ namespace UnityRemix
             configEnableLights = Config.Bind("Lighting", "EnableLights", true,
                 "Convert Unity lights to RTX Remix lights.");
             
-            configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 1.0f,
+            configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 3.212f,
                 new ConfigDescription("Global multiplier for all light intensities.",
                     new AcceptableValueRange<float>(0.01f, 100f)));
             RemixMaterialManager.LightIntensityMultiplier = configLightIntensityMultiplier;
@@ -302,7 +302,7 @@ namespace UnityRemix
             configCaptureParticles = Config.Bind("Debug", "CaptureParticles", true,
                 "Enable capturing and rendering of particle systems.");
             
-            configHardwareSkinning = Config.Bind("Performance", "HardwareSkinning", false,
+            configHardwareSkinning = Config.Bind("Performance", "HardwareSkinning", true,
                 "Use GPU hardware skinning for animated meshes. When off, uses CPU BakeMesh fallback.");
             
             configCaptureTextures = Config.Bind("Debug", "CaptureTextures", true,
@@ -328,7 +328,7 @@ namespace UnityRemix
                 "Comma-separated list of Unity layer indices to disable (e.g. '8,13,21'). Managed by the in-game UI.");
             
             // Single Window Settings
-            configSingleWindow = Config.Bind("Window", "SingleWindow", false,
+            configSingleWindow = Config.Bind("Window", "SingleWindow", true,
                 "Render RTX Remix inside a single window instead of separate game and Remix windows.");
 
             try
@@ -359,7 +359,7 @@ namespace UnityRemix
             configSingleWindowUIOverlay = Config.Bind("Window", "SingleWindowUIOverlay", true,
                 "For Embedded mode, renders autodetected UI directly into the RTX Remix viewport using native OpenRemix screen overlay.");
 
-            configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", false,
+            configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", true,
                 "Hides the game UI overlay when the Remix Alt+X menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
 
             configUIOverlayClearBlack = Config.Bind("Window", "UIOverlayClearBlack", true,

@@ -1199,10 +1199,24 @@ namespace UnityRemix
                 Default("rtx.native.pathtrace.accumulate", "false");
                 Default("rtx.native.pathtrace.taa", "true");
                 Default("rtx.native.pathtrace.denoiser", "reblur-sh");
-                Default("rtx.native.pathtrace.sharc", "false");
+                Default("rtx.native.pathtrace.sharc", "true");
                 Default("rtx.native.pathtrace.sigma", "false");
                 Default("rtx.native.pathtrace.sky", "true");
                 Default("rtx.native.pathtrace.viewModel", "true");
+                Default("rtx.native.pathtrace.viewModelScale", "0.15");
+                Default("rtx.native.pathtrace.dlssRayReconstructionPresetOverride", "true");
+                Default("rtx.native.pathtrace.dlssRayReconstructionPreset", "F");
+                // Unity games' own exposure: fixed, without Prism's tone curve, a little contrast.
+                Default("rtx.native.pathtrace.prism", "false");
+                Default("rtx.native.pathtrace.autoExposure", "false");
+                Default("rtx.native.pathtrace.contrast", "true");
+                Default("rtx.native.pathtrace.sparseRendering", "true");
+                Default("rtx.native.pathtrace.sparseSamplingRate", "0.357");
+                Default("rtx.native.pathtrace.sparseResolutionExponent", "0.69");
+                Default("rtx.native.pathtrace.sparseQuality", "0.8");
+                // Volumetrics from the scene's own fog, not the panel's override values.
+                Default("rtx.native.pathtrace.volumetrics", "true");
+                Default("rtx.native.pathtrace.volumetricOverride", "false");
                 settings.Add(("rtx.native.gpuPassTimers", "true"));
 
                 logger.LogInfo(firstRun
