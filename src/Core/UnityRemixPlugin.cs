@@ -362,7 +362,7 @@ namespace UnityRemix
             configHideUIOnRemixMenu = Config.Bind("Window", "HideUIOnRemixMenu", true,
                 "Hides the game UI overlay when the Remix Alt+X menu is opened in Single Window mode, preventing HUD/crosshair from obstructing the Remix menu.");
 
-            configUIOverlayClearBlack = Config.Bind("Window", "UIOverlayClearBlack", true,
+            configUIOverlayClearBlack = Config.Bind("Window", "UIOverlayClearBlack", false,
                 "When enabled, treats pure opaque black pixels (RGB=0, A=255) as transparent. Required for games where the camera clear or render pipeline fills the alpha channel with 1.0.");
 
             // Performance & Frame Throttling

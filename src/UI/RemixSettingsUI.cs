@@ -49,6 +49,7 @@ namespace UnityRemix
         private bool _autoDetectUI;
         private bool _singleWindowUIOverlay;
         private bool _hideUIOnRemixMenu;
+        private bool _uiOverlayClearBlack;
         private string _selectedCameraName;
         private int _engineFPSLimit;
         private bool _preventSlowMotion;
@@ -435,6 +436,14 @@ namespace UnityRemix
                     "Finds the game's UI and HUD cameras and canvases.");
                 Toggle("UI overlay (restart)", "SingleWindowUIOverlay", ref _singleWindowUIOverlay,
                     "Draws the detected UI over the Remix image with OpenRemix's overlay.");
+                if (_singleWindowUIOverlay)
+                {
+                    RemixImGui.Indent();
+                    Toggle("Black is transparent", "UIOverlayClearBlack", ref _uiOverlayClearBlack,
+                        "Pure opaque black UI pixels show the Remix image instead. For games whose UI camera " +
+                        "clears to opaque black; leave off otherwise, or black text and outlines disappear.");
+                    RemixImGui.Unindent();
+                }
                 RemixImGui.Unindent();
             }
 
@@ -709,6 +718,7 @@ namespace UnityRemix
             _autoDetectUI = _plugin.GetConfigBool("AutoDetectUI");
             _singleWindowUIOverlay = _plugin.GetConfigBool("SingleWindowUIOverlay");
             _hideUIOnRemixMenu = _plugin.GetConfigBool("HideUIOnRemixMenu");
+            _uiOverlayClearBlack = _plugin.GetConfigBool("UIOverlayClearBlack");
             _selectedCameraName = _plugin.GetConfigString("CameraName");
             _engineFPSLimit = _plugin.GetConfigInt("EngineFPSLimit");
             _preventSlowMotion = _plugin.GetConfigBool("PreventSlowMotion");
