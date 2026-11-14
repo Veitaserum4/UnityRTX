@@ -789,10 +789,10 @@ namespace UnityRemix.Games.Ultrakill
                 filmIndex = 1.9f,
                 thickness = 500f,
                 flowAmplitude = 400f,
-                flowScale = 0.35f,
+                flowScale = 0.44f,
                 flowSpeed = 0.3f,
                 structural = Mathf.Lerp(0.5f, 0.9f, amount), // the rainbow in the diffuse colour too, as the game's unlit oil
-                albedoScale = 1f - 0.6f * amount,
+                albedoScale = 0.7f * (1f - 0.6f * amount),
                 roughness = Mathf.Lerp(0.35f, 0.05f, amount)
             };
             return true;

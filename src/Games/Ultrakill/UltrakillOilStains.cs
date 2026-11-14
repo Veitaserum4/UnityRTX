@@ -49,7 +49,7 @@ namespace UnityRemix.Games.Ultrakill
             filmIndex = 1.7f,
             thickness = 450f,
             flowAmplitude = 350f,
-            flowScale = 0.6f,
+            flowScale = 0.75f,
             flowSpeed = 0.15f,
             structural = 0f,
             albedoScale = 1f,
