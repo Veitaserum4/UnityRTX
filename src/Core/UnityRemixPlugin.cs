@@ -212,6 +212,11 @@ namespace UnityRemix
                 "ULTRAKILL's blood stains drawn over the frame as the game composites them (exact look, cheaper, " +
                 "in no reflection) instead of path-traced as wet paint (in reflections, glossy).");
 
+            Games.Ultrakill.UltrakillOilStains.Film = Config.Bind("Ultrakill", "OilStainFilm", true,
+                "Firestarter oil on walls and floors as a real thin film over the surface (its rainbow in the " +
+                "reflection, swirling). Needs an OpenRemix runtime whose paint carries its film; off: the game's " +
+                "rainbow baked into the stain.");
+
             Games.Ultrakill.UltrakillProfile.GamePostProcess = Config.Bind("Ultrakill", "GamePostProcess", true,
                 "ULTRAKILL's own screen post-process over the path-traced frame, as its graphics menu sets it " +
                 "(dithering, colour compression, custom palette, gamma, downsampling). Off: only while it shows " +

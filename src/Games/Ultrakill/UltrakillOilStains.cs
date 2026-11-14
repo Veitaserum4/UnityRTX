@@ -21,7 +21,10 @@ namespace UnityRemix.Games.Ultrakill
     /// multiplicative paint, as the blood stains are (UltrakillBloodStains): one quad per stain
     /// just above its surface, its texture that multiplier with the ramp baked in at an average
     /// view (a noise read across each atlas cell standing in for the world-space one), and a
-    /// finish that makes the surface under it glossy. The fallback renderers are hidden
+    /// finish that makes the surface under it glossy. With Film, the paint carries a thin film
+    /// instead (remixapi_MaterialIridescenceEXT, which OpenRemix's paint finish hands to the
+    /// surface it coats) and the ramp's mean colour replaces the baked ramp: the rainbow is
+    /// the film's, seen in the reflection and swirling. The fallback renderers are hidden
     /// (IsStainMaterial).
     /// </summary>
     internal sealed class UltrakillOilStains
@@ -34,6 +37,24 @@ namespace UnityRemix.Games.Ultrakill
         private const int CellSize = 128;
         // 2 (1 - |N.V|)^2 at an average view: where the ramp is read beside the noise.
         private const float AverageGrazing = 0.15f;
+
+        /// <summary>Config: the paint carries a thin film (needs OpenRemix's paint film) instead of the baked ramp.</summary>
+        public static BepInEx.Configuration.ConfigEntry<bool> Film;
+
+        // The film over a stain: an oil slick's swirling second-order colours (flow in metres:
+        // the stain mesh is in world space).
+        private static readonly RemixMaterialManager.Iridescence StainFilm = new RemixMaterialManager.Iridescence
+        {
+            strength = 1f,
+            filmIndex = 1.7f,
+            thickness = 450f,
+            flowAmplitude = 350f,
+            flowScale = 0.6f,
+            flowSpeed = 0.15f,
+            structural = 0f,
+            albedoScale = 1f,
+            roughness = PaintRoughness
+        };
 
         private static readonly HashSet<Component> stains = new HashSet<Component>();
         private static readonly List<Component> stainList = new List<Component>();
@@ -86,6 +107,7 @@ namespace UnityRemix.Games.Ultrakill
         private int[] quadTriangles;
 
         private Texture paintAtlas;
+        private bool paintFilm;
         private Texture2D paintTexture;
         private int paintMaterialId;
         private bool paintFailed;
@@ -273,19 +295,23 @@ namespace UnityRemix.Games.Ultrakill
         private int PaintMaterial(ManualLogSource logger, RemixMaterialManager materials, Material stainMaterial)
         {
             var atlas = stainMaterial != null && stainMaterial.HasProperty(SplatterAtlas) ? stainMaterial.GetTexture(SplatterAtlas) : null;
-            if (atlas == null || atlas == paintAtlas || paintFailed)
+            bool film = Film == null || Film.Value;
+            if (atlas == null || (atlas == paintAtlas && film == paintFilm) || paintFailed)
                 return paintMaterialId;
             var slick = Shader.GetGlobalTexture(OilSlick);
             var sand = Shader.GetGlobalTexture(SandTex);
             if (slick == null || sand == null)
                 return paintMaterialId;
             paintAtlas = atlas;
+            paintFilm = film;
             try
             {
                 var atlasPixels = Readable(atlas);
                 var slickPixels = Readable(slick);
                 var sandPixels = Readable(sand);
                 bool linearSpace = QualitySettings.activeColorSpace == ColorSpace.Linear;
+                // With the film, the ramp's mean colour: the film draws the rainbow itself.
+                Color meanRamp = film ? Mean(slickPixels) : Color.clear;
                 int width = CellSize * 5, height = CellSize;
                 var pixels = new Color32[width * height];
                 for (int y = 0; y < height; y++)
@@ -303,7 +329,7 @@ namespace UnityRemix.Games.Ultrakill
                         }
                         float lu = (x % CellSize + 0.5f) / CellSize;
                         float n = sandPixels.GetPixelBilinear(lu * 0.35f + cell * 0.37f, v * 0.35f + cell * 0.61f).r;
-                        Color ramp = slickPixels.GetPixelBilinear(n + AverageGrazing, n * 5f);
+                        Color ramp = film ? meanRamp : slickPixels.GetPixelBilinear(n + AverageGrazing, n * 5f);
                         float cover = splat.r * splat.r;
                         var m = new Color(
                             Mathf.Clamp01(ramp.r * cover + 0.32f),
@@ -326,9 +352,10 @@ namespace UnityRemix.Games.Ultrakill
                     };
                 paintTexture.SetPixels32(pixels);
                 paintTexture.Apply(false, false);
-                paintMaterialId = materials.RegisterCustomMaterial("UnityRTX oil paint " + atlas.GetInstanceID(), paintTexture,
-                    roughness: PaintRoughness, metallic: 0f, alphaCutoff: 0.5f, paintFinish: true);
-                logger.LogInfo($"[UltrakillOilStains] oil paint from '{atlas.name}', ramp '{slick.name}', noise '{sand.name}'");
+                paintMaterialId = materials.RegisterCustomMaterial((film ? "UnityRTX oil film paint " : "UnityRTX oil paint ") + atlas.GetInstanceID(),
+                    paintTexture, roughness: PaintRoughness, metallic: 0f, alphaCutoff: 0.5f, paintFinish: true,
+                    film: film ? StainFilm : (RemixMaterialManager.Iridescence?)null);
+                logger.LogInfo($"[UltrakillOilStains] oil paint from '{atlas.name}', ramp '{slick.name}', noise '{sand.name}', film {(film ? "on" : "off")}");
             }
             catch (Exception e)
             {
@@ -336,6 +363,14 @@ namespace UnityRemix.Games.Ultrakill
                 logger.LogWarning($"[UltrakillOilStains] baking the oil paint failed: {e.Message}");
             }
             return paintMaterialId;
+        }
+
+        private static Color Mean(Texture2D texture)
+        {
+            var pixels = texture.GetPixels();
+            Color sum = Color.clear;
+            for (int i = 0; i < pixels.Length; i++) sum += pixels[i];
+            return pixels.Length > 0 ? sum / pixels.Length : Color.grey;
         }
 
         // A CPU copy of a texture as the shader reads it (a linear target: no conversion on write),

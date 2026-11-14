@@ -211,7 +211,7 @@ namespace UnityRemix.Games.Ultrakill
             }
 
             RemixImGui.Spacing();
-            RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Blood");
+            RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Blood and oil");
             RemixImGui.Separator();
             var overlay = UltrakillBloodStains.Overlay;
             if (overlay != null)
@@ -222,6 +222,16 @@ namespace UnityRemix.Games.Ultrakill
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("Composites stains over the image exactly as the game does (cheaper, not in reflections). " +
                                           "Off: path-traced wet paint (glossy, in reflections).");
+            }
+            var oilFilm = UltrakillOilStains.Film;
+            if (oilFilm != null)
+            {
+                bool value = oilFilm.Value;
+                if (RemixImGui.Checkbox("Oil stains as a thin film", ref value))
+                    oilFilm.Value = value;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Firestarter oil on walls and floors coats the surface with a swirling thin film. " +
+                                          "Off: the game's rainbow baked into the stain (for an OpenRemix runtime without paint films).");
             }
             return true;
         }

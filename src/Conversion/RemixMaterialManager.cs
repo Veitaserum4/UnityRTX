@@ -581,7 +581,7 @@ namespace UnityRemix
         /// Returns the materialId.
         /// </summary>
         public int RegisterCustomMaterial(string name, Texture2D albedo, Texture2D normal = null, float roughness = 0.85f, float metallic = 0.0f,
-            float alphaCutoff = 0f, bool paintFinish = false)
+            float alphaCutoff = 0f, bool paintFinish = false, Iridescence? film = null)
         {
             int matId = HashUtils.HashStringFNV(name).GetHashCode();
             if (matId == 0) matId = 1;
@@ -633,6 +633,11 @@ namespace UnityRemix
                 originalNormalTextureHash = normalHash,
                 albedoTex = albedo
             };
+            if (film.HasValue)
+            {
+                matData.hasFilm = true;
+                matData.film = film.Value;
+            }
 
             materialTextureData[matId] = matData;
             return matId;
