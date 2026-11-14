@@ -322,6 +322,9 @@ namespace UnityRemix
                 if (cam == null || cam == dedicatedUICamera) continue;
 
                 string camName = cam.name ?? "";
+                // The mask as the game set it: in-engine suppression zeroes world cameras' masks,
+                // and UI routing changes UI cameras'.
+                int gameMask = GameCameraMasks.Get(cam);
 
                 // 1. Manual override from config takes highest priority
                 if (manualUINames.Contains(camName))
@@ -362,7 +365,7 @@ namespace UnityRemix
                 }
 
                 // If camera renders 3D meshes and has NO UI canvases in or associated with it, classify as World
-                bool renders3D = (cam.cullingMask & nonUIThreeDMask) != 0;
+                bool renders3D = (gameMask & nonUIThreeDMask) != 0;
                 if (renders3D && !hasAssociatedCanvas)
                 {
                     worldCameras.Add(cam);
@@ -383,11 +386,11 @@ namespace UnityRemix
                 bool isCanvasCam = canvasCameras.Contains(cam);
 
                 // 4. Culling mask heuristics: does it render the UI layer or avoid layer 0 (Default)?
-                bool rendersUILayer = (cam.cullingMask & uiLayerBit) != 0;
-                bool avoidsDefaultLayer = (cam.cullingMask & 1) == 0; // Layer 0 = Default
+                bool rendersUILayer = (gameMask & uiLayerBit) != 0;
+                bool avoidsDefaultLayer = (gameMask & 1) == 0; // Layer 0 = Default
 
                 // Count set bits in cullingMask
-                int bitCount = CountBits((uint)cam.cullingMask);
+                int bitCount = CountBits((uint)gameMask);
                 bool hasRestrictedLayers = bitCount <= 3 && avoidsDefaultLayer;
 
                 // 5. ClearFlags heuristics: overlay cameras commonly use Depth or Nothing

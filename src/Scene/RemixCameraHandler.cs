@@ -216,16 +216,18 @@ namespace UnityRemix
                     }
                     else
                     {
-                        // Heuristic 2: Camera that renders layer 0 (world/Default) with the most mask bits
+                        // Heuristic 2: Camera that renders layer 0 (world/Default) with the most mask bits.
+                        // The masks as the game set them: with in-engine rendering off, the world
+                        // cameras' own masks are 0.
                         var worldCam = taggedCameras
-                            .Where(c => (c.cullingMask & 1) != 0 && !IsUiCamera(c))
-                            .OrderByDescending(c => CountBits((uint)c.cullingMask))
+                            .Where(c => (GameCameraMasks.Get(c) & 1) != 0 && !IsUiCamera(c) && !c.name.StartsWith("UnityRemix_"))
+                            .OrderByDescending(c => CountBits((uint)GameCameraMasks.Get(c)))
                             .FirstOrDefault();
 
                         if (worldCam != null)
                         {
                             selectedCamera = worldCam;
-                            selectionReason = $"world camera heuristic '{worldCam.name}' (culling mask 0x{worldCam.cullingMask:X})";
+                            selectionReason = $"world camera heuristic '{worldCam.name}' (culling mask 0x{GameCameraMasks.Get(worldCam):X})";
                         }
                         else
                         {
