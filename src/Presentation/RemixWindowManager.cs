@@ -1176,14 +1176,20 @@ namespace UnityRemix
                 // changed from its default. gpuPassTimers feeds the bridge profiler: always on.
                 bool firstRun = !HasSavedOpenRemixProfile();
                 var settings = new System.Collections.Generic.List<(string key, string value)>();
+                // A game with an OpenRemix profile of its own (Games/<game>/Defaults) starts from
+                // it instead of UnityRTX's defaults; a changed BepInEx [Native] entry still wins.
+                var gameSettings = firstRun ? Games.GameDefaults.OpenRemixSettings() : null;
+                bool unityRtxDefaults = firstRun && gameSettings == null;
+                if (gameSettings != null)
+                    settings.AddRange(gameSettings);
                 void Default(string key, string value)
                 {
-                    if (firstRun) settings.Add((key, value));
+                    if (unityRtxDefaults) settings.Add((key, value));
                 }
                 void FromConfig<T>(string key, BepInEx.Configuration.ConfigEntry<T> entry, T fallback, Func<T, string> format)
                 {
                     bool changed = entry != null && !Equals(entry.Value, entry.DefaultValue);
-                    if (firstRun || changed)
+                    if (unityRtxDefaults || changed)
                         settings.Add((key, format(entry != null ? entry.Value : fallback)));
                 }
                 string Bool(bool value) => value ? "true" : "false";
@@ -1219,14 +1225,20 @@ namespace UnityRemix
                 Default("rtx.native.pathtrace.volumetricOverride", "false");
                 settings.Add(("rtx.native.gpuPassTimers", "true"));
 
-                logger.LogInfo(firstRun
-                    ? "[OpenRemix Config] no saved profile: applying UnityRTX defaults"
-                    : "[OpenRemix Config] saved profile found: keeping its settings");
+                logger.LogInfo(!firstRun ? "[OpenRemix Config] saved profile found: keeping its settings"
+                    : gameSettings != null ? $"[OpenRemix Config] no saved profile: applying {Games.GameProfiles.Active?.Name ?? "the game"}'s profile ({gameSettings.Count} settings)"
+                    : "[OpenRemix Config] no saved profile: applying UnityRTX defaults");
+                int refused = 0;
                 foreach (var (key, val) in settings)
                 {
                     var res = setConfigVariableFunc(key, val);
-                    logger.LogInfo($"[OpenRemix Config] {key} = {val} -> {res}");
+                    // A whole game profile is hundreds of lines: only its refusals are listed.
+                    if (gameSettings == null || res != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS)
+                        logger.LogInfo($"[OpenRemix Config] {key} = {val} -> {res}");
+                    if (res != RemixAPI.remixapi_ErrorCode.REMIXAPI_ERROR_CODE_SUCCESS) refused++;
                 }
+                if (gameSettings != null)
+                    logger.LogInfo($"[OpenRemix Config] {settings.Count - refused} applied, {refused} refused");
                 logger.LogInfo("openremix settings: press F12 in the game or openremix window.");
             }
             return true;

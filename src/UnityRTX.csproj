@@ -51,6 +51,11 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Each game's default settings (Games/<game>/Defaults), read by GameDefaults. -->
+    <EmbeddedResource Include="Games\**\Defaults\*" LogicalName="UnityRTXDefaults/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
     <Exec Command="echo Built $(TargetPath)" />
   </Target>

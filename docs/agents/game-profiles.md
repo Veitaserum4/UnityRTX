@@ -130,6 +130,22 @@ anything that needs a search.
 - Effects that change how the game looks (its own post-processing) should default to the
   game's look and be switchable.
 
+## Default settings per game
+
+A game's tuned settings ship as embedded files in `src/Games/<Game>/Defaults/`, found
+through the profile's `DefaultsFolder` (a game without patches gets a `DefaultsOnlyProfile`
+line in `GameProfiles.all`):
+
+- `UnityRTX.cfg`: only the BepInEx entries that differ from UnityRTX's defaults, in
+  `com.Unity.remix.cfg`'s format. Before the first `Config.Bind`, `GameDefaults` adds each one
+  as an orphaned entry where the user's file lacks the key, so it reads like a saved value.
+  Keep it to differences: the other settings then follow UnityRTX's defaults as they improve.
+- `OpenRemix.conf`: an OpenRemix profile (saved from its panel). On a first run (no saved
+  profile in `openremix/profiles`) it is applied in place of UnityRTX's OpenRemix defaults; a
+  changed BepInEx `[Native]` entry still wins.
+
+Saved settings always win: these only fill in what the user has not saved.
+
 ## Performance patterns
 
 - Scene searches (`FindObjectsOfType<T>()`) run on a timer or on scene load, never every

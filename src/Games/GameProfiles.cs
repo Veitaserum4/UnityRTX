@@ -16,7 +16,29 @@ namespace UnityRemix.Games
         public const string Auto = "Auto", None = "None";
 
         // Every game with patches. Add new games here.
-        private static readonly GameProfile[] all = { new UltrakillProfile(), new AtlyssProfile() };
+        private static readonly GameProfile[] all =
+        {
+            new UltrakillProfile(),
+            new AtlyssProfile(),
+            new DefaultsOnlyProfile("DUSK", "Dusk", "Dusk"),
+            new DefaultsOnlyProfile("Getting Over It", "GettingOverIt", "GettingOverIt"),
+            new DefaultsOnlyProfile("PEAK", "Peak", "PEAK"),
+            new DefaultsOnlyProfile("R.E.P.O.", "Repo", "REPO"),
+            new DefaultsOnlyProfile("Risk of Rain 2", "RiskOfRain2", "Risk of Rain 2"),
+            new DefaultsOnlyProfile("White Knuckle", "WhiteKnuckle", "White Knuckle"),
+            new DefaultsOnlyProfile("Gloomwood", "Gloomwood", "Gloomwood"),
+        };
+
+        /// <summary>The profile for this executable (before Detect, which honours the setting).</summary>
+        public static GameProfile ForExecutable()
+        {
+            string exe = "";
+            try { exe = System.Diagnostics.Process.GetCurrentProcess().ProcessName; } catch { }
+            foreach (var profile in all)
+                if (Array.Exists(profile.ExecutableNames, name => name.Equals(exe, StringComparison.OrdinalIgnoreCase)))
+                    return profile;
+            return null;
+        }
 
         public static GameProfile Active { get; private set; }
 
@@ -55,7 +77,7 @@ namespace UnityRemix.Games
             }
 
             Active?.Initialize(log);
-            log.LogInfo($"[Games] Executable '{exe}', GameProfile={setting}: {(Active != null ? Active.Name + " patches" : "no game patches")}");
+            log.LogInfo($"[Games] Executable '{exe}', GameProfile={setting}: {(Active != null ? Active.Name : "none")}");
         }
 
         public static void Apply(Harmony harmony) => Run(nameof(Apply), p => p.Apply(harmony));

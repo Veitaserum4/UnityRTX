@@ -9,6 +9,7 @@ namespace UnityRemix.Games.Atlyss
     {
         public override string Name => "ATLYSS";
         public override string[] ExecutableNames => new[] { "ATLYSS" };
+        public override string DefaultsFolder => "Atlyss";
 
         // Each area's sky camera carries a CameraFogDensity: RenderSettings.fogDensity holds the
         // sky's density until that camera has drawn, then its fogDensity, which the main camera

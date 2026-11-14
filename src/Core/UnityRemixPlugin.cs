@@ -180,6 +180,8 @@ namespace UnityRemix
         
         private void InitializeConfig()
         {
+            // The game's own defaults first: they become the starting values of unsaved keys.
+            Games.GameDefaults.ApplyConfigDefaults(Config, LogSource);
             var profiles = new List<string> { Games.GameProfiles.Auto, Games.GameProfiles.None };
             profiles.AddRange(Games.GameProfiles.Names);
             configGameProfile = Config.Bind("Game", "GameProfile", Games.GameProfiles.Auto,

@@ -52,6 +52,10 @@ namespace UnityRemix.Games
         // Process names (without .exe), compared ignoring case.
         public abstract string[] ExecutableNames { get; }
 
+        // The folder under Games/ whose Defaults/ hold this game's default settings (GameDefaults);
+        // null: none.
+        public virtual string DefaultsFolder => null;
+
         protected ManualLogSource Logger { get; private set; }
 
         internal void Initialize(ManualLogSource logger) => Logger = logger;

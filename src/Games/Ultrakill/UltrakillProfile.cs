@@ -9,6 +9,7 @@ namespace UnityRemix.Games.Ultrakill
     {
         public override string Name => "ULTRAKILL";
         public override string[] ExecutableNames => new[] { "ULTRAKILL" };
+        public override string DefaultsFolder => "Ultrakill";
 
         // Components whose objects move, spawn or die: drawn by the per-frame capture.
         private static readonly string[] dynamicTypeNames =
