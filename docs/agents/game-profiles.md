@@ -57,6 +57,7 @@ and which thread calls it. In groups:
 | Portals | `GetRayPortalView`, `OpensViewPortal`, `GetPortals` | Limbo's TV walls (a scaled view of another part of the level) |
 | The game's own shaders over the frame | `GetPassThroughRenderers`, `UsesShaderPassThrough`, `PassThroughFrameTexture`, `PassThroughShaderPass`, `PassThroughScreenEffect`, `PassThroughScreenResolution`, `ViewChromaticAberration` | Limbo walls, Greed's heat haze, the death screen and graphics-menu effects. See [shader-pass-through.md](shader-pass-through.md) |
 | Underwater look | `GetUnderwaterTint` | the HUD's water/blood overlay colour |
+| Fog the game changes per camera | `WorldFogDensity` | (ATLYSS: its sky camera's `CameraFogDensity` swaps `RenderSettings.fogDensity` while rendering) |
 | Remix menu interplay | `OnRemixMenu` | release and restore the cursor lock |
 | Options | `DrawSettings` | the profile's section of the Plugin tab |
 
