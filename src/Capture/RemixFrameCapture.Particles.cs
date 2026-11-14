@@ -77,9 +77,7 @@ namespace UnityRemix
                         var aps = ar.GetComponent<ParticleSystem>();
                         if (aps != null)
                         {
-                            var main = aps.main;
-                            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
-                                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+                            UnityCompat.KeepSimulating(aps);
 
                             trackedParticleSystems.Add(new TrackedParticleSystem
                             {
@@ -104,9 +102,7 @@ namespace UnityRemix
                         var aps = ar.GetComponent<ParticleSystem>();
                         if (aps != null)
                         {
-                            var main = aps.main;
-                            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
-                                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+                            UnityCompat.KeepSimulating(aps);
 
                             trackedParticleSystems.Add(new TrackedParticleSystem
                             {

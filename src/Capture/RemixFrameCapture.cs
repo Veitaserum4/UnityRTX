@@ -1254,9 +1254,7 @@ namespace UnityRemix
             var ps = pr.GetComponent<ParticleSystem>();
             if (ps == null)
                 return;
-            var main = ps.main;
-            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
-                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+            UnityCompat.KeepSimulating(ps);
             trackedParticleSystems.Add(new TrackedParticleSystem
             {
                 renderer = pr,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace UnityRemix
@@ -97,5 +98,33 @@ namespace UnityRemix
 
         // A missing method lets the caller use its existing UI geometry fallback.
         public static Mesh GetCanvasMesh(CanvasRenderer renderer) => canvasGetMesh?.Invoke(renderer);
+
+        // APIs newer than the oldest Unity the plugin runs in (DUSK: 2018.2). Code naming one of
+        // their types fails to compile (TypeLoadException) when the method is first called, so
+        // each use sits in a NoInlining method of its own, called only when the API exists.
+        public static readonly bool HasParticleCullingMode =
+            typeof(ParticleSystem).Assembly.GetType("UnityEngine.ParticleSystemCullingMode") != null;
+        public static readonly bool HasShaderPropertyType =
+            typeof(Shader).Assembly.GetType("UnityEngine.Rendering.ShaderPropertyType") != null;
+        public static readonly bool HasGraphicsBuffer =
+            typeof(Mesh).Assembly.GetType("UnityEngine.GraphicsBuffer") != null;
+        // Mesh.GetVertexAttributeDimension and its family (2019.3).
+        public static readonly bool HasMeshVertexAttributes =
+            typeof(Mesh).GetMethod("GetVertexAttributeDimension", new[] { typeof(UnityEngine.Rendering.VertexAttribute) }) != null;
+
+        /// <summary>Keeps a particle system simulating while off screen (where Unity has the setting).</summary>
+        public static void KeepSimulating(ParticleSystem system)
+        {
+            if (HasParticleCullingMode && system != null)
+                SetAlwaysSimulate(system);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void SetAlwaysSimulate(ParticleSystem system)
+        {
+            var main = system.main;
+            if (main.cullingMode != ParticleSystemCullingMode.AlwaysSimulate)
+                main.cullingMode = ParticleSystemCullingMode.AlwaysSimulate;
+        }
     }
 }

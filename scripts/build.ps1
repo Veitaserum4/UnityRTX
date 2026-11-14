@@ -80,8 +80,14 @@ if (-not $Deploy) {
 $dest = Join-Path $GamePath "BepInEx\plugins\UnityRTX"
 Step "Deploy to $dest"
 New-Item -ItemType Directory -Force $dest | Out-Null
-# Unity 2019-era games without netstandard.dll take the net472 build.
-$framework = if (Test-Path (Join-Path $managed "netstandard.dll")) { "netstandard2.1" } else { "net472" }
+# Games whose runtime has netstandard 2.1 (Unity 2021.2+) take the netstandard2.1 build;
+# older ones (no netstandard.dll, or 2.0's, as DUSK's Unity 2018) take net472.
+$netstandard = Join-Path $managed "netstandard.dll"
+$framework = "net472"
+if (Test-Path $netstandard) {
+    $nsVersion = [Reflection.AssemblyName]::GetAssemblyName($netstandard).Version
+    if ($nsVersion -ge [Version]"2.1.0.0") { $framework = "netstandard2.1" }
+}
 $bin = Join-Path $src "bin\Release\$framework"
 Copy-Item (Join-Path $bin "UnityRemix.dll"), (Join-Path $bin "UnityRemix.pdb") $dest -Force
 Write-Host "  UnityRemix.dll ($framework)"

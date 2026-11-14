@@ -31,22 +31,53 @@ namespace UnityRemix
 
         public static void SetLogger(ManualLogSource log) => logger = log;
 
-        private static readonly Func<Mesh, int, GraphicsBuffer> getVertexBuffer = CreateGetVertexBuffer();
-        private static readonly Func<Mesh, GraphicsBuffer> getIndexBuffer = CreateGetIndexBuffer();
-
-        private static Func<Mesh, int, GraphicsBuffer> CreateGetVertexBuffer()
+        // Unity's GraphicsBuffer readback (2021.2+). The type is missing before 2020.1 (DUSK's
+        // 2018.2), and a class naming it fails to load there: it is used only in GpuBuffers,
+        // reached through the NoInlining wrappers below when UnityCompat.HasGraphicsBuffer.
+        private static class GpuBuffers
         {
-            var method = typeof(Mesh).GetMethod("GetVertexBuffer", new[] { typeof(int) });
-            return method == null ? null : (Func<Mesh, int, GraphicsBuffer>)Delegate.CreateDelegate(
-                typeof(Func<Mesh, int, GraphicsBuffer>), method);
+            private static readonly Func<Mesh, int, GraphicsBuffer> getVertexBuffer = CreateGetVertexBuffer();
+            private static readonly Func<Mesh, GraphicsBuffer> getIndexBuffer = CreateGetIndexBuffer();
+
+            private static Func<Mesh, int, GraphicsBuffer> CreateGetVertexBuffer()
+            {
+                var method = typeof(Mesh).GetMethod("GetVertexBuffer", new[] { typeof(int) });
+                return method == null ? null : (Func<Mesh, int, GraphicsBuffer>)Delegate.CreateDelegate(
+                    typeof(Func<Mesh, int, GraphicsBuffer>), method);
+            }
+
+            private static Func<Mesh, GraphicsBuffer> CreateGetIndexBuffer()
+            {
+                var method = typeof(Mesh).GetMethod("GetIndexBuffer", Type.EmptyTypes);
+                return method == null ? null : (Func<Mesh, GraphicsBuffer>)Delegate.CreateDelegate(
+                    typeof(Func<Mesh, GraphicsBuffer>), method);
+            }
+
+            public static bool Read(Mesh mesh, int stream, out byte[] bytes)
+            {
+                bytes = null;
+                var buffer = stream < 0 ? getIndexBuffer?.Invoke(mesh) : getVertexBuffer?.Invoke(mesh, stream);
+                if (buffer == null)
+                    return false;
+                try
+                {
+                    int byteLength = buffer.count * buffer.stride;
+                    if (byteLength <= 0)
+                        return false;
+                    bytes = new byte[byteLength];
+                    buffer.GetData(bytes);
+                    return true;
+                }
+                finally
+                {
+                    buffer.Dispose();
+                }
+            }
         }
 
-        private static Func<Mesh, GraphicsBuffer> CreateGetIndexBuffer()
-        {
-            var method = typeof(Mesh).GetMethod("GetIndexBuffer", Type.EmptyTypes);
-            return method == null ? null : (Func<Mesh, GraphicsBuffer>)Delegate.CreateDelegate(
-                typeof(Func<Mesh, GraphicsBuffer>), method);
-        }
+        // stream -1: the index buffer.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool ReadGraphicsBuffer(Mesh mesh, int stream, out byte[] bytes) => GpuBuffers.Read(mesh, stream, out bytes);
 
         [StructLayout(LayoutKind.Sequential)]
         struct D3D11_BUFFER_DESC
@@ -213,29 +244,13 @@ namespace UnityRemix
             rawVerts = null;
             if (mesh == null) return false;
 
-            // Attempt 1: Unity's cross-platform GraphicsBuffer API (Unity 2020.1+)
-            if (getVertexBuffer != null)
+            // Attempt 1: Unity's cross-platform GraphicsBuffer API (Unity 2021.2+)
+            if (UnityCompat.HasGraphicsBuffer)
             {
                 try
                 {
-                    var vb = getVertexBuffer(mesh, stream);
-                    if (vb != null)
-                    {
-                        try
-                        {
-                            int byteLength = vb.count * vb.stride;
-                            if (byteLength > 0)
-                            {
-                                rawVerts = new byte[byteLength];
-                                vb.GetData(rawVerts);
-                                return true;
-                            }
-                        }
-                        finally
-                        {
-                            vb.Dispose();
-                        }
-                    }
+                    if (ReadGraphicsBuffer(mesh, stream, out rawVerts))
+                        return true;
                 }
                 catch (Exception ex)
                 {
@@ -271,29 +286,13 @@ namespace UnityRemix
             rawIdx = null;
             if (mesh == null) return false;
 
-            // Attempt 1: Unity's cross-platform GraphicsBuffer API (Unity 2020.1+)
-            if (getIndexBuffer != null)
+            // Attempt 1: Unity's cross-platform GraphicsBuffer API (Unity 2021.2+)
+            if (UnityCompat.HasGraphicsBuffer)
             {
                 try
                 {
-                    var ib = getIndexBuffer(mesh);
-                    if (ib != null)
-                    {
-                        try
-                        {
-                            int byteLength = ib.count * ib.stride;
-                            if (byteLength > 0)
-                            {
-                                rawIdx = new byte[byteLength];
-                                ib.GetData(rawIdx);
-                                return true;
-                            }
-                        }
-                        finally
-                        {
-                            ib.Dispose();
-                        }
-                    }
+                    if (ReadGraphicsBuffer(mesh, -1, out rawIdx))
+                        return true;
                 }
                 catch (Exception ex)
                 {

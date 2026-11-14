@@ -1215,6 +1215,28 @@ namespace UnityRemix
             var sb = new System.Text.StringBuilder();
             try
             {
+                if (UnityCompat.HasShaderPropertyType)
+                    AppendShaderProperties(material, sb);
+                else
+                    sb.Append("(property list needs Unity 2019.3) ");
+                var keywords = material.shaderKeywords;
+                if (keywords != null && keywords.Length > 0)
+                    sb.Append($"keywords [{string.Join(" ", keywords)}] ");
+                sb.Append("passes [");
+                for (int p = 0; p < material.passCount; p++)
+                    sb.Append(p == 0 ? "" : ", ").Append(material.GetPassName(p));
+                sb.Append("]");
+            }
+            catch (Exception ex)
+            {
+                sb.Append($"(properties unavailable: {ex.Message})");
+            }
+            return sb.ToString();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void AppendShaderProperties(Material material, System.Text.StringBuilder sb)
+        {
                 var shader = material.shader;
                 int count = shader.GetPropertyCount();
                 for (int p = 0; p < count; p++)
@@ -1239,19 +1261,6 @@ namespace UnityRemix
                             break;
                     }
                 }
-                var keywords = material.shaderKeywords;
-                if (keywords != null && keywords.Length > 0)
-                    sb.Append($"keywords [{string.Join(" ", keywords)}] ");
-                sb.Append("passes [");
-                for (int p = 0; p < material.passCount; p++)
-                    sb.Append(p == 0 ? "" : ", ").Append(material.GetPassName(p));
-                sb.Append("]");
-            }
-            catch (Exception ex)
-            {
-                sb.Append($"(properties unavailable: {ex.Message})");
-            }
-            return sb.ToString();
         }
 
         private void DumpShaderProperties(Shader shader, string shaderName)

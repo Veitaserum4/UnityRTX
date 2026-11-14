@@ -41,8 +41,28 @@ namespace UnityRemix
             public VertexAttributeFormat format;
         }
 
-        [MethodImpl(MethodImplOptions.NoInlining)]
+        // The readers below need Mesh.GetVertexAttribute* and VertexAttributeFormat (Unity
+        // 2019.3); before that, the methods naming them fail to compile, so these entry points
+        // decline first.
         public static bool TryRead(Mesh mesh, int bonesPerVertex, out Data data, out string reason)
+        {
+            if (!UnityCompat.HasMeshVertexAttributes)
+            {
+                data = null;
+                reason = "this Unity has no vertex attribute queries (2019.3+)";
+                return false;
+            }
+            return TryReadLayout(mesh, bonesPerVertex, out data, out reason);
+        }
+
+        public static Color32[] TryReadColors(Mesh mesh) =>
+            UnityCompat.HasMeshVertexAttributes ? TryReadColorsLayout(mesh) : null;
+
+        public static float[] TryReadComponent(Mesh mesh, VertexAttribute attribute, int component) =>
+            UnityCompat.HasMeshVertexAttributes ? TryReadComponentLayout(mesh, attribute, component) : null;
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static bool TryReadLayout(Mesh mesh, int bonesPerVertex, out Data data, out string reason)
         {
             data = null;
             reason = null;
@@ -153,7 +173,7 @@ namespace UnityRemix
         /// or null when it has none or they cannot be read.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public static Color32[] TryReadColors(Mesh mesh)
+        private static Color32[] TryReadColorsLayout(Mesh mesh)
         {
             try
             {
@@ -189,7 +209,7 @@ namespace UnityRemix
         /// read back from its GPU vertex buffer, or null when it is missing or cannot be read.
         /// </summary>
         [MethodImpl(MethodImplOptions.NoInlining)]
-        public static float[] TryReadComponent(Mesh mesh, VertexAttribute attribute, int component)
+        private static float[] TryReadComponentLayout(Mesh mesh, VertexAttribute attribute, int component)
         {
             try
             {

@@ -145,9 +145,23 @@ namespace UnityRemix
         // material unchanged): the colours and floats it overrides.
         private static readonly MaterialPropertyBlock block = new MaterialPropertyBlock();
 
+        // The block readers (HasColor, ShaderPropertyType) are newer than Unity 2018: the work
+        // sits in its own method, which fails to compile there and is caught here.
         private static string PropertyBlock(Renderer renderer, int index, Material m)
         {
             try
+            {
+                return UnityCompat.HasShaderPropertyType ? ReadPropertyBlock(renderer, index, m) : "";
+            }
+            catch (Exception ex)
+            {
+                return $" block (unreadable: {ex.Message})";
+            }
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static string ReadPropertyBlock(Renderer renderer, int index, Material m)
+        {
             {
                 if (!renderer.HasPropertyBlock())
                     return "";
@@ -171,10 +185,6 @@ namespace UnityRemix
                         parts.Add($"{name}={block.GetVector(id)}");
                 }
                 return $" block {{{string.Join("; ", parts)}}}";
-            }
-            catch (Exception ex)
-            {
-                return $" block (unreadable: {ex.Message})";
             }
         }
 
