@@ -154,7 +154,7 @@ namespace UnityRemix
 
                     float rawStart = RenderSettings.fogStartDistance;
                     float rawEnd = RenderSettings.fogEndDistance;
-                    float rawDens = RenderSettings.fogDensity;
+                    float rawDens = Games.GameProfiles.WorldFogDensity(RenderSettings.fogDensity);
 
                     if (float.IsNaN(rawStart) || float.IsInfinity(rawStart)) rawStart = 0f;
                     if (float.IsNaN(rawEnd) || float.IsInfinity(rawEnd)) rawEnd = 100f;

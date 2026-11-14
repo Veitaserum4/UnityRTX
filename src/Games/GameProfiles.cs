@@ -3,6 +3,7 @@ using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
 using UnityRemix.Games.Ultrakill;
+using UnityRemix.Games.Atlyss;
 
 namespace UnityRemix.Games
 {
@@ -15,7 +16,7 @@ namespace UnityRemix.Games
         public const string Auto = "Auto", None = "None";
 
         // Every game with patches. Add new games here.
-        private static readonly GameProfile[] all = { new UltrakillProfile() };
+        private static readonly GameProfile[] all = { new UltrakillProfile(), new AtlyssProfile() };
 
         public static GameProfile Active { get; private set; }
 
@@ -239,6 +240,25 @@ namespace UnityRemix.Games
             bool? lockCursor = null;
             Run(nameof(OnRemixMenu), p => lockCursor = p.OnRemixMenu(open));
             return lockCursor;
+        }
+
+        public static float WorldFogDensity(float density)
+        {
+            var profile = Active;
+            if (profile == null) return density;
+            try
+            {
+                return profile.WorldFogDensity(density);
+            }
+            catch (Exception ex)
+            {
+                if (!hookFailed)
+                {
+                    hookFailed = true;
+                    logger?.LogError($"[Games] {profile.Name} {nameof(WorldFogDensity)} failed (further failures not logged): {ex}");
+                }
+                return density;
+            }
         }
 
         private static void Run(string hook, Action<GameProfile> action)

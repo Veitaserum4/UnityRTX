@@ -128,6 +128,10 @@ namespace UnityRemix.Games
         // lighting (a fill light on the player that path tracing makes glaring). Main thread.
         public virtual bool IsHiddenLight(Light light) => false;
 
+        // The fog density the game's world camera draws with, given RenderSettings.fogDensity:
+        // for a game that changes it per camera while rendering. Main thread, each frame.
+        public virtual float WorldFogDensity(float density) => density;
+
         // A shader of the game's that blends as its _SrcBlend / _DstBlend properties say (as
         // Unity's Standard and Particles/Standard do), so additive ones glow.
         public virtual bool ReadsBlendProperties(string shaderName) => false;
