@@ -615,6 +615,27 @@ namespace UnityRemix
         /// </summary>
         public const int REMIXAPI_STRUCT_TYPE_MATERIAL_PAINT_FINISH_EXT = 0x7fff1079;
 
+        /// <summary>
+        /// pNext on opaque or translucent MaterialInfo (OpenRemix remix_native_ext.h): a thin film whose
+        /// interference colours the reflection. strength 0..1, filmRefractiveIndex 1..3, thickness in nm
+        /// (0..2000; with thicknessTexture its red lerps thicknessMin..thicknessMax), flowAmplitude nm of
+        /// animated noise on the thickness, flowScale scene units across, drifting flowSpeed per second;
+        /// structural 0..1 tints diffuse reflection too.
+        /// </summary>
+        public const int REMIXAPI_STRUCT_TYPE_MATERIAL_IRIDESCENCE_EXT = 0x7fff1020;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_MaterialIridescenceEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+            public IntPtr thicknessTexture; // remixapi_Path, null: thickness
+            public float strength, filmRefractiveIndex, thickness;
+            public float thicknessMin, thicknessMax;
+            public float flowAmplitude, flowScale, flowSpeed;
+            public float structural;
+        }
+
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_MaterialInfoPaintFinishEXT
         {

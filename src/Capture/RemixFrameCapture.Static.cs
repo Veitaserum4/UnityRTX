@@ -253,6 +253,8 @@ namespace UnityRemix
                     {
                         if (blockMaterials[m] != null && Games.GameProfiles.GetColorMask(blockMaterials[m], sharedStaticMpb, out var blockMask))
                             mpbHash = HashCombine(mpbHash, blockMask.Hash());
+                        if (blockMaterials[m] != null && Games.GameProfiles.GetIridescence(blockMaterials[m], sharedStaticMpb, out var blockFilm))
+                            mpbHash = HashCombine(mpbHash, blockFilm.Hash());
                     }
                 }
 
@@ -430,9 +432,9 @@ namespace UnityRemix
                                     }
                                 }
                                 catch { }
-                                var colorMask = ResolveColorMask(renderer, materials[m], ref matId);
+                                var colorMask = ResolveColorMask(renderer, materials[m], ref matId, out var film);
                                 submeshMaterialIds.Add(matId);
-                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer, colorMask: colorMask);
+                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer, colorMask: colorMask, film: film);
                             }
                             else
                             {

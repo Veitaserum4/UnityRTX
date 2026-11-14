@@ -15,8 +15,12 @@ namespace UnityRemix
     // Renderer materials: colour masks, skinned material facts, material resolution.
     public partial class RemixFrameCapture
     {
-        private RemixMaterialManager.ColorMask? ResolveColorMask(Renderer renderer, Material material, ref int matId)
+        // The profile's per-renderer looks for a material (GameProfile.GetColorMask and
+        // GetIridescence, read from the renderer's property block), each folded into matId.
+        private RemixMaterialManager.ColorMask? ResolveColorMask(Renderer renderer, Material material, ref int matId,
+            out RemixMaterialManager.Iridescence? film)
         {
+            film = null;
             if (renderer == null || material == null)
                 return null;
             if (colorMaskBlock == null)
@@ -24,6 +28,11 @@ namespace UnityRemix
             colorMaskBlock.Clear();
             if (renderer.HasPropertyBlock())
                 renderer.GetPropertyBlock(colorMaskBlock);
+            if (Games.GameProfiles.GetIridescence(material, colorMaskBlock, out var f))
+            {
+                film = f;
+                matId = HashCombine(matId, f.Hash());
+            }
             if (!Games.GameProfiles.GetColorMask(material, colorMaskBlock, out var colorMask))
                 return null;
             matId = HashCombine(matId, colorMask.Hash());
@@ -239,8 +248,8 @@ namespace UnityRemix
                     catch { }
                 }
 
-                var colorMask = ResolveColorMask(skinned, bestMaterial, ref matId);
-                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask);
+                var colorMask = ResolveColorMask(skinned, bestMaterial, ref matId, out var film);
+                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask, film: film);
                 
 
             }

@@ -99,6 +99,16 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // A thin film the game puts over a renderer's material (an oil coating), from the
+        // material and the renderer's property block (empty when it has none): drawn with
+        // OpenRemix's iridescence. Main thread, per renderer per frame: keep it cheap, and
+        // quantise values that change smoothly (each distinct film is a material).
+        public virtual bool GetIridescence(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Iridescence film)
+        {
+            film = default;
+            return false;
+        }
+
         // The game's view portal this frame (worldCamera: the player's view), when it shows one.
         public virtual bool GetRayPortalView(Camera worldCamera, out RayPortalView view)
         {

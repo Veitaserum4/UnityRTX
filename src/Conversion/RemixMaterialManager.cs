@@ -144,6 +144,28 @@ namespace UnityRemix
             }
         }
 
+        // A thin film over a material (a game's coating, such as oil; GameProfile.GetIridescence):
+        // OpenRemix's remixapi_MaterialIridescenceEXT, its interference colouring the reflection.
+        // The coated surface's albedo is scaled by albedoScale and its roughness is roughness.
+        public struct Iridescence
+        {
+            public float strength, filmIndex, thickness;
+            public float flowAmplitude, flowScale, flowSpeed;
+            public float structural;
+            public float albedoScale, roughness;
+
+            public int Hash()
+            {
+                unchecked
+                {
+                    int h = 0x1f11;
+                    foreach (var v in new[] { strength, filmIndex, thickness, flowAmplitude, flowScale, flowSpeed, structural, albedoScale, roughness })
+                        h = h * 397 ^ Mathf.RoundToInt(v * 1000f);
+                    return h;
+                }
+            }
+        }
+
         // Alpha handling modes detected from Unity materials
         public enum AlphaMode
         {
@@ -190,6 +212,8 @@ namespace UnityRemix
             public bool blendedInstance; // drawn with remixapi_InstanceInfoBlendEXT (a particle-like effect on a mesh)
             public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
             public bool paintFinish; // remixapi_MaterialInfoPaintFinishEXT: multiplicative paint with its own roughness
+            public bool hasFilm;           // remixapi_MaterialIridescenceEXT (film)
+            public Iridescence film;
             public bool rayPortalStandalone; // a portal alone (no opaque look): registered by SetRayPortalIndex
             public float metallic;         // PBR metallic (0.0 to 1.0)
             public float roughness;        // PBR roughness (0.04 to 1.0)
@@ -653,6 +677,12 @@ namespace UnityRemix
             if (matData.emissiveHandle != IntPtr.Zero)
             {
                 hash ^= (ulong)matData.emissiveHandle.ToInt64();
+                hash *= 1099511628211UL;
+            }
+
+            if (matData.hasFilm)
+            {
+                hash ^= (ulong)(uint)matData.film.Hash();
                 hash *= 1099511628211UL;
             }
 

@@ -112,6 +112,15 @@ namespace UnityRemix.Games
             return found;
         }
 
+        public static bool GetIridescence(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Iridescence film)
+        {
+            bool found = false;
+            var result = default(RemixMaterialManager.Iridescence);
+            Run(nameof(GetIridescence), p => found = p.GetIridescence(material, block, out result));
+            film = result;
+            return found;
+        }
+
         public static bool GetRayPortalView(Camera worldCamera, out RayPortalView view)
         {
             bool found = false;

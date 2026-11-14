@@ -137,7 +137,7 @@ namespace UnityRemix
             shaderName == "Sprites/Default" || shaderName.EndsWith("/Sprites/Default", StringComparison.Ordinal) ||
             shaderName == "UI/Default" || shaderName.StartsWith("Unlit/Transparent", StringComparison.Ordinal);
 
-        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null)
+        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null, Iridescence? film = null)
         {
             if (material == null)
                 return;
@@ -988,6 +988,21 @@ namespace UnityRemix
             matData.blendedInstance = !isParticleOrTrailRenderer && matData.suppressLightGeneration &&
                                       matData.alphaMode == AlphaMode.Blend && !matData.emissionAsShown &&
                                       !shaderName.Contains("TextMeshPro") && matData.rayPortalIndex < 0;
+
+            // A coating's film: a smooth, darkened surface whose reflection carries the film's colours.
+            if (film.HasValue && matData.translucentKind == TranslucentKind.None && !matData.suppressLightGeneration)
+            {
+                var f = film.Value;
+                matData.hasFilm = true;
+                matData.film = f;
+                float k = Mathf.Clamp01(f.albedoScale);
+                matData.albedoColor = new Color(matData.albedoColor.r * k, matData.albedoColor.g * k, matData.albedoColor.b * k, matData.albedoColor.a);
+                matData.roughness = Mathf.Clamp(f.roughness, 0.04f, 1f);
+                matData.metallic = 0f;
+                matData.pbrMapHandle = IntPtr.Zero;
+                matData.smoothnessInAlbedoAlpha = false;
+                matData.hasRoughnessDetail = false;
+            }
 
             // Store for later use
             materialTextureData[materialId] = matData;

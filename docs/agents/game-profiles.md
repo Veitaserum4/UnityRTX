@@ -50,7 +50,7 @@ and which thread calls it. In groups:
 | Patch the game's code | `Apply(Harmony)` | GameStateManager pause/cursor, post-process handler, spawn tracking |
 | Things that move, spawn or die, which the static scan would freeze | `IsDynamicObject`, `FollowsActiveState` | enemies, projectiles, checkpoints, light shafts toggled by flickering lamps |
 | Things the game never shows, or that only pass through | `IsHiddenMaterial`, `IsHiddenRenderer`, `IsNeverRenderedLayer`, `IsHiddenLight` | Default-Material helper boxes, HeatWave distortion sprites, soul orbs' glow quads (passed through), trigger layers, the player's fill light |
-| Material corrections | `OverrideMaterial`, `OverrideTextureTransform`, `GetColorMask`, `ReadsBlendProperties` | level blood decals (cutout, atlas UVs), ULTRAKILL/Master's `_SrcBlend`/`_DstBlend` |
+| Material corrections | `OverrideMaterial`, `OverrideTextureTransform`, `GetColorMask`, `GetIridescence`, `ReadsBlendProperties` | level blood decals (cutout, atlas UVs), weapon colours, oiled enemies (a thin film from `_OiledAmount`), ULTRAKILL/Master's `_SrcBlend`/`_DstBlend` |
 | Extra geometry per frame | `CaptureFrame` | blood stains |
 | Per-scene state | `OnSceneLoaded` | reset caches and rescans |
 | Cameras | `FindViewModelCamera`, `IsPlayerBody` | the weapon "HUD Camera" |

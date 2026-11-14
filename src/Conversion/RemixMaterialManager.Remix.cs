@@ -106,6 +106,7 @@ namespace UnityRemix
                 GCHandle portalExtHandle = default;
                 GCHandle viewEffectsHandle = default;
                 GCHandle paintFinishHandle = default;
+                GCHandle filmHandle = default;
                 IntPtr roughnessPathPtr = IntPtr.Zero, metallicPathPtr = IntPtr.Zero;
                 IntPtr extPtr;
                 IntPtr emissionExtPtr = IntPtr.Zero;
@@ -332,6 +333,24 @@ namespace UnityRemix
                         viewEffectsHandle = GCHandle.Alloc(viewEffects, GCHandleType.Pinned);
                         opaqueExt.pNext = viewEffectsHandle.AddrOfPinnedObject();
                     }
+                    if (matData.hasFilm && !standalonePortal)
+                    {
+                        var f = matData.film;
+                        var film = new RemixAPI.remixapi_MaterialIridescenceEXT
+                        {
+                            sType = RemixAPI.REMIXAPI_STRUCT_TYPE_MATERIAL_IRIDESCENCE_EXT,
+                            pNext = opaqueExt.pNext,
+                            strength = Mathf.Clamp01(f.strength),
+                            filmRefractiveIndex = Mathf.Clamp(f.filmIndex, 1f, 3f),
+                            thickness = Mathf.Clamp(f.thickness, 0f, 2000f),
+                            flowAmplitude = Mathf.Max(0f, f.flowAmplitude),
+                            flowScale = Mathf.Max(0.001f, f.flowScale),
+                            flowSpeed = f.flowSpeed,
+                            structural = Mathf.Clamp01(f.structural)
+                        };
+                        filmHandle = GCHandle.Alloc(film, GCHandleType.Pinned);
+                        opaqueExt.pNext = filmHandle.AddrOfPinnedObject();
+                    }
                     if (matData.paintFinish && !standalonePortal)
                     {
                         var finish = new RemixAPI.remixapi_MaterialInfoPaintFinishEXT
@@ -430,6 +449,7 @@ namespace UnityRemix
                     if (portalExtHandle.IsAllocated) portalExtHandle.Free();
                     if (viewEffectsHandle.IsAllocated) viewEffectsHandle.Free();
                     if (paintFinishHandle.IsAllocated) paintFinishHandle.Free();
+                    if (filmHandle.IsAllocated) filmHandle.Free();
                     if (roughnessPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(roughnessPathPtr);
                     if (metallicPathPtr != IntPtr.Zero) Marshal.FreeHGlobal(metallicPathPtr);
                     extHandle.Free();

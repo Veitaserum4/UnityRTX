@@ -747,6 +747,37 @@ namespace UnityRemix.Games.Ultrakill
             return true;
         }
 
+        // Firestarter oil on an enemy: EnemyIdentifier.AddFlammable sets _OiledAmount (fuel / 5)
+        // in each of its renderers' property blocks. ULTRAKILL/Master's ENEMY variant fills the
+        // enemy with oil from the bottom up as it rises (with _SandTex noise), the oil 75% of the
+        // colour: _OilSlick's interference ramp, black facing the camera and rainbow towards the
+        // rim. Path-traced, that is a dark, smooth surface under a thin film. Coverage is taken
+        // as uniform, its amount in fifths (one material per fifth).
+        private static readonly int OiledAmount = Shader.PropertyToID("_OiledAmount");
+
+        public override bool GetIridescence(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Iridescence film)
+        {
+            film = default;
+            if (block == null || block.isEmpty || !material.IsKeywordEnabled("ENEMY"))
+                return false;
+            float amount = Mathf.Ceil(Mathf.Clamp01(block.GetFloat(OiledAmount)) * 5f) / 5f;
+            if (amount <= 0f || material.shader == null || material.shader.name != "ULTRAKILL/Master")
+                return false;
+            film = new RemixMaterialManager.Iridescence
+            {
+                strength = amount,
+                filmIndex = 1.45f,          // oil
+                thickness = 450f,
+                flowAmplitude = 250f,       // the noise ULTRAKILL takes the ramp's position from
+                flowScale = 0.5f,
+                flowSpeed = 0.05f,
+                structural = 0.3f * amount, // the rainbow reads on rough surfaces too, as the game's unlit oil
+                albedoScale = 1f - 0.75f * amount,
+                roughness = Mathf.Lerp(0.6f, 0.08f, amount)
+            };
+            return true;
+        }
+
         public override bool IsDynamicObject(MeshFilter filter, Renderer renderer)
         {
             if (dynamicTypes == null)
