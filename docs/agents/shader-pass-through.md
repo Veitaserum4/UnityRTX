@@ -54,6 +54,10 @@ Things to know about the pipeline:
   - Opaque draws sample the frame with themselves cut out and the hole filled from beside it
     (Limbo's walls sample around their own pixels).
   - Blended draws sample the frame as it is.
+  - The `_GrabTexture` stand-in samples the frame **upside down** (`kGrabCopy`, made by
+    `flip.frag`). Unity's `ComputeGrabScreenPos` flips y on D3D whatever the render target,
+    unlike `ComputeScreenPos`. Sampled right way up, a GrabPass distortion shows a mirrored
+    copy of the screen.
 - **Other textures** are read back from Unity once (`SendTexture`, through a blit, so they
   needn't be readable) and uploaded.
   - They're sent again when `Texture.updateCount` changes.

@@ -19,6 +19,7 @@
 #include <windows.h>
 
 #include "fill.frag.inc"
+#include "flip.frag.inc"
 #include "frame_depth.frag.inc"
 #include "fullscreen.vert.inc"
 #include "stain.frag.inc"
@@ -39,6 +40,8 @@ namespace urtx {
     // What is behind the walls: the frame where they show, holes (where
     // something stands in front of them) filled from beside (ping-pong).
     constexpr remixapi_HostTargetHandleEXT kBehind[2] = {0x5552000000000002ull, 0x5552000000000003ull};
+    // The frame upside down (flip.frag), for draws sampling the _GrabTexture stand-in.
+    constexpr remixapi_HostTargetHandleEXT kGrabCopy = 0x5552000000000005ull;
     constexpr uint32_t kVkR32G32Sfloat = 103;
     constexpr uint32_t kCompareLessOrEqual = 3, kCompareGreaterOrEqual = 6, kCompareAlways = 7; // VkCompareOp
 
@@ -61,7 +64,7 @@ namespace urtx {
     // Registered shaders, by the capture's shader identity.
     std::unordered_map<const Shader *, remixapi_HostShaderHandleEXT> g_handles;
     std::unordered_set<const Shader *> g_failed;
-    remixapi_HostShaderHandleEXT g_fullscreenVs = 0, g_frameDepthFs = 0, g_maskFs = 0, g_fillFs = 0;
+    remixapi_HostShaderHandleEXT g_fullscreenVs = 0, g_frameDepthFs = 0, g_maskFs = 0, g_fillFs = 0, g_flipFs = 0;
     bool g_depthFailed = false;
 
     std::string g_lastSubmit = "nothing submitted yet";
@@ -115,7 +118,7 @@ namespace urtx {
     bool depthShaders() {
       if (g_depthFailed)
         return false;
-      if (g_fullscreenVs && g_frameDepthFs && g_maskFs && g_fillFs)
+      if (g_fullscreenVs && g_frameDepthFs && g_maskFs && g_fillFs && g_flipFs)
         return true;
       remixapi_HostShaderInfoEXT info{};
       info.sType = REMIXAPI_STRUCT_TYPE_HOST_SHADER_INFO_EXT;
@@ -152,6 +155,15 @@ namespace urtx {
       info.codeBytes = sizeof(fill_frag);
       info.pushConstantBytes = 12;
       if (g_register(&info, &g_fillFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_depthFailed = true;
+        return false;
+      }
+      info.bindings = &sampler;
+      info.bindingCount = 1;
+      info.code = flip_frag;
+      info.codeBytes = sizeof(flip_frag);
+      info.pushConstantBytes = 0;
+      if (g_register(&info, &g_flipFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
         g_depthFailed = true;
         return false;
       }
@@ -296,8 +308,10 @@ namespace urtx {
               return false;
             }
             remixapi_HostTargetHandleEXT target = 0;
-            if (t->resource == frameTexture || (grabTexture && t->resource == grabTexture))
+            if (t->resource == frameTexture)
               target = frameTarget;
+            else if (grabTexture && t->resource == grabTexture)
+              target = kGrabCopy;
             else if (uploaded(t->resource))
               target = reinterpret_cast<remixapi_HostTargetHandleEXT>(t->resource);
             else {
@@ -630,6 +644,15 @@ namespace urtx {
       uint32_t depthTest = 0;
       remixapi_HostTargetHandleEXT frameTarget = kFrameCopy;
       const bool walls = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return !blended(d); });
+      const bool grabs = grabTexture && std::any_of(draws.begin(), draws.end(), [&](const Draw &d) {
+        return std::any_of(d.textures.begin(), d.textures.end(),
+                           [&](const Texture &t) { return t.resource == grabTexture; });
+      });
+      if (grabs && depthShaders()) {
+        Pass flip = fullScreen(g_flipFs, kGrabCopy, width, height, nullptr, 0);
+        flip.samplers.push_back({0, kFrameCopy, 0, 1, 1});
+        passes.push_back(std::move(flip));
+      }
       if (projection[0] != 0.f && depthShaders()) {
         const float push[3] = {-projection[0], projection[1], reversedZ ? 0.f : 1.f};
         Pass fill = fullScreen(g_frameDepthFs, REMIXAPI_HOST_TARGET_FRAME_DEPTH_EXT, 0, 0, push, sizeof(push));

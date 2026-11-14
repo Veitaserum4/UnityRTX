@@ -4,7 +4,7 @@ openremix_inc = include_directories(get_option('vulkan_include') / '..' / '..' /
 # The replay's own shaders (shaders/), SPIR-V as C arrays.
 glslang = find_program('glslangValidator')
 own_shaders = []
-foreach shader : ['fullscreen.vert', 'frame_depth.frag', 'wall_mask.frag', 'fill.frag', 'stain.vert', 'stain.frag']
+foreach shader : ['fullscreen.vert', 'frame_depth.frag', 'wall_mask.frag', 'fill.frag', 'flip.frag', 'stain.vert', 'stain.frag']
   own_shaders += custom_target(shader + '.inc',
     input: 'shaders' / shader, output: shader + '.inc',
     command: [glslang, '-V', '--vn', shader.replace('.', '_'), '-o', '@OUTPUT@', '@INPUT@'])
