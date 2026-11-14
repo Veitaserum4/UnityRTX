@@ -905,8 +905,6 @@ namespace UnityRemix
                     matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a);
                     matData.translucentKind = TranslucentKind.None;
                     matData.suppressLightGeneration = true;
-                    // (Its emission is what Unity shows, not in the scene's light units.)
-                    matData.unlitSheet = true;
                     hasEmission = true;
                 }
                 else if (matData.glowCoverage > 0f && matData.glowStrength <= 0f)
