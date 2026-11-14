@@ -136,8 +136,46 @@ namespace UnityRemix
             {
                 var m = mats[i];
                 text += m != null ? $" | material {i} '{m.name}' shader '{(m.shader != null ? m.shader.name : "-")}' id {StaticGeometryDedupe.GetCanonicalMaterialId(m)} queue {m.renderQueue}{Properties(m)}" : $" | material {i} none";
+                try { text += PropertyBlock(renderer, i, m); } catch { } // (MaterialPropertyBlock.Has* needs Unity 2021)
             }
             return text;
+        }
+
+        // A renderer's property block (what Animators and scripts set per renderer, the shared
+        // material unchanged): the colours and floats it overrides.
+        private static readonly MaterialPropertyBlock block = new MaterialPropertyBlock();
+
+        private static string PropertyBlock(Renderer renderer, int index, Material m)
+        {
+            try
+            {
+                if (!renderer.HasPropertyBlock())
+                    return "";
+                renderer.GetPropertyBlock(block, index);
+                if (block.isEmpty)
+                    renderer.GetPropertyBlock(block);
+                if (block.isEmpty || m == null || m.shader == null)
+                    return " block (empty)";
+                var parts = new System.Collections.Generic.List<string>();
+                int count = m.shader.GetPropertyCount();
+                for (int p = 0; p < count; p++)
+                {
+                    string name = m.shader.GetPropertyName(p);
+                    int id = Shader.PropertyToID(name);
+                    var type = m.shader.GetPropertyType(p);
+                    if (type == UnityEngine.Rendering.ShaderPropertyType.Color && block.HasColor(id))
+                        parts.Add($"{name}={block.GetColor(id)}");
+                    else if ((type == UnityEngine.Rendering.ShaderPropertyType.Float || type == UnityEngine.Rendering.ShaderPropertyType.Range) && block.HasFloat(id))
+                        parts.Add($"{name}={block.GetFloat(id):G4}");
+                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Vector && block.HasVector(id))
+                        parts.Add($"{name}={block.GetVector(id)}");
+                }
+                return $" block {{{string.Join("; ", parts)}}}";
+            }
+            catch (Exception ex)
+            {
+                return $" block (unreadable: {ex.Message})";
+            }
         }
 
         // Keywords and properties of a live material (when the material manager is known).

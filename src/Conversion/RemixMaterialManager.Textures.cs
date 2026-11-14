@@ -316,7 +316,7 @@ namespace UnityRemix
         /// Cached per Texture2D in OpenRemix (where tint is applied in scene.glsl).
         /// </summary>
         private (IntPtr handle, ulong hash) UploadParticleTexture(Texture2D tex, Material mat, Color albedoColor,
-            float coverageScale, ParticleBlendKind kind)
+            float coverageScale, ParticleBlendKind kind, bool gammaCoverage = false)
         {
             // coverageScale: the texels' alpha scale (a faint additive glow covers little).
             int coverageKey = Mathf.Clamp(Mathf.RoundToInt(coverageScale * 255f), 1, 255);
@@ -325,7 +325,7 @@ namespace UnityRemix
 
             bool isAdditiveShader = kind == ParticleBlendKind.Additive;
 
-            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)kind << 24) ^ ((long)(255 - coverageKey) << 40));
+            long cacheKey = unchecked((long)0x5000000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)kind << 24) ^ ((long)(255 - coverageKey) << 40) ^ (gammaCoverage ? 1L << 52 : 0L));
 
             lock (pendingTextureLock)
             {
@@ -490,6 +490,8 @@ namespace UnityRemix
                     pixelData[i * 4 + 0] = r;
                     pixelData[i * 4 + 1] = g;
                     pixelData[i * 4 + 2] = b;
+                    if (gammaCoverage && a > 0 && a < 255)
+                        a = (byte)Mathf.Clamp(Mathf.RoundToInt(255f * Mathf.Pow(a / 255f, 2.2f)), 0, 255);
                     pixelData[i * 4 + 3] = coverageKey == 255 ? a : (byte)(a * coverageKey / 255);
                 }
 

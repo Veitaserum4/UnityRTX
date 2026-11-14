@@ -885,6 +885,19 @@ namespace UnityRemix
                     // UI/Default): Unity shows its own colour whatever lights it. Black (nothing
                     // lights it), emitting its texture times its tint, covering by its alpha:
                     // composed as Unity alpha-blends it. Lit, a blue glow quad came out grey.
+                    // A gamma-space game blends in display values: a half-covering texel over the
+                    // dark shows half the colour on screen, a fifth of it in light. Its coverage
+                    // in light is alpha^2.2 (exact over black; the glows that matter are over dark).
+                    if (QualitySettings.activeColorSpace == ColorSpace.Gamma && albedoTex != null)
+                    {
+                        var (gammaHandle, gammaHash) = UploadParticleTexture(albedoTex, material, Color.white, 1f, ParticleBlendKind.Alpha, gammaCoverage: true);
+                        if (gammaHandle != IntPtr.Zero)
+                        {
+                            matData.albedoHandle = gammaHandle;
+                            matData.albedoTextureHash = gammaHash;
+                            matData.albedoColor.a = Mathf.Pow(Mathf.Clamp01(matData.albedoColor.a), 2.2f);
+                        }
+                    }
                     matData.emissiveHandle = matData.albedoHandle;
                     matData.emissiveTextureHash = matData.albedoTextureHash;
                     matData.emissiveColor = new Color(matData.albedoColor.r, matData.albedoColor.g, matData.albedoColor.b, 1f);
