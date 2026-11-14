@@ -316,7 +316,7 @@ namespace UnityRemix
                 {
                     RemixImGui.Indent();
                     float densMult = fog.ConfigFogDensityMultiplier.Value;
-                    if (RemixImGui.SliderFloat("Density multiplier", ref densMult, 0.05f, 10.0f))
+                    if (RemixImGui.SliderFloat("Density multiplier", ref densMult, 0.01f, 10.0f))
                     {
                         fog.ConfigFogDensityMultiplier.Value = densMult;
                         fog.MarkDirty();

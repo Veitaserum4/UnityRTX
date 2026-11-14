@@ -287,7 +287,7 @@ namespace UnityRemix
             configEnableLights = Config.Bind("Lighting", "EnableLights", true,
                 "Convert Unity lights to RTX Remix lights.");
             
-            configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 3.212f,
+            configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 1f,
                 new ConfigDescription("Global multiplier for all light intensities.",
                     new AcceptableValueRange<float>(0.01f, 100f)));
             RemixMaterialManager.LightIntensityMultiplier = configLightIntensityMultiplier;

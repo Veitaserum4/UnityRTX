@@ -48,6 +48,10 @@ namespace UnityRemix
         public uint CurrentRemixMode => lastSentMode;
         public string StatusText { get; private set; } = "Initializing...";
 
+        // Unity fog densities are tuned for raster fog; through OpenRemix's volumetrics the
+        // same density reads far thicker. Density 1 is this fraction of Unity's.
+        public const float DensityScale = 0.05f;
+
         public RemixFogManager(ManualLogSource logger, ConfigFile config)
         {
             this.logger = logger;
@@ -55,9 +59,16 @@ namespace UnityRemix
             ConfigEnableFog = config.Bind("Fog", "EnableFog", true,
                 "Synchronize Unity fog with OpenRemix path-traced volumetric fog.");
 
-            ConfigFogDensityMultiplier = config.Bind("Fog", "DensityMultiplier", 1.0f,
-                new ConfigDescription("Multiplier for exponential/exp2 fog density.",
-                    new AcceptableValueRange<float>(0.01f, 20.0f)));
+            ConfigFogDensityMultiplier = config.Bind("Fog", "Density", 1.0f,
+                new ConfigDescription("Multiplier for exponential/exp2 fog density; 1 is 1/20 of Unity's (DensityScale), " +
+                    "which suits OpenRemix's volumetrics.",
+                    new AcceptableValueRange<float>(0.001f, 20.0f)));
+            // Fog/DensityMultiplier was the plain multiplier: a saved value carries over, rescaled.
+            var legacy = config.Bind("Fog", "DensityMultiplier", -1f, "Replaced by Fog/Density.");
+            if (legacy.Value >= 0f)
+                ConfigFogDensityMultiplier.Value = Mathf.Clamp(legacy.Value / DensityScale, 0.001f, 20f);
+            config.Remove(legacy.Definition);
+            config.Save();
 
             ConfigFogDistanceMultiplier = config.Bind("Fog", "DistanceMultiplier", 1.0f,
                 new ConfigDescription("Multiplier for linear fog distances (scales start and end distance).",
@@ -139,7 +150,7 @@ namespace UnityRemix
                     color = new Color(cr, cg, cb);
 
                     float distMult = Mathf.Max(ConfigFogDistanceMultiplier.Value, 0.01f);
-                    float densMult = Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f);
+                    float densMult = Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f) * DensityScale;
 
                     float rawStart = RenderSettings.fogStartDistance;
                     float rawEnd = RenderSettings.fogEndDistance;
