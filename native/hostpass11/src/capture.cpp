@@ -68,6 +68,11 @@ namespace urtx {
     }
     d.topology = s.topology;
     d.viewport = s.viewport;
+    if (s.blend) {
+      D3D11_BLEND_DESC desc{};
+      s.blend->GetDesc(&desc);
+      d.blend = desc.RenderTarget[0];
+    }
     d.vsConstants = constants(context, s.vsCb, d.vs);
     d.psConstants = constants(context, s.psCb, d.ps);
     if (const auto *layout = layoutOf(s.layout))
@@ -183,11 +188,13 @@ namespace urtx {
     for (const auto &d : g_last) {
       std::snprintf(line, sizeof(line),
                     "draw tag %u: vs %016llx (%s, %zu bytes SPIR-V) ps %016llx (%s, %zu bytes), %zu indices, %u vertices, "
-                    "%zu streams, topology %d, viewport %.0fx%.0f\n",
+                    "%zu streams, topology %d, viewport %.0fx%.0f, blend %d (%d %d %d, mask %d)\n",
                     d.tag, (unsigned long long)d.vs->hash, d.vs->compiled ? "compiled" : d.vs->error.c_str(),
                     d.vs->spirv.size() * 4, (unsigned long long)d.ps->hash,
                     d.ps->compiled ? "compiled" : d.ps->error.c_str(), d.ps->spirv.size() * 4, d.indices.size(),
-                    d.vertexCount, d.streams.size(), int(d.topology), d.viewport.Width, d.viewport.Height);
+                    d.vertexCount, d.streams.size(), int(d.topology), d.viewport.Width, d.viewport.Height,
+                    int(d.blend.BlendEnable), int(d.blend.SrcBlend), int(d.blend.DestBlend), int(d.blend.BlendOp),
+                    int(d.blend.RenderTargetWriteMask));
       out += line;
       for (const auto *shader : {d.vs.get(), d.ps.get()})
         for (const auto &r : shader->resources) {

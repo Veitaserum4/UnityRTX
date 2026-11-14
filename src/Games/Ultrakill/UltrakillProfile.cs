@@ -67,7 +67,7 @@ namespace UnityRemix.Games.Ultrakill
         // Unity's built-in Default-Material appears only on helper shapes the game doesn't show:
         // crusher base boxes, skull altar placeholders, invisible walls.
         // ULTRAKILL/HeatWave: heat haze, a screen distortion (its texture only bends the view
-        // behind it), drawn in Remix as the texture itself.
+        // behind it): not path-traced, passed through (GetPassThroughRenderers).
         public override bool IsHiddenMaterial(Material material) =>
             material.name.StartsWith("Default-Material", StringComparison.Ordinal) ||
             (material.shader != null && material.shader.name == "ULTRAKILL/HeatWave");
@@ -114,7 +114,30 @@ namespace UnityRemix.Games.Ultrakill
             foreach (var r in limboWalls)
                 if (r != null)
                     renderers.Add(r);
+            // Heat haze particles (Greed), found a few times a second (they come with rooms).
+            if (Time.frameCount - heatWavesFrame >= 30)
+            {
+                heatWavesFrame = Time.frameCount;
+                heatWaves.Clear();
+                foreach (var r in UnityEngine.Object.FindObjectsOfType<ParticleSystemRenderer>())
+                    if (IsHeatWave(r.sharedMaterial))
+                        heatWaves.Add(r);
+            }
+            foreach (var r in heatWaves)
+                if (r != null)
+                    renderers.Add(r);
         }
+
+        // ULTRAKILL/HeatWave: heat haze, the view behind it bent by scrolling noise. Its pass 0
+        // is a GrabPass (_GrabTexture), pass 1 the distortion, which the replay draws over the
+        // path-traced frame.
+        private static bool IsHeatWave(Material material) =>
+            material != null && material.shader != null && material.shader.name == "ULTRAKILL/HeatWave";
+
+        private readonly List<Renderer> heatWaves = new List<Renderer>();
+        private int heatWavesFrame = -1000;
+
+        public override int PassThroughShaderPass(Material material) => IsHeatWave(material) ? 1 : 0;
 
         // PostProcessV2_Handler's screen material (ULTRAKILL/PostProcessV2, postProcessV2_VSRM)
         // while it shows something: DEAD, the death sequence (DeathSequence; noise and blocks

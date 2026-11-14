@@ -8,6 +8,8 @@
 //   UnityRTXHostPass_SetFrameTexture / SetProjection / SetTexture (main thread)
 //     name the texture the frame replaces, the capture camera's projection and
 //     the other textures' pixels;
+//   UnityRTXHostPass_SetGrabTexture (main thread) names the stand-in bound as
+//     _GrabTexture, which the frame replaces as well;
 //   UnityRTXHostPass_SetScreenSource (main thread) names the texture a
 //     screen effect's draws (tag kScreenTag) sample as the composed frame;
 //   UnityRTXHostPass_SetStains (main thread) / SetStainView (the presenting
@@ -44,6 +46,7 @@ __declspec(dllexport) int UnityRTXHostPass_BindRemix(void *remix) {
   return urtx::bindRemix(static_cast<HMODULE>(remix)) ? 1 : 0;
 }
 __declspec(dllexport) void UnityRTXHostPass_SetFrameTexture(void *resource) { urtx::setFrameTexture(resource); }
+__declspec(dllexport) void UnityRTXHostPass_SetGrabTexture(void *resource) { urtx::setGrabTexture(resource); }
 __declspec(dllexport) void UnityRTXHostPass_SetScreenSource(void *resource, int width, int height, int frameWidth,
                                                              int frameHeight) {
   urtx::setScreenSource(resource, uint32_t(std::max(width, 0)), uint32_t(std::max(height, 0)),

@@ -183,6 +183,13 @@ namespace UnityRemix.Games
             return size;
         }
 
+        public static int PassThroughShaderPass(Material material)
+        {
+            int pass = 0;
+            Run(nameof(PassThroughShaderPass), p => pass = p.PassThroughShaderPass(material));
+            return pass;
+        }
+
         public static Texture PassThroughFrameTexture(Material material)
         {
             Texture texture = null;

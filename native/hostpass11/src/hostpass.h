@@ -88,6 +88,15 @@ namespace urtx {
     std::vector<Texture> textures;
     std::vector<Sampler> samplers;
     D3D11_VIEWPORT viewport{};
+    // Render target 0's blend (OMSetBlendState): opaque, all channels without one.
+    D3D11_RENDER_TARGET_BLEND_DESC blend{FALSE,
+                                         D3D11_BLEND_ONE,
+                                         D3D11_BLEND_ZERO,
+                                         D3D11_BLEND_OP_ADD,
+                                         D3D11_BLEND_ONE,
+                                         D3D11_BLEND_ZERO,
+                                         D3D11_BLEND_OP_ADD,
+                                         D3D11_COLOR_WRITE_ENABLE_ALL};
   };
 
   // Capture (capture.cpp), on the render thread.
@@ -117,6 +126,7 @@ namespace urtx {
     UINT ibOffset = 0;
     D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
     D3D11_VIEWPORT viewport{};
+    ID3D11BlendState *blend = nullptr;
   };
   State &state();
   std::mutex &lock();
@@ -139,6 +149,9 @@ namespace urtx {
   // Replay (replay.cpp): the last capture as OpenRemix host passes.
   bool bindRemix(HMODULE remix);
   void setFrameTexture(void *resource);                     // the texture the frame replaces
+  // A second texture the frame replaces: the stand-in UnityRTX binds as
+  // _GrabTexture (a GrabPass's copy of what is behind) for the draws that read it.
+  void setGrabTexture(void *resource);
   // Screen effects: draws tagged kScreenTag are full-screen passes over the
   // composed frame (after the others) over all of it (frameWidth x
   // frameHeight, the capture's target), sampling a copy of it for `resource`,

@@ -45,6 +45,7 @@ namespace urtx {
     // From the plugin (main thread), read on the render thread.
     std::mutex g_settingsLock;
     void *g_frameTexture = nullptr; // the resource the draws sample as the frame
+    void *g_grabTexture = nullptr;  // another (the _GrabTexture stand-in)
     void *g_screenSource = nullptr; // the resource screen effects sample as the frame
     uint32_t g_screenSize[2] = {};  // the frame's scale for them (0: as it is)
     uint32_t g_screenFrame[2] = {}; // the frame they cover (the capture's target)
@@ -218,8 +219,30 @@ namespace urtx {
     // A captured draw as a pass on the frame, sampling `frameTarget` for the
     // frame texture; or (mask) its geometry only, with wall_mask.frag, into
     // kBehind[0]. False when it can't be (why in `why`).
-    bool drawPass(const Draw &d, void *frameTexture, remixapi_HostTargetHandleEXT frameTarget, uint32_t depthTest,
-                  bool mask, Pass &pass, std::string &why) {
+    // D3D11_BLEND to VkBlendFactor.
+    uint32_t vkBlend(D3D11_BLEND b) {
+      switch (b) {
+      case D3D11_BLEND_ZERO: return 0;
+      case D3D11_BLEND_ONE: return 1;
+      case D3D11_BLEND_SRC_COLOR: return 2;
+      case D3D11_BLEND_INV_SRC_COLOR: return 3;
+      case D3D11_BLEND_DEST_COLOR: return 4;
+      case D3D11_BLEND_INV_DEST_COLOR: return 5;
+      case D3D11_BLEND_SRC_ALPHA: return 6;
+      case D3D11_BLEND_INV_SRC_ALPHA: return 7;
+      case D3D11_BLEND_DEST_ALPHA: return 8;
+      case D3D11_BLEND_INV_DEST_ALPHA: return 9;
+      case D3D11_BLEND_SRC_ALPHA_SAT: return 14;
+      default: return 1;
+      }
+    }
+    // A draw blended over what is behind it (a GrabPass distortion, a
+    // transparent effect): it samples the frame as it is, not what is behind
+    // the walls (kBehind), and leaves no mask.
+    bool blended(const Draw &d) { return d.blend.BlendEnable != FALSE; }
+
+    bool drawPass(const Draw &d, void *frameTexture, void *grabTexture, remixapi_HostTargetHandleEXT frameTarget,
+                  uint32_t depthTest, bool mask, Pass &pass, std::string &why) {
       const auto vs = handleOf(*d.vs), ps = mask ? g_maskFs : handleOf(*d.ps);
       if (!vs || !ps) {
         why = "shaders not compiled or registered";
@@ -273,7 +296,7 @@ namespace urtx {
               return false;
             }
             remixapi_HostTargetHandleEXT target = 0;
-            if (t->resource == frameTexture)
+            if (t->resource == frameTexture || (grabTexture && t->resource == grabTexture))
               target = frameTarget;
             else if (uploaded(t->resource))
               target = reinterpret_cast<remixapi_HostTargetHandleEXT>(t->resource);
@@ -327,6 +350,20 @@ namespace urtx {
       info.srcColorBlend = info.srcAlphaBlend = 1; // ONE (no blending)
       info.colorBlendOp = info.alphaBlendOp = 0;
       info.colorWriteMask = 0xf;
+      if (!mask) {
+        // As the draw blended in Unity (the masks write everything).
+        const auto &b = d.blend;
+        info.colorWriteMask = b.RenderTargetWriteMask & 0xf;
+        if (b.BlendEnable) {
+          info.blendEnable = 1;
+          info.srcColorBlend = vkBlend(b.SrcBlend);
+          info.dstColorBlend = vkBlend(b.DestBlend);
+          info.colorBlendOp = uint32_t(b.BlendOp) - 1; // D3D11_BLEND_OP 1..5, VkBlendOp 0..4
+          info.srcAlphaBlend = vkBlend(b.SrcBlendAlpha);
+          info.dstAlphaBlend = vkBlend(b.DestBlendAlpha);
+          info.alphaBlendOp = uint32_t(b.BlendOpAlpha) - 1;
+        }
+      }
       // The capture's viewport, flipped (a negative height): Unity's render
       // texture is upside down on D3D.
       info.viewport[0] = int32_t(d.viewport.TopLeftX);
@@ -454,6 +491,10 @@ namespace urtx {
     std::lock_guard l(g_settingsLock);
     g_frameTexture = resource;
   }
+  void setGrabTexture(void *resource) {
+    std::lock_guard l(g_settingsLock);
+    g_grabTexture = resource;
+  }
   void setScreenSource(void *resource, uint32_t width, uint32_t height, uint32_t frameWidth, uint32_t frameHeight) {
     std::lock_guard l(g_settingsLock);
     g_screenSource = resource;
@@ -501,7 +542,8 @@ namespace urtx {
     int count = 0;
     for (const auto &d : draws)
       for (const auto &t : d.textures) {
-        if (!t.resource || t.resource == g_frameTexture || t.resource == g_screenSource || g_uploaded.count(t.resource) ||
+        if (!t.resource || t.resource == g_frameTexture || t.resource == g_grabTexture || t.resource == g_screenSource ||
+            g_uploaded.count(t.resource) ||
             g_pending.count(t.resource))
           continue;
         if (std::find(resources, resources + count, t.resource) != resources + count)
@@ -520,7 +562,7 @@ namespace urtx {
   int submit() {
     if (!g_submit)
       return 0;
-    void *frameTexture = nullptr, *screenSource = nullptr;
+    void *frameTexture = nullptr, *grabTexture = nullptr, *screenSource = nullptr;
     uint32_t screenSize[2], screenFrame[2];
     float projection[2];
     bool reversedZ;
@@ -536,6 +578,7 @@ namespace urtx {
         std::memcpy(stainView, g_stainView, sizeof(stainView));
       }
       frameTexture = g_frameTexture;
+      grabTexture = g_grabTexture;
       screenSource = g_screenSource;
       screenSize[0] = g_screenSize[0];
       screenSize[1] = g_screenSize[1];
@@ -586,6 +629,7 @@ namespace urtx {
       // The frame's depth, in the capture camera's projection.
       uint32_t depthTest = 0;
       remixapi_HostTargetHandleEXT frameTarget = kFrameCopy;
+      const bool walls = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return !blended(d); });
       if (projection[0] != 0.f && depthShaders()) {
         const float push[3] = {-projection[0], projection[1], reversedZ ? 0.f : 1.f};
         Pass fill = fullScreen(g_frameDepthFs, REMIXAPI_HOST_TARGET_FRAME_DEPTH_EXT, 0, 0, push, sizeof(push));
@@ -594,7 +638,8 @@ namespace urtx {
         fill.samplers.push_back({0, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
         passes.push_back(std::move(fill));
         depthTest = (reversedZ ? kCompareGreaterOrEqual : kCompareLessOrEqual) + 1;
-
+      }
+      if (walls && depthTest) {
         // What is behind the walls, for their shader to sample in place of
         // the frame: it samples around each pixel (chromatic aberration,
         // noise jitter), and the frame has what stands in front of the walls
@@ -609,7 +654,7 @@ namespace urtx {
         for (const auto &d : draws) {
           Pass pass;
           std::string why;
-          if (drawPass(d, frameTexture, 0, 0, true, pass, why))
+          if (!blended(d) && drawPass(d, frameTexture, grabTexture, 0, 0, true, pass, why))
             passes.push_back(std::move(pass));
         }
         std::vector<std::pair<int, int>> steps;
@@ -632,7 +677,7 @@ namespace urtx {
       for (const auto &d : draws) {
         Pass pass;
         std::string why;
-        if (drawPass(d, frameTexture, frameTarget, depthTest, false, pass, why)) {
+        if (drawPass(d, frameTexture, grabTexture, blended(d) ? kFrameCopy : frameTarget, depthTest, false, pass, why)) {
           passes.push_back(std::move(pass));
           ++replayed;
         } else if (skipped.empty())
@@ -656,7 +701,7 @@ namespace urtx {
     for (const auto &d : screen) {
       Pass pass;
       std::string why;
-      if (!screenSource || !drawPass(d, screenSource, kScreenCopy, 0, false, pass, why)) {
+      if (!screenSource || !drawPass(d, screenSource, nullptr, kScreenCopy, 0, false, pass, why)) {
         if (skipped.empty())
           skipped = "screen effect: " + (screenSource ? why : std::string("no screen source"));
         continue;

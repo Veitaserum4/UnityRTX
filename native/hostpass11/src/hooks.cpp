@@ -78,6 +78,7 @@ namespace urtx {
     using DrawInstancedFn = void(STDMETHODCALLTYPE *)(ID3D11DeviceContext *, UINT, UINT, UINT, UINT);
     using SetTopologyFn = void(STDMETHODCALLTYPE *)(ID3D11DeviceContext *, D3D11_PRIMITIVE_TOPOLOGY);
     using SetViewportsFn = void(STDMETHODCALLTYPE *)(ID3D11DeviceContext *, UINT, const D3D11_VIEWPORT *);
+    using SetBlendStateFn = void(STDMETHODCALLTYPE *)(ID3D11DeviceContext *, ID3D11BlendState *, const FLOAT[4], UINT);
     using UpdateSubresourceFn = void(STDMETHODCALLTYPE *)(ID3D11DeviceContext *, ID3D11Resource *, UINT,
                                                           const D3D11_BOX *, const void *, UINT, UINT);
     using CopyResourceFn = void(STDMETHODCALLTYPE *)(ID3D11DeviceContext *, ID3D11Resource *, ID3D11Resource *);
@@ -251,6 +252,13 @@ namespace urtx {
       rehookDraws(c);
       if (immediate(c) && n && v)
         g_state.viewport = v[0];
+    }
+    void STDMETHODCALLTYPE hOMSetBlendState(ID3D11DeviceContext *c, ID3D11BlendState *b, const FLOAT factor[4],
+                                            UINT mask) {
+      original<SetBlendStateFn>(c, 35)(c, b, factor, mask);
+      rehookDraws(c);
+      if (immediate(c))
+        g_state.blend = b;
     }
     HRESULT STDMETHODCALLTYPE hMap(ID3D11DeviceContext *c, ID3D11Resource *r, UINT sub, D3D11_MAP type, UINT flags,
                                    D3D11_MAPPED_SUBRESOURCE *mapped) {
@@ -430,7 +438,7 @@ namespace urtx {
     // 10 PSSetSamplers, 11 VSSetShader, 12 DrawIndexed, 13 Draw, 14 Map, 15 Unmap,
     // 16 PSSetConstantBuffers, 17 IASetInputLayout, 18 IASetVertexBuffers,
     // 19 IASetIndexBuffer, 20 DrawIndexedInstanced, 21 DrawInstanced,
-    // 24 IASetPrimitiveTopology, 44 RSSetViewports, 48 UpdateSubresource.
+    // 24 IASetPrimitiveTopology, 35 OMSetBlendState, 44 RSSetViewports, 48 UpdateSubresource.
     patch(c, 7, reinterpret_cast<void *>(&hVSSetConstantBuffers));
     patch(c, 8, reinterpret_cast<void *>(&hPSSetShaderResources));
     patch(c, 9, reinterpret_cast<void *>(&hPSSetShader));
@@ -447,6 +455,7 @@ namespace urtx {
     patch(c, 20, reinterpret_cast<void *>(&hDrawIndexedInstanced));
     patch(c, 21, reinterpret_cast<void *>(&hDrawInstanced));
     patch(c, 24, reinterpret_cast<void *>(&hIASetPrimitiveTopology));
+    patch(c, 35, reinterpret_cast<void *>(&hOMSetBlendState));
     patch(c, 44, reinterpret_cast<void *>(&hRSSetViewports));
     patch(c, 48, reinterpret_cast<void *>(&hUpdateSubresource));
   }

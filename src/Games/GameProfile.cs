@@ -145,6 +145,10 @@ namespace UnityRemix.Games
         // (its screen-space view of the scene); null: none. Main thread.
         public virtual Texture PassThroughFrameTexture(Material material) => null;
 
+        // The shader pass a pass-through material is drawn with: past a GrabPass (which
+        // copies what is behind into _GrabTexture; the path-traced frame stands in for it).
+        public virtual int PassThroughShaderPass(Material material) => 0;
+
         // A full-screen effect the game applies over its frame (a material Unity blits with,
         // reading the frame as _MainTex), passed through over the composed path-traced frame
         // this frame; null: none. Main thread.

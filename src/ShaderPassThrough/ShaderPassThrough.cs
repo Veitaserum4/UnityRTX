@@ -30,6 +30,7 @@ namespace UnityRemix
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Report(StringBuilder buffer, int bytes);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_BindRemix(IntPtr remix);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetFrameTexture(IntPtr resource);
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetGrabTexture(IntPtr resource);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetScreenSource(IntPtr resource, int width, int height, int frameWidth, int frameHeight);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetProjection(float p22, float p23, int reversedZ);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetTexture(IntPtr resource, int width, int height, int depth, int vkFormat, IntPtr rgba8);
@@ -61,6 +62,11 @@ namespace UnityRemix
         private static bool captureCleared;
         private static Texture frameTexture;
         private static IntPtr frameTexturePtr;
+        // Bound as _GrabTexture for the draws (their GrabPass is not drawn): the replay samples
+        // the path-traced frame in its place.
+        private static RenderTexture grabStandIn;
+        private static IntPtr grabStandInPtr;
+        private static readonly int GrabTextureId = Shader.PropertyToID("_GrabTexture");
         // Main-thread cost of Capture, for the report.
         private static readonly System.Diagnostics.Stopwatch captureTime = new System.Diagnostics.Stopwatch();
         private static int capturedFrames, culledFrames;
@@ -217,6 +223,7 @@ namespace UnityRemix
             helper.targetTexture = target;
 
             commands.Clear();
+            commands.SetGlobalTexture(GrabTextureId, grabStandIn);
             for (int i = 0; i < renderers.Count; i++)
             {
                 var r = renderers[i];
@@ -228,7 +235,7 @@ namespace UnityRemix
                     if (materials[s] == null)
                         continue;
                     commands.IssuePluginEvent(renderEvent, BeginEvent | (i & 0xffff));
-                    commands.DrawRenderer(r, materials[s], s, 0);
+                    commands.DrawRenderer(r, materials[s], s, Games.GameProfiles.PassThroughShaderPass(materials[s]));
                 }
             }
             if (screenEffect != null)
@@ -354,6 +361,7 @@ namespace UnityRemix
                 frameTexturePtr = frame != null ? frame.GetNativeTexturePtr() : IntPtr.Zero;
             }
             UnityRTXHostPass_SetFrameTexture(frameTexturePtr);
+            UnityRTXHostPass_SetGrabTexture(grabStandInPtr);
             UnityRTXHostPass_SetScreenSource(screenEffect != null ? screenSourcePtr : IntPtr.Zero,
                 screenEffect != null ? screenSource.width : 0, screenEffect != null ? screenSource.height : 0,
                 target.width, target.height);
@@ -587,6 +595,12 @@ namespace UnityRemix
                     target.Release();
                 target = new RenderTexture(width, height, 24, RenderTextureFormat.ARGB32) { name = "UnityRTX pass-through" };
                 target.Create();
+            }
+            if (grabStandIn == null)
+            {
+                grabStandIn = new RenderTexture(4, 4, 0, RenderTextureFormat.ARGB32) { name = "UnityRTX grab stand-in" };
+                grabStandIn.Create();
+                grabStandInPtr = grabStandIn.GetNativeTexturePtr();
             }
             if (helper == null)
             {
