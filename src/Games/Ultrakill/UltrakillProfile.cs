@@ -24,12 +24,14 @@ namespace UnityRemix.Games.Ultrakill
         private Type checkPointType;
         private bool checkPointTypeSearched;
         private readonly UltrakillBloodStains bloodStains = new UltrakillBloodStains();
+        private readonly UltrakillOilStains oilStains = new UltrakillOilStains();
 
         public override void Apply(Harmony harmony)
         {
             UltrakillPostProcessPatch.Apply(harmony, Logger);
             UltrakillGameState.Apply(harmony, Logger);
             UltrakillSpawnPatch.Apply(harmony, Logger);
+            UltrakillOilStains.Apply(harmony, Logger);
         }
 
         // Weapons and arms are drawn by the main camera's "HUD Camera" child, at the weapon FOV.
@@ -55,12 +57,16 @@ namespace UnityRemix.Games.Ultrakill
 
         public override bool? OnRemixMenu(bool open) => UltrakillGameState.SetRemixMenuState(open, Logger);
 
-        public override void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) =>
+        public override void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount)
+        {
             bloodStains.Capture(Logger, materials, state);
+            oilStains.Capture(Logger, materials, state);
+        }
 
         public override void OnSceneLoaded()
         {
             bloodStains.Reset();
+            oilStains.Reset();
             limboWallsFrame = -100000; // rescan the Limbo walls
         }
 
@@ -68,8 +74,10 @@ namespace UnityRemix.Games.Ultrakill
         // crusher base boxes, skull altar placeholders, invisible walls.
         // ULTRAKILL/HeatWave: heat haze, a screen distortion (its texture only bends the view
         // behind it): not path-traced, passed through (GetPassThroughRenderers).
+        // ULTRAKILL/Oilstain_Fallback: oil stains, path-traced as paint (UltrakillOilStains).
         public override bool IsHiddenMaterial(Material material) =>
             material.name.StartsWith("Default-Material", StringComparison.Ordinal) ||
+            UltrakillOilStains.IsStainMaterial(material) ||
             (material.shader != null && material.shader.name == "ULTRAKILL/HeatWave") ||
             (ShaderPassThrough.Installed && IsFresnelGlass(material));
 
@@ -763,17 +771,19 @@ namespace UnityRemix.Games.Ultrakill
             float amount = Mathf.Ceil(Mathf.Clamp01(block.GetFloat(OiledAmount)) * 5f) / 5f;
             if (amount <= 0f || material.shader == null || material.shader.name != "ULTRAKILL/Master")
                 return false;
+            // Stronger than a real oil film (index 1.45, a few percent reflectance), so the rainbow
+            // reads as boldly as the game's ramp; the flow swirls the thickness through 100-900 nm.
             film = new RemixMaterialManager.Iridescence
             {
-                strength = amount,
-                filmIndex = 1.45f,          // oil
-                thickness = 450f,
-                flowAmplitude = 250f,       // the noise ULTRAKILL takes the ramp's position from
-                flowScale = 0.5f,
-                flowSpeed = 0.05f,
-                structural = 0.3f * amount, // the rainbow reads on rough surfaces too, as the game's unlit oil
-                albedoScale = 1f - 0.75f * amount,
-                roughness = Mathf.Lerp(0.6f, 0.08f, amount)
+                strength = Mathf.Lerp(0.7f, 1f, amount),
+                filmIndex = 1.9f,
+                thickness = 500f,
+                flowAmplitude = 400f,
+                flowScale = 0.35f,
+                flowSpeed = 0.3f,
+                structural = Mathf.Lerp(0.5f, 0.9f, amount), // the rainbow in the diffuse colour too, as the game's unlit oil
+                albedoScale = 1f - 0.6f * amount,
+                roughness = Mathf.Lerp(0.35f, 0.05f, amount)
             };
             return true;
         }
