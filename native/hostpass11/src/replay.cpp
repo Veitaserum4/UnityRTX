@@ -711,8 +711,10 @@ namespace urtx {
       // against the depth of the first surface that is not a sheet.
       const bool layers = g_viewLayers && walls;
       const auto wallDepth = layers ? REMIXAPI_HOST_TARGET_VIEW_OPAQUE_DEPTH_EXT : REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT;
-      auto frameDepth = [&](remixapi_HostTargetHandleEXT source) {
-        const float push[3] = {-projection[0], projection[1], reversedZ ? 0.f : 1.f};
+      // `behind`: the depth 0.2% farther (offset / 1.002 in z = scale + offset / d), so a wall
+      // the runtime's depth finds at its own surface is not hidden by rounding.
+      auto frameDepth = [&](remixapi_HostTargetHandleEXT source, bool behind) {
+        const float push[3] = {-projection[0], projection[1] / (behind ? 1.002f : 1.f), reversedZ ? 0.f : 1.f};
         Pass fill = fullScreen(g_frameDepthFs, REMIXAPI_HOST_TARGET_FRAME_DEPTH_EXT, 0, 0, push, sizeof(push));
         fill.info.depth = (kCompareAlways + 1) | REMIXAPI_HOST_DEPTH_WRITE_EXT;
         fill.info.colorWriteMask = 0;
@@ -720,7 +722,7 @@ namespace urtx {
         passes.push_back(std::move(fill));
       };
       if (projection[0] != 0.f && depthShaders()) {
-        frameDepth(walls ? wallDepth : REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT);
+        frameDepth(walls ? wallDepth : REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, layers);
         depthTest = (reversedZ ? kCompareGreaterOrEqual : kCompareLessOrEqual) + 1;
       }
       auto clearTarget = [&](remixapi_HostTargetHandleEXT target) {
@@ -814,7 +816,7 @@ namespace urtx {
         passes.push_back(std::move(again));
         grabCopy();
         if (depthTest && layers)
-          frameDepth(REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT);
+          frameDepth(REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, false);
       }
       for (const auto &d : draws)
         if (blended(d))
