@@ -454,6 +454,16 @@ namespace UnityRemix
             {
                 int wa = (int)(wParam.ToInt64() & 0xFFFF);
                 instance?.logger?.LogInfo($"[GameWindowSubclassProc] WM_ACTIVATE: state={(wa == 0 ? "INACTIVE" : (wa == 1 ? "ACTIVE" : "CLICKACTIVE"))}");
+                // The embedded Remix window can be activated without the menu open (Windows
+                // re-shows it when the game is restored). Unity would take that as losing focus,
+                // and a fullscreen game minimizes then, so every return to the game ends minimized
+                // again. Unity doesn't see it, and the game takes activation back.
+                if (wa == 0 && isEmbeddedStatic && !isRemixUIOpen && instance != null &&
+                    lParam != IntPtr.Zero && lParam == instance.remixWindow)
+                {
+                    PostMessage(hWnd, WM_REQUEST_ACTIVATE, IntPtr.Zero, IntPtr.Zero);
+                    return IntPtr.Zero;
+                }
                 if (wa == 0)
                 {
                     RemixUIOverlay.Instance?.HideOverlayImmediate();
