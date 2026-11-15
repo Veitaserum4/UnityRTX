@@ -51,6 +51,8 @@ namespace UnityRemix
         void OnApplicationQuit()
         {
             UnityRemixPlugin.SetQuitting();
+            if ((object)plugin != null)
+                plugin.QuitCleanup();
         }
     }
 }

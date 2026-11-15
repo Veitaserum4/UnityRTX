@@ -1342,32 +1342,35 @@ namespace UnityRemix
             lastSyncedRemixOpen = false;
             UpdateCursorVisibility(false);
             EnforceCursorVisible();
-            // Unity destroys its window after the managed runtime has shut down, so a
-            // subclass left on it would call into a dead delegate. Only the window's own
-            // thread can remove it; a call from the render thread leaves it for the main one.
-            if (gameWindowSubclassed && gameWindow != IntPtr.Zero &&
+            // Unity destroys its window, and the Remix window it owns, after the managed runtime
+            // has shut down. The Remix window's procedure and both subclasses are managed
+            // delegates, so anything left then calls dead code. Only a window's own thread
+            // (Unity's main thread) can remove a subclass or destroy the window; a call from
+            // the render thread leaves both for the main thread's cleanup.
+            if (gameWindowSubclassed && gameWindow != IntPtr.Zero && OnWindowThread(gameWindow) &&
                 RemoveWindowSubclass(gameWindow, gameWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_GAME_WINDOW))
                 gameWindowSubclassed = false;
-            if (remixWindow != IntPtr.Zero)
+            if (remixWindow == IntPtr.Zero)
+                return;
+            IntPtr wnd = remixWindow;
+            if (!IsWindow(wnd))
             {
-                IntPtr wnd = remixWindow;
                 remixWindow = IntPtr.Zero;
-                if (remixWindowSubclassed)
-                {
-                    RemoveWindowSubclass(wnd, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW);
-                    remixWindowSubclassed = false;
-                }
-                uint windowThread = GetWindowThreadProcessId(wnd, out _);
-                if (GetCurrentThreadId() == windowThread)
-                {
-                    DestroyWindow(wnd);
-                }
-                else
-                {
-                    PostMessage(wnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
-                }
-                logger.LogInfo("Remix window destroyed/closed");
+                remixWindowSubclassed = false;
+                return;
             }
+            if (!OnWindowThread(wnd))
+                return;
+            remixWindow = IntPtr.Zero;
+            if (remixWindowSubclassed)
+            {
+                RemoveWindowSubclass(wnd, remixWindowSubclassDelegate, (UIntPtr)SUBCLASS_ID_REMIX_WINDOW);
+                remixWindowSubclassed = false;
+            }
+            DestroyWindow(wnd);
+            logger.LogInfo("Remix window destroyed");
         }
+
+        private static bool OnWindowThread(IntPtr wnd) => GetWindowThreadProcessId(wnd, out _) == GetCurrentThreadId();
     }
 }

@@ -803,9 +803,19 @@ namespace UnityRemix
         
         void OnApplicationQuit()
         {
-            LogSource.LogInfo("Application quitting...");
+            QuitCleanup();
+        }
+
+        // Unity's main thread, before it destroys its window. OnDestroy is too late or never
+        // comes (the plugin's GameObject may already be gone, with RemixPersistentBehaviour in
+        // its place), and the Remix window must be gone before Unity's window goes.
+        public void QuitCleanup()
+        {
+            if (!isQuitting)
+                LogSource.LogInfo("Application quitting...");
             RemixWindowManager.UpdateCursorVisibility(false);
             isQuitting = true;
+            CleanupRemix();
         }
         
         public void UpdateFromPersistent()

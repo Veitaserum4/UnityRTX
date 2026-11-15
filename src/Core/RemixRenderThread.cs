@@ -302,7 +302,18 @@ namespace UnityRemix
         {
             renderThreadRunning = false;
             frameReadyEvent.Set();
-            return renderThread == null || !renderThread.IsAlive || renderThread.Join(5000);
+            if (renderThread == null || !renderThread.IsAlive)
+                return true;
+            // Shutting down the swapchain can send messages to the Remix window, which only its
+            // own thread (the caller, Unity's main thread) answers: keep pumping while waiting.
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (!renderThread.Join(10))
+            {
+                RemixWindowManager.PumpMainThreadMessages();
+                if (waited.ElapsedMilliseconds > 5000)
+                    return false;
+            }
+            return true;
         }
 
         private void RenderThreadLoop()
