@@ -1,6 +1,6 @@
 # UnityRTX
 A BepInEx plugin that brings path tracing to most modern Unity games, rendered by
-[OpenRemix](https://github.com/Veitaserum4/OpenRemix-J).
+[OpenRemix](https://github.com/OpenRenderCollective/OpenRemix).
 
 | Supported Features |   |
 |--------------------|---|
