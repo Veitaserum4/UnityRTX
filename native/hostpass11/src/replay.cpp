@@ -19,12 +19,14 @@
 #include <windows.h>
 
 #include "fill.frag.inc"
+#include "glass.frag.inc"
 #include "flip.frag.inc"
 #include "frame_depth.frag.inc"
 #include "fullscreen.vert.inc"
 #include "stain.frag.inc"
 #include "stain.vert.inc"
 #include "wall_mask.frag.inc"
+#include "wall_mask_glass.frag.inc"
 
 namespace urtx {
   namespace {
@@ -42,6 +44,18 @@ namespace urtx {
     constexpr remixapi_HostTargetHandleEXT kBehind[2] = {0x5552000000000002ull, 0x5552000000000003ull};
     // The frame upside down (flip.frag), for draws sampling the _GrabTexture stand-in.
     constexpr remixapi_HostTargetHandleEXT kGrabCopy = 0x5552000000000005ull;
+    // The walls' pixels (alpha 1) no other surface stands in front of: where
+    // glass.frag puts the runtime's sheets back over them.
+    constexpr remixapi_HostTargetHandleEXT kCover = 0x5552000000000006ull;
+#ifndef REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT
+#define REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT ((remixapi_HostTargetHandleEXT)0xffffffff00000003ull)
+#define REMIXAPI_HOST_TARGET_VIEW_OPAQUE_DEPTH_EXT ((remixapi_HostTargetHandleEXT)0xffffffff00000004ull)
+#endif
+    // Whether the runtime has its sheets' transmittance and the depth behind
+    // them (REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT, _VIEW_OPAQUE_DEPTH_EXT).
+    // One without them refuses the list naming them: the walls are then
+    // replayed as before, hidden behind sheets.
+    bool g_viewLayers = true;
     constexpr uint32_t kVkR32G32Sfloat = 103;
     constexpr uint32_t kCompareLessOrEqual = 3, kCompareGreaterOrEqual = 6, kCompareAlways = 7; // VkCompareOp
 
@@ -64,7 +78,8 @@ namespace urtx {
     // Registered shaders, by the capture's shader identity.
     std::unordered_map<const Shader *, remixapi_HostShaderHandleEXT> g_handles;
     std::unordered_set<const Shader *> g_failed;
-    remixapi_HostShaderHandleEXT g_fullscreenVs = 0, g_frameDepthFs = 0, g_maskFs = 0, g_fillFs = 0, g_flipFs = 0;
+    remixapi_HostShaderHandleEXT g_fullscreenVs = 0, g_frameDepthFs = 0, g_maskFs = 0, g_fillFs = 0, g_flipFs = 0,
+                                 g_maskGlassFs = 0, g_glassFs = 0;
     bool g_depthFailed = false;
 
     std::string g_lastSubmit = "nothing submitted yet";
@@ -118,7 +133,7 @@ namespace urtx {
     bool depthShaders() {
       if (g_depthFailed)
         return false;
-      if (g_fullscreenVs && g_frameDepthFs && g_maskFs && g_fillFs && g_flipFs)
+      if (g_fullscreenVs && g_frameDepthFs && g_maskFs && g_fillFs && g_flipFs && g_maskGlassFs && g_glassFs)
         return true;
       remixapi_HostShaderInfoEXT info{};
       info.sType = REMIXAPI_STRUCT_TYPE_HOST_SHADER_INFO_EXT;
@@ -164,6 +179,26 @@ namespace urtx {
       info.codeBytes = sizeof(flip_frag);
       info.pushConstantBytes = 0;
       if (g_register(&info, &g_flipFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_depthFailed = true;
+        return false;
+      }
+      const remixapi_HostShaderBindingEXT five[5] = {{0, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+                                                    {1, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+                                                    {2, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+                                                    {3, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+                                                    {4, REMIXAPI_HOST_BINDING_SAMPLER_EXT}};
+      info.bindings = five;
+      info.bindingCount = 3;
+      info.code = wall_mask_glass_frag;
+      info.codeBytes = sizeof(wall_mask_glass_frag);
+      if (g_register(&info, &g_maskGlassFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
+        g_depthFailed = true;
+        return false;
+      }
+      info.bindingCount = 5;
+      info.code = glass_frag;
+      info.codeBytes = sizeof(glass_frag);
+      if (g_register(&info, &g_glassFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
         g_depthFailed = true;
         return false;
       }
@@ -253,16 +288,24 @@ namespace urtx {
     // the walls (kBehind), and leaves no mask.
     bool blended(const Draw &d) { return d.blend.BlendEnable != FALSE; }
 
+    // A draw's geometry with one of the replay's own fragment shaders: into
+    // `target`, sampling `samplers` (the walls' masks).
+    struct Mask {
+      remixapi_HostShaderHandleEXT fragment = 0;
+      remixapi_HostTargetHandleEXT target = 0;
+      std::vector<remixapi_HostPassSamplerEXT> samplers;
+    };
+
     bool drawPass(const Draw &d, void *frameTexture, void *grabTexture, remixapi_HostTargetHandleEXT frameTarget,
-                  uint32_t depthTest, bool mask, Pass &pass, std::string &why) {
-      const auto vs = handleOf(*d.vs), ps = mask ? g_maskFs : handleOf(*d.ps);
+                  uint32_t depthTest, const Mask *mask, Pass &pass, std::string &why) {
+      const auto vs = handleOf(*d.vs), ps = mask ? mask->fragment : handleOf(*d.ps);
       if (!vs || !ps) {
         why = "shaders not compiled or registered";
         return false;
       }
       auto &info = pass.info;
       info.kind = REMIXAPI_HOST_PASS_DRAW_EXT;
-      info.target = mask ? kBehind[0] : 0; // else the frame
+      info.target = mask ? mask->target : 0; // else the frame
       if (mask) {
         info.targetWidth = uint32_t(d.viewport.Width);
         info.targetHeight = uint32_t(d.viewport.Height);
@@ -270,10 +313,8 @@ namespace urtx {
       info.depth = mask ? 0 : depthTest;
       info.vertexShader = vs;
       info.fragmentShader = ps;
-      if (mask) {
-        pass.samplers.push_back({0, kFrameCopy, 0, 1, 1});
-        pass.samplers.push_back({1, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
-      }
+      if (mask)
+        pass.samplers = mask->samplers;
       for (const auto *shader : {d.vs.get(), d.ps.get()}) {
         if (mask && !shader->vertex)
           continue;
@@ -644,41 +685,68 @@ namespace urtx {
       uint32_t depthTest = 0;
       remixapi_HostTargetHandleEXT frameTarget = kFrameCopy;
       const bool walls = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return !blended(d); });
+      const bool anyBlended = std::any_of(draws.begin(), draws.end(), [](const Draw &d) { return blended(d); });
       const bool grabs = grabTexture && std::any_of(draws.begin(), draws.end(), [&](const Draw &d) {
         return std::any_of(d.textures.begin(), d.textures.end(),
                            [&](const Texture &t) { return t.resource == grabTexture; });
       });
-      if (grabs && depthShaders()) {
-        Pass flip = fullScreen(g_flipFs, kGrabCopy, width, height, nullptr, 0);
-        flip.samplers.push_back({0, kFrameCopy, 0, 1, 1});
-        passes.push_back(std::move(flip));
-      }
-      if (projection[0] != 0.f && depthShaders()) {
+      auto grabCopy = [&] {
+        if (grabs && depthShaders()) {
+          Pass flip = fullScreen(g_flipFs, kGrabCopy, width, height, nullptr, 0);
+          flip.samplers.push_back({0, kFrameCopy, 0, 1, 1});
+          passes.push_back(std::move(flip));
+        }
+      };
+      grabCopy();
+      // Walls behind the runtime's sheets (glass, water) are replayed there
+      // too, the sheets put back over them (glass.frag): the walls test
+      // against the depth of the first surface that is not a sheet.
+      const bool layers = g_viewLayers && walls;
+      const auto wallDepth = layers ? REMIXAPI_HOST_TARGET_VIEW_OPAQUE_DEPTH_EXT : REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT;
+      auto frameDepth = [&](remixapi_HostTargetHandleEXT source) {
         const float push[3] = {-projection[0], projection[1], reversedZ ? 0.f : 1.f};
         Pass fill = fullScreen(g_frameDepthFs, REMIXAPI_HOST_TARGET_FRAME_DEPTH_EXT, 0, 0, push, sizeof(push));
         fill.info.depth = (kCompareAlways + 1) | REMIXAPI_HOST_DEPTH_WRITE_EXT;
         fill.info.colorWriteMask = 0;
-        fill.samplers.push_back({0, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
+        fill.samplers.push_back({0, source, 0, 1, 1});
         passes.push_back(std::move(fill));
+      };
+      if (projection[0] != 0.f && depthShaders()) {
+        frameDepth(walls ? wallDepth : REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT);
         depthTest = (reversedZ ? kCompareGreaterOrEqual : kCompareLessOrEqual) + 1;
       }
+      auto clearTarget = [&](remixapi_HostTargetHandleEXT target) {
+        Pass clear;
+        clear.info.kind = REMIXAPI_HOST_PASS_CLEAR_EXT;
+        clear.info.target = target;
+        clear.info.targetWidth = width;
+        clear.info.targetHeight = height;
+        passes.push_back(std::move(clear));
+      };
+      auto masks = [&](const Mask &mask) {
+        for (const auto &d : draws) {
+          Pass pass;
+          std::string why;
+          if (!blended(d) && drawPass(d, frameTexture, grabTexture, 0, 0, &mask, pass, why))
+            passes.push_back(std::move(pass));
+        }
+      };
+      remixapi_HostTargetHandleEXT behind = 0;
       if (walls && depthTest) {
         // What is behind the walls, for their shader to sample in place of
         // the frame: it samples around each pixel (chromatic aberration,
         // noise jitter), and the frame has what stands in front of the walls
         // there. The walls' pixels, then holes filled sideways (out to 511
         // pixels) and a little vertically (31), the rest from the frame.
-        Pass clear;
-        clear.info.kind = REMIXAPI_HOST_PASS_CLEAR_EXT;
-        clear.info.target = kBehind[0];
-        clear.info.targetWidth = width;
-        clear.info.targetHeight = height;
-        passes.push_back(std::move(clear));
-        for (const auto &d : draws) {
-          Pass pass;
-          std::string why;
-          if (!blended(d) && drawPass(d, frameTexture, grabTexture, 0, 0, true, pass, why))
-            passes.push_back(std::move(pass));
+        clearTarget(kBehind[0]);
+        Mask mask{layers ? g_maskGlassFs : g_maskFs, kBehind[0], {{0, kFrameCopy, 0, 1, 1}, {1, wallDepth, 0, 1, 1}}};
+        if (layers)
+          mask.samplers.push_back({2, REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT, 0, 1, 1});
+        masks(mask);
+        if (layers) {
+          // The walls' pixels with nothing but sheets in front of them.
+          clearTarget(kCover);
+          masks(Mask{g_maskFs, kCover, {{0, kFrameCopy, 0, 1, 1}, {1, wallDepth, 0, 1, 1}}});
         }
         std::vector<std::pair<int, int>> steps;
         for (int step = 1; step <= 256; step *= 2)
@@ -694,18 +762,52 @@ namespace urtx {
           passes.push_back(std::move(step));
           current = 1 - current;
         }
-        frameTarget = kBehind[current];
+        frameTarget = behind = kBehind[current];
       }
-      size_t replayed = 0;
-      for (const auto &d : draws) {
+      // The opaque draws (the walls), then the blended ones, as Unity orders
+      // its queues.
+      size_t replayed = 0, opaqueReplayed = 0;
+      auto replay = [&](const Draw &d, remixapi_HostTargetHandleEXT sampled) {
         Pass pass;
         std::string why;
-        if (drawPass(d, frameTexture, grabTexture, blended(d) ? kFrameCopy : frameTarget, depthTest, false, pass, why)) {
+        if (drawPass(d, frameTexture, grabTexture, sampled, depthTest, nullptr, pass, why)) {
           passes.push_back(std::move(pass));
           ++replayed;
-        } else if (skipped.empty())
+          return true;
+        }
+        if (skipped.empty())
           skipped = "draw tag " + std::to_string(d.tag) + ": " + why;
+        return false;
+      };
+      for (const auto &d : draws)
+        if (!blended(d) && replay(d, frameTarget))
+          ++opaqueReplayed;
+      if (layers && behind && opaqueReplayed) {
+        Pass glass = fullScreen(g_glassFs, 0, 0, 0, nullptr, 0);
+        glass.samplers.push_back({0, 0, 0, 1, 1}); // the frame as it is now
+        glass.samplers.push_back({1, kFrameCopy, 0, 1, 1});
+        glass.samplers.push_back({2, behind, 0, 1, 1});
+        glass.samplers.push_back({3, REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT, 1, 1, 1});
+        glass.samplers.push_back({4, kCover, 0, 1, 1});
+        passes.push_back(std::move(glass));
       }
+      if (anyBlended && opaqueReplayed) {
+        // Blended draws sample the frame with the walls, and test against
+        // what the camera sees first (sheets included).
+        Pass again;
+        again.info.kind = REMIXAPI_HOST_PASS_COPY_EXT;
+        again.info.source = 0;
+        again.info.target = kFrameCopy;
+        again.info.targetWidth = width;
+        again.info.targetHeight = height;
+        passes.push_back(std::move(again));
+        grabCopy();
+        if (depthTest && layers)
+          frameDepth(REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT);
+      }
+      for (const auto &d : draws)
+        if (blended(d))
+          replay(d, kFrameCopy);
       if (!replayed)
         passes.clear(); // no draw made it: nothing to replay
     }
@@ -724,7 +826,7 @@ namespace urtx {
     for (const auto &d : screen) {
       Pass pass;
       std::string why;
-      if (!screenSource || !drawPass(d, screenSource, nullptr, kScreenCopy, 0, false, pass, why)) {
+      if (!screenSource || !drawPass(d, screenSource, nullptr, kScreenCopy, 0, nullptr, pass, why)) {
         if (skipped.empty())
           skipped = "screen effect: " + (screenSource ? why : std::string("no screen source"));
         continue;
@@ -765,7 +867,18 @@ namespace urtx {
     submission.pNext = &flagList;
     submission.passes = list.data();
     submission.passCount = uint32_t(list.size());
-    const auto error = g_submit(&submission);
+    auto error = g_submit(&submission);
+    if (error == REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS && g_viewLayers &&
+        std::any_of(passes.begin(), passes.end(), [](const Pass &p) {
+          return std::any_of(p.samplers.begin(), p.samplers.end(), [](const remixapi_HostPassSamplerEXT &s) {
+            return s.target == REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT ||
+                   s.target == REMIXAPI_HOST_TARGET_VIEW_OPAQUE_DEPTH_EXT;
+          });
+        })) {
+      g_viewLayers = false;
+      log("this remix.dll has no sheet transmittance (REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT): walls are hidden "
+          "behind glass and water");
+    }
 
     char line[512];
     std::snprintf(line, sizeof(line), "submitted %zu passes (%zu captured draws, %zu screen effects, %zu stains, error %d)%s%s",

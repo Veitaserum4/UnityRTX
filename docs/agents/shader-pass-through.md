@@ -38,8 +38,10 @@ render thread (native/hostpass11, UnityRTXHostPass.dll)
 presenting thread (Remix render thread, ShaderPassThrough.Submit before each present)
   replay.cpp   host passes over the path-traced frame:
                stains -> copy frame (kFrameCopy) -> frame depth from Remix's view depth
-               -> [opaque draws: "behind the walls" fill] -> the draws, depth-tested, with their
-               own blend -> screen effects, each over a copy of the composed frame
+               (behind its sheets, with opaque draws) -> [opaque draws: "behind the walls"
+               fill] -> opaque draws, depth-tested -> [the sheets put back over them:
+               glass.frag] -> blended draws, with their own blend, over a new copy ->
+               screen effects, each over a copy of the composed frame
 ```
 
 Things to know about the pipeline:
@@ -47,6 +49,13 @@ Things to know about the pipeline:
   draws of those renderers Unity makes.
 - The replay depth-tests each draw against the path-traced depth, converted to the helper
   camera's projection. It never writes depth.
+- Path-traced sheets (glass, water, blended surfaces) in front of an opaque draw:
+  - The opaque draws test against the depth of the first surface that isn't a sheet
+    (`REMIXAPI_HOST_TARGET_VIEW_OPAQUE_DEPTH_EXT`), so they're drawn behind sheets too.
+  - `glass.frag` then puts the sheets back over them, from what the sheets let through
+    (`REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT`): before + t × (look − behind).
+  - A remix.dll without those targets refuses the list once. The replay then falls back
+    to hiding opaque draws behind sheets, and logs it.
 - Textures the frame **stands in for**: whatever `PassThroughFrameTexture(material)` returns
   (a render texture the game's shader samples as a view of the scene), plus the
   `_GrabTexture` stand-in. The replay samples the path-traced frame wherever a draw samples
