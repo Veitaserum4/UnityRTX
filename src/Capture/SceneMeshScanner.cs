@@ -36,6 +36,10 @@ namespace UnityRemix
             IsCombinedMesh = 1 << 0,
             // The game toggles it by deactivation (GameProfile.FollowsActiveState).
             FollowsActiveState = 1 << 1,
+            // Seen active in the hierarchy since the scan: only such an object is kept while
+            // inactive (one the game hid after showing it, a CyberGrind block). Geometry inactive
+            // from the start (a later state, a level's hidden black copies of its walls) never is.
+            SeenActive = 1 << 2,
             HasMoved = 1 << 3,
             IsScaleZero = 1 << 4,
             // Inactive in hierarchy: AncestorDisabled caches the activeSelf / ancestor walk
@@ -645,8 +649,19 @@ namespace UnityRemix
                             continue;
                         }
 
-                        // 5. Hierarchical active state check (only when scanActiveOnly is false).
+                        // 5. Hierarchical active state check (only when scanActiveOnly is false), for
+                        // objects once seen active.
                         // The walk is cached: done when the object goes inactive, then staggered.
+                        if (!activeInHierarchy && (instance.Flags & InstanceFlags.SeenActive) == 0)
+                        {
+                            culledInactive++;
+                            continue;
+                        }
+                        if (activeInHierarchy && (instance.Flags & InstanceFlags.SeenActive) == 0)
+                        {
+                            instance.Flags |= InstanceFlags.SeenActive;
+                            currentInstances[i] = instance;
+                        }
                         if (!activeInHierarchy)
                         {
                             if ((instance.Flags & InstanceFlags.WasInactive) == 0 || ((i + frameCount) & 15) == 0)
