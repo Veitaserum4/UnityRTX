@@ -236,7 +236,8 @@ namespace UnityRemix
             }
         }
 
-        // Every mesh surface the view ray crosses within SurfaceWindow of the first: two
+        // Every mesh surface the view ray crosses within SurfaceWindow of the first (and the
+        // renderers whose mesh could not be read that the ray's bounds test meets): two
         // surfaces at one distance fight in the path tracer (a level's coplanar brushes, a
         // panel the game draws over a wall by queue or depth offset), where Unity's draw order
         // picks one. Static batches by their slice of the combined mesh (world space). Meshes
@@ -261,6 +262,7 @@ namespace UnityRemix
             }
             var hits = new System.Collections.Generic.List<KeyValuePair<float, string>>();
             var renderers = new System.Collections.Generic.List<KeyValuePair<float, MeshRenderer>>();
+            var unread = new List<string>();
             float nearest = float.MaxValue;
             foreach (var r in sceneRenderers)
             {
@@ -270,7 +272,10 @@ namespace UnityRemix
                 var filter = r.GetComponent<MeshFilter>();
                 var mesh = filter != null ? filter.sharedMesh : null;
                 if (mesh == null || !Geometry(mesh, out var vertices, out var submeshes))
+                {
+                    unread.Add($"'{Path(r.transform)}' mesh '{(mesh != null ? mesh.name : "-")}' at {boundsDistance:F1} m (bounds)");
                     continue;
+                }
                 bool batched = r.isPartOfStaticBatch;
                 var materials = r.sharedMaterials;
                 int start = batched ? r.subMeshStartIndex : 0;
@@ -293,17 +298,19 @@ namespace UnityRemix
                         best = Math.Min(best, distance);
                         var m = s - start < materials.Length ? materials[s - start] : null;
                         hits.Add(new KeyValuePair<float, string>(distance,
-                            $"{distance:F3} m '{Path(r.transform)}' submesh {s - start} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' queue {(m != null ? m.renderQueue : 0)}"));
+                            $"{distance:F3} m '{Path(r.transform)}' submesh {s - start} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' queue {(m != null ? m.renderQueue : 0)} texture '{(m != null && m.mainTexture != null ? m.mainTexture.name : "-")}'"));
                     }
                 }
                 if (best < float.MaxValue)
                     renderers.Add(new KeyValuePair<float, MeshRenderer>(best, r));
             }
             hits.RemoveAll(h => h.Key > nearest + SurfaceWindow);
-            if (hits.Count < 2)
+            if (hits.Count == 0 && unread.Count == 0)
                 return;
             hits.Sort((a, b) => a.Key.CompareTo(b.Key));
             var text = string.Join(" | ", hits.ConvertAll(h => h.Value));
+            if (unread.Count > 0)
+                text += $" || not readable: {string.Join(" | ", unread)}";
             if (text == lastSurfaces)
                 return;
             lastSurfaces = text;
