@@ -48,25 +48,25 @@ namespace UnityRemix
         public uint CurrentRemixMode => lastSentMode;
         public string StatusText { get; private set; } = "Initializing...";
 
-        // Unity fog densities are tuned for raster fog; through OpenRemix's volumetrics the
-        // same density reads far thicker. Density 1 is this fraction of Unity's.
-        public const float DensityScale = 0.05f;
+        // Fog/DensityMultiplier scaled Unity's density as sent; Fog/Density is relative to the
+        // traced medium's own scale (rtx.native.pathtrace.volumetricFogDensityScale, 0.05 in the
+        // game defaults), so a saved multiplier carries over divided by it.
+        private const float LegacyDensityScale = 0.05f;
 
         public RemixFogManager(ManualLogSource logger, ConfigFile config)
         {
             this.logger = logger;
 
             ConfigEnableFog = config.Bind("Fog", "EnableFog", true,
-                "Synchronize Unity fog with OpenRemix path-traced volumetric fog.");
+                "Synchronize Unity fog with OpenRemix's fog (raster or path-traced volumetrics).");
 
             ConfigFogDensityMultiplier = config.Bind("Fog", "Density", 1.0f,
-                new ConfigDescription("Multiplier for exponential/exp2 fog density; 1 is 1/20 of Unity's (DensityScale), " +
-                    "which suits OpenRemix's volumetrics.",
+                new ConfigDescription("Multiplier for exponential/exp2 fog density; 1 is the game's own. OpenRemix's " +
+                    "path-traced fog scales it further by rtx.native.pathtrace.volumetricFogDensityScale.",
                     new AcceptableValueRange<float>(0.001f, 20.0f)));
-            // Fog/DensityMultiplier was the plain multiplier: a saved value carries over, rescaled.
             var legacy = config.Bind("Fog", "DensityMultiplier", -1f, "Replaced by Fog/Density.");
             if (legacy.Value >= 0f)
-                ConfigFogDensityMultiplier.Value = Mathf.Clamp(legacy.Value / DensityScale, 0.001f, 20f);
+                ConfigFogDensityMultiplier.Value = Mathf.Clamp(legacy.Value / LegacyDensityScale, 0.001f, 20f);
             config.Remove(legacy.Definition);
             config.Save();
 
@@ -136,8 +136,9 @@ namespace UnityRemix
                     float mg = Mathf.Clamp01(ConfigFogManualColorG.Value);
                     float mb = Mathf.Clamp01(ConfigFogManualColorB.Value);
                     color = new Color(mr, mg, mb);
-                    scale = Mathf.Max(ConfigFogManualStart.Value, 0f);
-                    end = Mathf.Max(ConfigFogManualEnd.Value, scale + 0.1f);
+                    float manualStart = Mathf.Max(ConfigFogManualStart.Value, 0f);
+                    end = Mathf.Max(ConfigFogManualEnd.Value, manualStart + 0.1f);
+                    scale = 1f / (end - manualStart);
                     density = Mathf.Clamp(ConfigFogManualDensity.Value, 0f, 1f);
                     active = mode != 0;
                 }
@@ -150,7 +151,7 @@ namespace UnityRemix
                     color = new Color(cr, cg, cb);
 
                     float distMult = Mathf.Max(ConfigFogDistanceMultiplier.Value, 0.01f);
-                    float densMult = Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f) * DensityScale;
+                    float densMult = Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f);
 
                     float rawStart = RenderSettings.fogStartDistance;
                     float rawEnd = RenderSettings.fogEndDistance;
@@ -166,9 +167,12 @@ namespace UnityRemix
                             mode = 3; // D3DFOG_LINEAR
                             // Linear fog has no density: Density thickens it by shortening its
                             // ramp (the distance from start to fully fogged), 1 leaving it as is.
-                            scale = Mathf.Max(rawStart * distMult, 0f);
-                            end = Mathf.Max(scale + (rawEnd - rawStart) * distMult / Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f),
-                                            scale + 0.1f);
+                            // `scale` is D3D's 1 / (end - start), from which OpenRemix's raster
+                            // fog recovers the start.
+                            float start = Mathf.Max(rawStart * distMult, 0f);
+                            end = Mathf.Max(start + (rawEnd - rawStart) * distMult / Mathf.Max(ConfigFogDensityMultiplier.Value, 0.001f),
+                                            start + 0.1f);
+                            scale = 1f / (end - start);
                             active = end > 0.5f;
                             break;
 
@@ -205,7 +209,7 @@ namespace UnityRemix
                     Mathf.Abs(color.r - lastSentColor.r) < 0.002f &&
                     Mathf.Abs(color.g - lastSentColor.g) < 0.002f &&
                     Mathf.Abs(color.b - lastSentColor.b) < 0.002f &&
-                    Mathf.Abs(scale - lastSentScale) < 0.05f &&
+                    Mathf.Abs(scale - lastSentScale) < 1e-5f &&
                     Mathf.Abs(end - lastSentEnd) < 0.05f &&
                     Mathf.Abs(density - lastSentDensity) < 0.00005f)
                 {
@@ -245,7 +249,7 @@ namespace UnityRemix
                     {
                         string modeStr = mode == 1 ? "Exp" : (mode == 2 ? "Exp2" : "Linear");
                         StatusText = $"Active ({modeStr}, RGB: {color.r:F2},{color.g:F2},{color.b:F2})";
-                        logger.LogInfo($"[Volumetrics] Fog updated in OpenRemix -> mode: {modeStr}, color: ({color.r:F2}, {color.g:F2}, {color.b:F2}), density: {density:F5}, start: {scale:F1}m, end: {end:F1}m");
+                        logger.LogInfo($"[Volumetrics] Fog updated in OpenRemix -> mode: {modeStr}, color: ({color.r:F2}, {color.g:F2}, {color.b:F2}), density: {density:F5}, start: {(scale > 0f ? end - 1f / scale : 0f):F1}m, end: {end:F1}m");
                     }
                     else
                     {
