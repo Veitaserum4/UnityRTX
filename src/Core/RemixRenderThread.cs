@@ -306,11 +306,13 @@ namespace UnityRemix
                 return true;
             // Shutting down the swapchain can send messages to the Remix window, which only its
             // own thread (the caller, Unity's main thread) answers: keep pumping while waiting.
+            // The runtime finishes the shaders it is compiling first (a minute and more on a new
+            // build's first run); giving up earlier leaves the window to crash Unity's exit.
             var waited = System.Diagnostics.Stopwatch.StartNew();
             while (!renderThread.Join(10))
             {
                 RemixWindowManager.PumpMainThreadMessages();
-                if (waited.ElapsedMilliseconds > 5000)
+                if (waited.ElapsedMilliseconds > 120000)
                     return false;
             }
             return true;
