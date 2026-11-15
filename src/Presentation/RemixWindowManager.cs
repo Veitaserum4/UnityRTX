@@ -519,6 +519,13 @@ namespace UnityRemix
 
         private static IntPtr RemixWindowSubclassProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam, UIntPtr uIdSubclass, UIntPtr dwRefData)
         {
+            // The embedded window has no frame: its client area is the whole window. SDL's
+            // procedure underneath clamps a borderless, non-resizable window's client area to
+            // the size SDL last recorded, which keeps it at its creation size when SyncWindowBounds
+            // follows the game window, so the picture is squeezed and the cursor lands off it.
+            if (uMsg == WM_NCCALCSIZE && isEmbeddedStatic)
+                return IntPtr.Zero;
+
             if (isEmbeddedStatic && !isRemixUIOpen)
             {
                 if (uMsg == WM_NCHITTEST)
@@ -712,6 +719,7 @@ namespace UnityRemix
         private const uint WM_PAINT = 0x000F;
         private const uint WM_ERASEBKGND = 0x0014;
         private const uint WM_NCHITTEST = 0x0084;
+        private const uint WM_NCCALCSIZE = 0x0083;
         private const int HTCLIENT = 1;
         private const int HTTRANSPARENT = -1;
         private const uint WM_MOUSEACTIVATE = 0x0021;
