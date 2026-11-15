@@ -901,12 +901,13 @@ namespace UnityRemix
 
         private static bool IsDynamicOrIgnored(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
         {
-            if (isCombinedMesh)
-                return false;
-
-            // Skip scrolling / animated UV renderers — they are captured dynamically per-frame with live UV offsets
+            // Skip scrolling / animated UV renderers — they are captured dynamically per-frame with live
+            // UV offsets (a static batch's too: its slice of the combined mesh).
             if (RemixScrollingTextureDetector.IsScrollingRenderer(renderer))
                 return true;
+
+            if (isCombinedMesh)
+                return false;
 
             // Objects the game moves, spawns or swaps (its GameProfile knows which)
             return Games.GameProfiles.IsDynamicObject(filter, renderer);

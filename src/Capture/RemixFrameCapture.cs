@@ -676,6 +676,9 @@ namespace UnityRemix
         }
         private readonly object persistentStaticLock = new object();
         private Dictionary<int, PersistentStaticInstance> persistentStaticInstances = new Dictionary<int, PersistentStaticInstance>();
+        // Per renderer: whether the game toggles it by deactivation (GameProfiles.FollowsActiveState),
+        // so it is never persisted. Asked once per renderer.
+        private readonly Dictionary<int, bool> followsActiveState = new Dictionary<int, bool>();
         private int skinnedRoundRobinIndex = 0; // rotates through cachedSkinnedRenderers each frame (BakeMesh fallback)
         
         // Persistent cache: last-baked data for every skinned mesh, so all are drawn every frame
@@ -1097,6 +1100,7 @@ namespace UnityRemix
             {
                 persistentStaticInstances.Clear();
             }
+            followsActiveState.Clear();
             trackedParticleSystems.Clear();
             trackedParticleSystemIds.Clear();
             meshParticleInstancing.Clear();

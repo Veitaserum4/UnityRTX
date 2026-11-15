@@ -494,21 +494,31 @@ namespace UnityRemix
                 totalDrawn++;
                 
                 // Remember this renderer's transform so we can keep drawing it if it gets disabled.
-                // Do NOT persist viewmodels/weapons (they should disappear when unequipped).
+                // Do NOT persist viewmodels/weapons (they should disappear when unequipped), nor what
+                // the game shows and hides by deactivating it (a flickering lamp's light shaft).
                 if (!isViewModel)
                 {
                     cachedStaticInstances.Add(instanceData);
-                    lock (persistentStaticLock)
+                    if (!followsActiveState.TryGetValue(rendererInstanceId, out bool follows))
                     {
-                        persistentStaticInstances[rendererInstanceId] = new PersistentStaticInstance
+                        var filter = renderer.GetComponent<MeshFilter>();
+                        follows = filter != null && Games.GameProfiles.FollowsActiveState(filter, renderer);
+                        followsActiveState[rendererInstanceId] = follows;
+                    }
+                    if (!follows)
+                    {
+                        lock (persistentStaticLock)
                         {
-                            renderer = renderer,
-                            meshKey = meshKey,
-                            meshId = meshId,
-                            localToWorld = transform,
-                            dedupeKey = dedupeKey,
-                            drawnFrame = frameCount
-                        };
+                            persistentStaticInstances[rendererInstanceId] = new PersistentStaticInstance
+                            {
+                                renderer = renderer,
+                                meshKey = meshKey,
+                                meshId = meshId,
+                                localToWorld = transform,
+                                dedupeKey = dedupeKey,
+                                drawnFrame = frameCount
+                            };
+                        }
                     }
                 }
             }
@@ -652,13 +662,32 @@ namespace UnityRemix
         /// <summary>
         /// Retrieves or extracts cached base geometry for a scrolling UV mesh.
         /// Base geometry (positions, normals, base UVs, indices) is read only once.
+        /// A renderer in a static batch draws the batch's combined mesh (world-space vertices):
+        /// only its own submeshes, [subMeshStartIndex, + its materials), are its geometry; the
+        /// rest are other objects' (drawn without a material, they came out as white boxes).
+        /// Its slice is cached per renderer, compacted to the vertices it uses.
+        /// submeshTriangles is indexed by the renderer's material slot (null: nothing to draw).
         /// </summary>
-        private CachedScrollingMesh GetOrCreateScrollingMesh(Mesh mesh)
+        private CachedScrollingMesh GetOrCreateScrollingMesh(MeshRenderer renderer, Mesh mesh)
         {
             if (mesh == null) return null;
-            int meshId = mesh.GetInstanceID();
-            if (cachedScrollingMeshes.TryGetValue(meshId, out var cached))
+            bool batched = renderer.isPartOfStaticBatch;
+            int cacheId = batched ? renderer.GetInstanceID() : mesh.GetInstanceID();
+            if (cachedScrollingMeshes.TryGetValue(cacheId, out var cached))
                 return cached;
+
+            int subStart = 0, subEnd = mesh.subMeshCount;
+            if (batched)
+            {
+                var materials = renderer.sharedMaterials;
+                subStart = renderer.subMeshStartIndex;
+                subEnd = Math.Min(subStart + (materials != null ? materials.Length : 0), mesh.subMeshCount);
+                if (subStart >= subEnd)
+                {
+                    cachedScrollingMeshes[cacheId] = null;
+                    return null;
+                }
+            }
 
             Vector3[] vertices = null;
             Vector3[] normals = null;
@@ -676,48 +705,83 @@ namespace UnityRemix
                     colors = mesh.colors32;
                     if (colors != null && colors.Length == 0) colors = null;
 
-                    for (int s = 0; s < mesh.subMeshCount; s++)
+                    for (int s = subStart; s < subEnd; s++)
                     {
-                        if (mesh.GetTopology(s) != MeshTopology.Triangles)
-                            continue;
-                        var tris = mesh.GetTriangles(s);
-                        if (tris != null && tris.Length > 0 && tris.Length % 3 == 0)
-                        {
-                            submeshTriangles.Add(tris);
-                        }
+                        int[] tris = mesh.GetTopology(s) == MeshTopology.Triangles ? mesh.GetTriangles(s) : null;
+                        submeshTriangles.Add(tris != null && tris.Length > 0 && tris.Length % 3 == 0 ? tris : null);
                     }
                 }
                 catch { }
             }
 
-            if (vertices == null || vertices.Length == 0 || submeshTriangles.Count == 0)
+            if (vertices == null || vertices.Length == 0 || submeshTriangles.TrueForAll(t => t == null))
             {
                 try
                 {
+                    submeshTriangles.Clear();
                     if (NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out int[][] subTris))
                     {
-                        submeshTriangles.Clear();
-                        for (int s = 0; s < subTris.Length; s++)
+                        for (int s = subStart; s < subEnd; s++)
                         {
-                            var tris = subTris[s];
-                            if (tris != null && tris.Length > 0 && tris.Length % 3 == 0)
-                            {
-                                submeshTriangles.Add(tris);
-                            }
+                            var tris = s < subTris.Length ? subTris[s] : null;
+                            submeshTriangles.Add(tris != null && tris.Length > 0 && tris.Length % 3 == 0 ? tris : null);
                         }
                     }
                 }
                 catch { }
             }
 
-            if (vertices == null || vertices.Length == 0 || submeshTriangles.Count == 0)
+            int[] firstTris = submeshTriangles.Find(t => t != null);
+            if (vertices == null || vertices.Length == 0 || firstTris == null)
+            {
+                cachedScrollingMeshes[cacheId] = null;
                 return null;
+            }
 
             if (uvs == null || uvs.Length != vertices.Length)
                 uvs = new Vector2[vertices.Length];
 
             if (normals == null || normals.Length != vertices.Length)
-                normals = RemixMeshConverter.ComputeFaceNormals(vertices, submeshTriangles[0]);
+                normals = RemixMeshConverter.ComputeFaceNormals(vertices, firstTris);
+            if (colors != null && colors.Length != vertices.Length)
+                colors = null;
+
+            if (batched)
+            {
+                // Only the vertices this renderer's slice uses, renumbered.
+                var remap = new Dictionary<int, int>();
+                var used = new List<int>();
+                for (int s = 0; s < submeshTriangles.Count; s++)
+                {
+                    var tris = submeshTriangles[s];
+                    if (tris == null) continue;
+                    var local = new int[tris.Length];
+                    for (int i = 0; i < tris.Length; i++)
+                    {
+                        if (!remap.TryGetValue(tris[i], out int v))
+                        {
+                            v = used.Count;
+                            remap[tris[i]] = v;
+                            used.Add(tris[i]);
+                        }
+                        local[i] = v;
+                    }
+                    submeshTriangles[s] = local;
+                }
+                var cv = new Vector3[used.Count];
+                var cn = new Vector3[used.Count];
+                var cu = new Vector2[used.Count];
+                var cc = colors != null ? new Color32[used.Count] : null;
+                for (int i = 0; i < used.Count; i++)
+                {
+                    int v = used[i];
+                    cv[i] = vertices[v];
+                    cn[i] = normals[v];
+                    cu[i] = uvs[v];
+                    if (cc != null) cc[i] = colors[v];
+                }
+                vertices = cv; normals = cn; uvs = cu; colors = cc;
+            }
 
             cached = new CachedScrollingMesh
             {
@@ -728,7 +792,7 @@ namespace UnityRemix
                 submeshTriangles = submeshTriangles
             };
 
-            cachedScrollingMeshes[meshId] = cached;
+            cachedScrollingMeshes[cacheId] = cached;
             return cached;
         }
 
@@ -737,7 +801,7 @@ namespace UnityRemix
         /// </summary>
         private void CaptureScrollingMesh(MeshRenderer renderer, Mesh mesh, FrameState state, int frameCount)
         {
-            var cachedMesh = GetOrCreateScrollingMesh(mesh);
+            var cachedMesh = GetOrCreateScrollingMesh(renderer, mesh);
             if (cachedMesh == null)
                 return;
 
@@ -748,7 +812,8 @@ namespace UnityRemix
 
             var materials = renderer.sharedMaterials;
             int rendererId = renderer.GetInstanceID();
-            Matrix4x4 localToWorld = renderer.transform.localToWorldMatrix;
+            // A static batch's vertices are already in world space.
+            Matrix4x4 localToWorld = renderer.isPartOfStaticBatch ? Matrix4x4.identity : renderer.transform.localToWorldMatrix;
 
             for (int s = 0; s < cachedMesh.submeshTriangles.Count; s++)
             {
