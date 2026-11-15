@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using BepInEx.Logging;
 using UnityEngine;
@@ -11,7 +12,8 @@ namespace UnityRemix
     /// on screen. Two answers: the solid collider the view ray hits (UnityEngine.Physics through
     /// reflection, no PhysicsModule reference; trigger volumes ignored), and the nearest renderer
     /// UnityRTX draws along the ray (RemixFrameCapture.PickDrawnRenderer: objects without
-    /// colliders too). Main thread only.
+    /// colliders too). And every surface the ray crosses within half a metre of the first (two
+    /// at one distance fight in the path tracer). Main thread only.
     /// </summary>
     internal sealed class LookAtDiagnostics
     {
@@ -45,6 +47,9 @@ namespace UnityRemix
                     logger.LogInfo($"[LookAt] drawn '{drawn.name}' at {distance:F1} m (bounds): {Describe(drawn)}");
                 lastDrawn = id;
             }
+
+            try { LogSurfacesAlongRay(ray); }
+            catch (Exception ex) { logger.LogInfo($"[LookAt] surfaces failed: {ex.Message}"); }
 
             if (unavailable)
                 return;
@@ -229,6 +234,129 @@ namespace UnityRemix
             {
                 return info + $" dump failed: {ex.Message}";
             }
+        }
+
+        // Every mesh surface the view ray crosses within SurfaceWindow of the first: two
+        // surfaces at one distance fight in the path tracer (a level's coplanar brushes, a
+        // panel the game draws over a wall by queue or depth offset), where Unity's draw order
+        // picks one. Static batches by their slice of the combined mesh (world space). Meshes
+        // are read once (GPU readback where not readable); the renderer list per scene.
+        private const float SurfaceWindow = 0.5f;
+        private MeshRenderer[] sceneRenderers;
+        private string sceneRenderersFor;
+        private readonly Dictionary<int, KeyValuePair<Vector3[], int[][]>> meshGeometry =
+            new Dictionary<int, KeyValuePair<Vector3[], int[][]>>();
+        private readonly System.Collections.Generic.HashSet<int> describedSurfaces = new System.Collections.Generic.HashSet<int>();
+        private string lastSurfaces;
+
+        private void LogSurfacesAlongRay(Ray ray)
+        {
+            string scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+            if (sceneRenderers == null || sceneRenderersFor != scene)
+            {
+                sceneRenderers = UnityEngine.Object.FindObjectsOfType<MeshRenderer>();
+                sceneRenderersFor = scene;
+                meshGeometry.Clear();
+                describedSurfaces.Clear();
+            }
+            var hits = new System.Collections.Generic.List<KeyValuePair<float, string>>();
+            var renderers = new System.Collections.Generic.List<KeyValuePair<float, MeshRenderer>>();
+            float nearest = float.MaxValue;
+            foreach (var r in sceneRenderers)
+            {
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy || !r.bounds.IntersectRay(ray, out float boundsDistance) ||
+                    boundsDistance > Math.Min(nearest + SurfaceWindow, 1000f))
+                    continue;
+                var filter = r.GetComponent<MeshFilter>();
+                var mesh = filter != null ? filter.sharedMesh : null;
+                if (mesh == null || !Geometry(mesh, out var vertices, out var submeshes))
+                    continue;
+                bool batched = r.isPartOfStaticBatch;
+                var materials = r.sharedMaterials;
+                int start = batched ? r.subMeshStartIndex : 0;
+                int end = batched ? Math.Min(start + materials.Length, submeshes.Length) : submeshes.Length;
+                Matrix4x4 toWorld = batched ? Matrix4x4.identity : r.localToWorldMatrix;
+                Matrix4x4 toLocal = toWorld.inverse;
+                Vector3 o = toLocal.MultiplyPoint3x4(ray.origin), d = toLocal.MultiplyVector(ray.direction);
+                float best = float.MaxValue;
+                for (int s = start; s < end; s++)
+                {
+                    var tris = submeshes[s];
+                    if (tris == null) continue;
+                    for (int i = 0; i + 2 < tris.Length; i += 3)
+                    {
+                        if (!Intersect(o, d, vertices[tris[i]], vertices[tris[i + 1]], vertices[tris[i + 2]], out float t))
+                            continue;
+                        float distance = Vector3.Distance(ray.origin, toWorld.MultiplyPoint3x4(o + d * t));
+                        if (distance > nearest + SurfaceWindow) continue;
+                        nearest = Math.Min(nearest, distance);
+                        best = Math.Min(best, distance);
+                        var m = s - start < materials.Length ? materials[s - start] : null;
+                        hits.Add(new KeyValuePair<float, string>(distance,
+                            $"{distance:F3} m '{Path(r.transform)}' submesh {s - start} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' queue {(m != null ? m.renderQueue : 0)}"));
+                    }
+                }
+                if (best < float.MaxValue)
+                    renderers.Add(new KeyValuePair<float, MeshRenderer>(best, r));
+            }
+            hits.RemoveAll(h => h.Key > nearest + SurfaceWindow);
+            if (hits.Count < 2)
+                return;
+            hits.Sort((a, b) => a.Key.CompareTo(b.Key));
+            var text = string.Join(" | ", hits.ConvertAll(h => h.Value));
+            if (text == lastSurfaces)
+                return;
+            lastSurfaces = text;
+            logger.LogInfo($"[LookAt] surfaces within {SurfaceWindow} m: {text}");
+            foreach (var kv in renderers)
+                if (kv.Key <= nearest + SurfaceWindow && describedSurfaces.Add(kv.Value.GetInstanceID()))
+                    logger.LogInfo($"[LookAt] surface at {kv.Key:F3} m: {Describe(kv.Value)}");
+        }
+
+        private bool Geometry(Mesh mesh, out Vector3[] vertices, out int[][] submeshes)
+        {
+            int id = mesh.GetInstanceID();
+            if (meshGeometry.TryGetValue(id, out var cached))
+            {
+                vertices = cached.Key;
+                submeshes = cached.Value;
+                return vertices != null;
+            }
+            vertices = null;
+            submeshes = null;
+            try
+            {
+                if (mesh.isReadable)
+                {
+                    vertices = mesh.vertices;
+                    submeshes = new int[mesh.subMeshCount][];
+                    for (int s = 0; s < submeshes.Length; s++)
+                        submeshes[s] = mesh.GetTopology(s) == MeshTopology.Triangles ? mesh.GetTriangles(s) : null;
+                }
+                else if (!NativeMeshReader.ReadMeshFromGPU(mesh, out vertices, out _, out _, out submeshes))
+                    vertices = null;
+            }
+            catch { vertices = null; }
+            meshGeometry[id] = new KeyValuePair<Vector3[], int[][]>(vertices, submeshes);
+            return vertices != null;
+        }
+
+        // Möller–Trumbore, both faces.
+        private static bool Intersect(Vector3 o, Vector3 d, Vector3 a, Vector3 b, Vector3 c, out float t)
+        {
+            t = 0;
+            Vector3 e1 = b - a, e2 = c - a, p = Vector3.Cross(d, e2);
+            float det = Vector3.Dot(e1, p);
+            if (Math.Abs(det) < 1e-12f) return false;
+            float inv = 1f / det;
+            Vector3 s = o - a;
+            float u = Vector3.Dot(s, p) * inv;
+            if (u < 0 || u > 1) return false;
+            Vector3 q = Vector3.Cross(s, e1);
+            float v = Vector3.Dot(d, q) * inv;
+            if (v < 0 || u + v > 1) return false;
+            t = Vector3.Dot(e2, q) * inv;
+            return t > 0;
         }
 
         private static string Path(Transform t)
