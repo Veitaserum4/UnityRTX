@@ -171,6 +171,9 @@ namespace urtx {
   // submit; null: none this frame).
   void setStains(const float *vertices, size_t quads, void *atlas);
   void setStainView(const float rows[16]);
+  // A diagnostic view of what the walls' sheet composition reads (glass.frag):
+  // 0 none, 1 transmittance, 2 the walls' pixels, 3 the depths.
+  void setLayersView(int view);
   int submit(); // the presenting thread, before each present: passes submitted
   std::string submitReport();
 

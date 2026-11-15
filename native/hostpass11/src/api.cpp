@@ -67,6 +67,7 @@ __declspec(dllexport) void UnityRTXHostPass_SetStains(const float *vertices, int
   urtx::setStains(vertices, vertices && quads > 0 ? size_t(quads) : 0, atlas);
 }
 __declspec(dllexport) void UnityRTXHostPass_SetStainView(const float *rows) { urtx::setStainView(rows); }
+__declspec(dllexport) void UnityRTXHostPass_SetLayersView(int view) { urtx::setLayersView(view); }
 __declspec(dllexport) int UnityRTXHostPass_Submit() { return urtx::submit(); }
 __declspec(dllexport) void UnityRTXHostPass_ClearCapture() { urtx::clearCapture(); }
 

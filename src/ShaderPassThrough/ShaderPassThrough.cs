@@ -38,6 +38,11 @@ namespace UnityRemix
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetStains(float[] vertices, int quads, IntPtr atlas);
         [DllImport(Dll)] private static extern void UnityRTXHostPass_SetStainView(float[] rows);
         [DllImport(Dll)] private static extern int UnityRTXHostPass_Submit();
+        [DllImport(Dll)] private static extern void UnityRTXHostPass_SetLayersView(int view);
+
+        /// <summary>[Debug] PassThroughLayersView: what the walls' sheet composition reads, shown.</summary>
+        public static BepInEx.Configuration.ConfigEntry<int> LayersView;
+        private static bool layersViewAvailable = true;
         [DllImport(Dll)] private static extern void UnityRTXHostPass_ClearCapture();
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -560,6 +565,12 @@ namespace UnityRemix
         {
             if (!bound)
                 return;
+            if (layersViewAvailable)
+            {
+                // An older UnityRTXHostPass.dll has no such export.
+                try { UnityRTXHostPass_SetLayersView(LayersView?.Value ?? 0); }
+                catch (EntryPointNotFoundException) { layersViewAvailable = false; }
+            }
             try { UnityRTXHostPass_Submit(); }
             catch (Exception e)
             {

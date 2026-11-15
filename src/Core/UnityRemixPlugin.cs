@@ -211,6 +211,14 @@ namespace UnityRemix
                 "Repeated diagnostics in the log: capture and scan statistics, UI state, first-seen particle systems, " +
                 "primitives and screens, what the camera looks at. Off: events, warnings and errors only.");
 
+            ShaderPassThrough.LayersView = Config.Bind("Debug", "PassThroughLayersView", 0,
+                new BepInEx.Configuration.ConfigDescription(
+                    "Shows what replayed opaque effects (Limbo's walls) read behind path-traced glass, over the " +
+                    "frame where such effects are on screen: 0 off; 1 the glass's transmittance (white: nothing in " +
+                    "front); 2 the effect's pixels (red); 3 depths (red: a solid surface, green: glass is the view " +
+                    "depth, blue: the view depth is the solid one).",
+                    new BepInEx.Configuration.AcceptableValueRange<int>(0, 3)));
+
             Games.Ultrakill.UltrakillBloodStains.Overlay = Config.Bind("Ultrakill", "BloodStainOverlay", false,
                 "ULTRAKILL's blood stains drawn over the frame as the game composites them (exact look, cheaper, " +
                 "in no reflection) instead of path-traced as wet paint (in reflections, glossy).");

@@ -56,6 +56,7 @@ namespace urtx {
     // One without them refuses the list naming them: the walls are then
     // replayed as before, hidden behind sheets.
     bool g_viewLayers = true;
+    int g_layersView = 0; // setLayersView
     constexpr uint32_t kVkR32G32Sfloat = 103;
     constexpr uint32_t kCompareLessOrEqual = 3, kCompareGreaterOrEqual = 6, kCompareAlways = 7; // VkCompareOp
 
@@ -182,12 +183,12 @@ namespace urtx {
         g_depthFailed = true;
         return false;
       }
-      const remixapi_HostShaderBindingEXT five[5] = {{0, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
-                                                    {1, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
-                                                    {2, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
-                                                    {3, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
-                                                    {4, REMIXAPI_HOST_BINDING_SAMPLER_EXT}};
-      info.bindings = five;
+      const remixapi_HostShaderBindingEXT seven[7] = {
+          {0, REMIXAPI_HOST_BINDING_SAMPLER_EXT}, {1, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+          {2, REMIXAPI_HOST_BINDING_SAMPLER_EXT}, {3, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+          {4, REMIXAPI_HOST_BINDING_SAMPLER_EXT}, {5, REMIXAPI_HOST_BINDING_SAMPLER_EXT},
+          {6, REMIXAPI_HOST_BINDING_SAMPLER_EXT}};
+      info.bindings = seven;
       info.bindingCount = 3;
       info.code = wall_mask_glass_frag;
       info.codeBytes = sizeof(wall_mask_glass_frag);
@@ -195,9 +196,10 @@ namespace urtx {
         g_depthFailed = true;
         return false;
       }
-      info.bindingCount = 5;
+      info.bindingCount = 7;
       info.code = glass_frag;
       info.codeBytes = sizeof(glass_frag);
+      info.pushConstantBytes = 12;
       if (g_register(&info, &g_glassFs) != REMIXAPI_ERROR_CODE_SUCCESS) {
         g_depthFailed = true;
         return false;
@@ -584,6 +586,10 @@ namespace urtx {
     g_stainVertices = quads ? std::make_shared<const std::vector<float>>(vertices, vertices + quads * 20) : nullptr;
     g_stainAtlas = atlas;
   }
+  void setLayersView(int view) {
+    std::lock_guard l(g_settingsLock);
+    g_layersView = view;
+  }
   void setStainView(const float rows[16]) {
     std::lock_guard l(g_settingsLock);
     if (rows)
@@ -621,6 +627,7 @@ namespace urtx {
     uint32_t screenSize[2], screenFrame[2];
     float projection[2];
     bool reversedZ;
+    int layersView;
     std::unordered_map<void *, PendingTexture> pending;
     std::shared_ptr<const std::vector<float>> stainVertices;
     void *stainAtlas = nullptr;
@@ -642,6 +649,7 @@ namespace urtx {
       projection[0] = g_projection[0];
       projection[1] = g_projection[1];
       reversedZ = g_reversedZ;
+      layersView = g_layersView;
       pending.swap(g_pending);
     }
     for (auto &[resource, t] : pending) {
@@ -783,12 +791,15 @@ namespace urtx {
         if (!blended(d) && replay(d, frameTarget))
           ++opaqueReplayed;
       if (layers && behind && opaqueReplayed) {
-        Pass glass = fullScreen(g_glassFs, 0, 0, 0, nullptr, 0);
+        const int push[3] = {layersView, 0, 0};
+        Pass glass = fullScreen(g_glassFs, 0, 0, 0, push, sizeof(push));
         glass.samplers.push_back({0, 0, 0, 1, 1}); // the frame as it is now
         glass.samplers.push_back({1, kFrameCopy, 0, 1, 1});
         glass.samplers.push_back({2, behind, 0, 1, 1});
         glass.samplers.push_back({3, REMIXAPI_HOST_TARGET_VIEW_TRANSMITTANCE_EXT, 1, 1, 1});
         glass.samplers.push_back({4, kCover, 0, 1, 1});
+        glass.samplers.push_back({5, REMIXAPI_HOST_TARGET_VIEW_DEPTH_EXT, 0, 1, 1});
+        glass.samplers.push_back({6, REMIXAPI_HOST_TARGET_VIEW_OPAQUE_DEPTH_EXT, 0, 1, 1});
         passes.push_back(std::move(glass));
       }
       if (anyBlended && opaqueReplayed) {
