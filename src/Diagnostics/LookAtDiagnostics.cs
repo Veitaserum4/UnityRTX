@@ -255,7 +255,13 @@ namespace UnityRemix
             string scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
             if (sceneRenderers == null || sceneRenderersFor != scene)
             {
-                sceneRenderers = UnityEngine.Object.FindObjectsOfType<MeshRenderer>();
+                // Inactive ones too: the scene scan draws them unless ScanActiveOnly.
+                var all = Resources.FindObjectsOfTypeAll<MeshRenderer>();
+                var inScene = new List<MeshRenderer>(all.Length);
+                foreach (var r in all)
+                    if (r != null && r.gameObject.scene.IsValid())
+                        inScene.Add(r);
+                sceneRenderers = inScene.ToArray();
                 sceneRenderersFor = scene;
                 meshGeometry.Clear();
                 describedSurfaces.Clear();
@@ -266,12 +272,22 @@ namespace UnityRemix
             float nearest = float.MaxValue;
             foreach (var r in sceneRenderers)
             {
-                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy || !r.bounds.IntersectRay(ray, out float boundsDistance) ||
-                    boundsDistance > Math.Min(nearest + SurfaceWindow, 1000f))
+                if (r == null)
                     continue;
                 var filter = r.GetComponent<MeshFilter>();
                 var mesh = filter != null ? filter.sharedMesh : null;
-                if (mesh == null || !Geometry(mesh, out var vertices, out var submeshes))
+                if (mesh == null)
+                    continue;
+                // The mesh's bounds in its own space: an inactive renderer's world bounds are empty.
+                Matrix4x4 boundsToLocal = r.isPartOfStaticBatch ? Matrix4x4.identity : r.transform.worldToLocalMatrix;
+                var localRay = new Ray(boundsToLocal.MultiplyPoint3x4(ray.origin), boundsToLocal.MultiplyVector(ray.direction));
+                if (!mesh.bounds.IntersectRay(localRay, out float localDistance))
+                    continue;
+                Matrix4x4 boundsToWorld = r.isPartOfStaticBatch ? Matrix4x4.identity : r.transform.localToWorldMatrix;
+                float boundsDistance = Vector3.Distance(ray.origin, boundsToWorld.MultiplyPoint3x4(localRay.GetPoint(localDistance)));
+                if (boundsDistance > Math.Min(nearest + SurfaceWindow, 1000f))
+                    continue;
+                if (!Geometry(mesh, out var vertices, out var submeshes))
                 {
                     unread.Add($"'{Path(r.transform)}' mesh '{(mesh != null ? mesh.name : "-")}' at {boundsDistance:F1} m (bounds)");
                     continue;
@@ -280,7 +296,7 @@ namespace UnityRemix
                 var materials = r.sharedMaterials;
                 int start = batched ? r.subMeshStartIndex : 0;
                 int end = batched ? Math.Min(start + materials.Length, submeshes.Length) : submeshes.Length;
-                Matrix4x4 toWorld = batched ? Matrix4x4.identity : r.localToWorldMatrix;
+                Matrix4x4 toWorld = batched ? Matrix4x4.identity : r.transform.localToWorldMatrix;
                 Matrix4x4 toLocal = toWorld.inverse;
                 Vector3 o = toLocal.MultiplyPoint3x4(ray.origin), d = toLocal.MultiplyVector(ray.direction);
                 float best = float.MaxValue;
@@ -298,7 +314,7 @@ namespace UnityRemix
                         best = Math.Min(best, distance);
                         var m = s - start < materials.Length ? materials[s - start] : null;
                         hits.Add(new KeyValuePair<float, string>(distance,
-                            $"{distance:F3} m '{Path(r.transform)}' submesh {s - start} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' queue {(m != null ? m.renderQueue : 0)} texture '{(m != null && m.mainTexture != null ? m.mainTexture.name : "-")}'"));
+                            $"{distance:F3} m{(r.enabled ? "" : " [renderer disabled]")}{(r.gameObject.activeInHierarchy ? "" : " [inactive]")} '{Path(r.transform)}' submesh {s - start} material '{(m != null ? m.name : "-")}' shader '{(m != null && m.shader != null ? m.shader.name : "-")}' queue {(m != null ? m.renderQueue : 0)} texture '{(m != null && m.mainTexture != null ? m.mainTexture.name : "-")}'"));
                     }
                 }
                 if (best < float.MaxValue)
