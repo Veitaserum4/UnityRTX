@@ -132,6 +132,12 @@ namespace UnityRemix.Games
         // lighting (a fill light on the player that path tracing makes glaring). Main thread.
         public virtual bool IsHiddenLight(Light light) => false;
 
+        // An additive glow on a mesh whose light the path tracer casts (an explosion's
+        // fireball): its emission lights the scene, at the coverage it shows. Others only
+        // show their glow (the game's lights do the lighting). Asked when the material is
+        // captured.
+        public virtual bool GlowLightsScene(Material material, Renderer renderer) => false;
+
         // The fog density the game's world camera draws with, given RenderSettings.fogDensity:
         // for a game that changes it per camera while rendering. Main thread, each frame.
         public virtual float WorldFogDensity(float density) => density;

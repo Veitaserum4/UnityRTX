@@ -113,7 +113,7 @@ namespace UnityRemix
                 RemixAPI.remixapi_MaterialInfoTranslucentEXT_Raw transExt = default;
                 RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw opaqueExt = default;
 
-                if (matData.suppressLightGeneration)
+                if (matData.suppressLightGeneration && !matData.glowLightsScene)
                 {
                     var emissionExt = new RemixAPI.remixapi_MaterialInfoEmissionEXT
                     {

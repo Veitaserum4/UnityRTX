@@ -192,6 +192,13 @@ namespace UnityRemix.Games
             return hidden;
         }
 
+        public static bool GlowLightsScene(Material material, Renderer renderer)
+        {
+            bool lights = false;
+            Run(nameof(GlowLightsScene), p => lights = p.GlowLightsScene(material, renderer));
+            return lights;
+        }
+
         public static bool ReadsBlendProperties(string shaderName)
         {
             bool reads = false;

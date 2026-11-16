@@ -990,6 +990,10 @@ namespace UnityRemix
             matData.blendedInstance = !isParticleOrTrailRenderer && matData.suppressLightGeneration &&
                                       matData.alphaMode == AlphaMode.Blend && !matData.emissionAsShown &&
                                       !shaderName.Contains("TextMeshPro") && matData.rayPortalIndex < 0;
+            // A glow the game's profile lets light the scene (an explosion's fireball): OpenRemix
+            // casts its light at the coverage it shows, its instance's fade included.
+            matData.glowLightsScene = matData.glowCoverage > 0f && matData.glowStrength > 0f && renderer != null &&
+                                      Games.GameProfiles.GlowLightsScene(material, renderer);
 
             // A coating's film: a smooth, darkened surface whose reflection carries the film's colours.
             if (film.HasValue && matData.translucentKind == TranslucentKind.None && !matData.suppressLightGeneration)

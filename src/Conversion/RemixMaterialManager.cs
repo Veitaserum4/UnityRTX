@@ -231,6 +231,7 @@ namespace UnityRemix
             public float glowCoverage;  // its texels' coverage scale, the glow's brightness up to 1 (0: not an additive glow)
             public float glowStrength;  // the captured glow's brightest channel (GlowFade's reference)
             public bool blendedInstance; // drawn with remixapi_InstanceInfoBlendEXT (a particle-like effect on a mesh)
+            public bool glowLightsScene; // an additive glow whose emission lights the scene (GameProfile.GlowLightsScene)
             public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
             public bool paintFinish; // remixapi_MaterialInfoPaintFinishEXT: multiplicative paint with its own roughness
             public bool hasFilm;           // remixapi_MaterialIridescenceEXT (film)
@@ -751,6 +752,11 @@ namespace UnityRemix
             if (matData.suppressLightGeneration)
             {
                 hash ^= 0x55AA55AAUL;
+                hash *= 1099511628211UL;
+            }
+            if (matData.glowLightsScene)
+            {
+                hash ^= 0x4C474C53UL;
                 hash *= 1099511628211UL;
             }
             // Incorporate alpha mode so cutout materials never collide with opaque materials

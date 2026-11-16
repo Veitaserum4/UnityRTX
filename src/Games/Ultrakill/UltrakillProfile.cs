@@ -211,6 +211,19 @@ namespace UnityRemix.Games.Ultrakill
             }
 
             RemixImGui.Spacing();
+            RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Lighting");
+            RemixImGui.Separator();
+            if (EmissiveExplosions != null)
+            {
+                bool emissive = EmissiveExplosions.Value;
+                if (RemixImGui.Checkbox("Explosions light the scene", ref emissive))
+                    EmissiveExplosions.Value = emissive;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("An explosion's fireball casts its own light, from its whole surface, fading with it, " +
+                                          "instead of the game's point light at its centre. Applies to explosions from then on.");
+            }
+
+            RemixImGui.Spacing();
             RemixImGui.TextColored(0.4f, 0.8f, 1.0f, 1.0f, "Blood and oil");
             RemixImGui.Separator();
             var overlay = UltrakillBloodStains.Overlay;
@@ -268,8 +281,38 @@ namespace UnityRemix.Games.Ultrakill
         // Virtual Screen, is drawn: the Virtual Camera shows it over the scene.)
         // The player's 'Point Light' (white, intensity 0.5, range 15, in every level): a subtle
         // fill in the game's vertex lighting, a glaring lamp at the camera when path traced.
+        // With EmissiveExplosions an explosion's own light (a child of its Explosion,
+        // brightening and widening as the fireball grows) is left out: the fireball lights
+        // the scene itself.
         public override bool IsHiddenLight(Light light) =>
-            light.name == "Point Light" && light.transform.parent != null && light.transform.parent.name == "Player";
+            (light.name == "Point Light" && light.transform.parent != null && light.transform.parent.name == "Player") ||
+            (EmissiveExplosions != null && EmissiveExplosions.Value && ExplosionType != null &&
+             light.GetComponentInParent(ExplosionType) != null);
+
+        // An explosion's fireball (the sphere its Explosion component grows and fades) casts
+        // the light it shows, with EmissiveExplosions.
+        public static BepInEx.Configuration.ConfigEntry<bool> EmissiveExplosions;
+
+        public override bool GlowLightsScene(Material material, Renderer renderer) =>
+            EmissiveExplosions != null && EmissiveExplosions.Value && ExplosionType != null &&
+            renderer.GetComponent(ExplosionType) != null;
+
+        private static Type explosionType;
+        private static bool explosionTypeSearched;
+        private static Type ExplosionType
+        {
+            get
+            {
+                if (!explosionTypeSearched)
+                {
+                    explosionTypeSearched = true;
+                    explosionType = AccessTools.TypeByName("Explosion");
+                    if (explosionType == null)
+                        Debug.Log("[Ultrakill] Explosion type not found: explosions keep their own lights");
+                }
+                return explosionType;
+            }
+        }
 
         public override bool IsNeverRenderedLayer(int layer) =>
             layer == 16 || layer == 18 || layer == 20 || layer == 28 || layer == 30;

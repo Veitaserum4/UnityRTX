@@ -228,6 +228,11 @@ namespace UnityRemix
                 "reflection, swirling). Needs an OpenRemix runtime whose paint carries its film; off: the game's " +
                 "rainbow baked into the stain.");
 
+            Games.Ultrakill.UltrakillProfile.EmissiveExplosions = Config.Bind("Ultrakill", "EmissiveExplosions", true,
+                "An explosion's fireball casts its own light (OpenRemix lights the scene with its emissive surface, " +
+                "at the coverage it shows and fading with it), instead of the game's point light at its centre. " +
+                "Needs an OpenRemix runtime that weighs blended emission by its coverage.");
+
             Games.Ultrakill.UltrakillProfile.GamePostProcess = Config.Bind("Ultrakill", "GamePostProcess", true,
                 "ULTRAKILL's own screen post-process over the path-traced frame, as its graphics menu sets it " +
                 "(dithering, colour compression, custom palette, gamma, downsampling). Off: only while it shows " +
