@@ -359,20 +359,22 @@ namespace UnityRemix
         /// stable offset from its name's hash (AutoPbrVariation scales it): roughness by up to
         /// +/-0.18, a metal's metalness down by up to 0.15. A level's textures of one kind
         /// (MetalDeco1, MetalDeco2, ...) otherwise read as one material. Inferred roughness also varies across the surface: the albedo's green
-        /// channel serves as the roughness map, brighter texels smoother.
+        /// channel serves as the roughness map, brighter texels smoother. AutoPbrRoughnessBias and
+        /// AutoPbrMetallicBias then shift every inferred value.
         /// </summary>
         private void RefineInferredPbr(ref MaterialTextureData d, Texture2D tex)
         {
             d.pbrRefined = true;
-            d.pbrVariation = AutoPbrVariation;
+            d.pbrTuning = AutoPbrTuning;
             d.hasRoughnessDetail = false;
-            if (tex == null)
-                return;
-            var stats = GetAlbedoStats(tex);
-            if (!stats.valid)
-                return;
-
             float metal = d.categoryMetallic, rough = d.categoryRoughness;
+            var stats = tex != null ? GetAlbedoStats(tex) : default;
+            if (!stats.valid)
+            {
+                ApplyInferredPbr(ref d, metal, rough);
+                return;
+            }
+
             if (metal > 0.5f)
             {
                 float painted = Mathf.SmoothStep(0f, 1f, Mathf.InverseLerp(0.25f, 0.55f, stats.saturation));
@@ -386,17 +388,13 @@ namespace UnityRemix
             uint hash = (uint)HashUtils.HashStringFNV(tex.name);
             float roughOffset = (hash & 0xFF) / 255f - 0.5f;
             float metalOffset = ((hash * 0x9E3779B1u) >> 24) / 255f;
-            rough += roughOffset * 0.36f * d.pbrVariation;
+            rough += roughOffset * 0.36f * d.pbrTuning.x;
             if (metal > 0.5f)
-                metal -= metalOffset * 0.15f * d.pbrVariation;
-            metal = Mathf.Clamp01(metal);
-            rough = Mathf.Clamp(rough, 0.04f, 1f);
-
-            if (d.inferMetallic)
-                d.inferredMetallic = metal;
+                metal -= metalOffset * 0.15f * d.pbrTuning.x;
+            ApplyInferredPbr(ref d, metal, rough);
             if (!d.inferRoughness)
                 return;
-            d.inferredRoughness = rough;
+            rough = d.inferredRoughness;
 
             // value = bias + scale * (1 - green): the mean green gives rough, two deviations either
             // side give rough -/+ spread; the 2nd..98th percentile stays within 0.04..1.
@@ -413,6 +411,16 @@ namespace UnityRemix
             d.hasRoughnessDetail = true;
             d.roughnessDetailScale = scale;
             d.roughnessDetailBias = rough - scale * (1f - stats.greenMean);
+        }
+
+        // The inferred values with the biases (AutoPbrTuning y: roughness, z: metallic), for
+        // whichever of them the material leaves to AutoPBR.
+        private static void ApplyInferredPbr(ref MaterialTextureData d, float metal, float rough)
+        {
+            if (d.inferMetallic)
+                d.inferredMetallic = Mathf.Clamp01(metal + d.pbrTuning.z);
+            if (d.inferRoughness)
+                d.inferredRoughness = Mathf.Clamp(rough + d.pbrTuning.y, 0.04f, 1f);
         }
 
         /// <summary>
@@ -580,7 +588,7 @@ namespace UnityRemix
 
                 if (pbrEnabled && matData.hasInferredPbr)
                 {
-                    if (!matData.pbrRefined || matData.pbrVariation != AutoPbrVariation)
+                    if (!matData.pbrRefined || matData.pbrTuning != AutoPbrTuning)
                     {
                         RefineInferredPbr(ref matData, matData.albedoTex);
                         changed = true;

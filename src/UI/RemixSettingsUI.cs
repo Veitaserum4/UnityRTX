@@ -423,6 +423,22 @@ namespace UnityRemix
                     }
                     Tooltip("How much materials of one kind differ, each texture by its own stable amount (1.0):\n" +
                             "roughness up to +/-0.18, metals' metalness down to 0.15 less.");
+                    float roughBias = matMgr.ConfigAutoPbrRoughnessBias != null ? matMgr.ConfigAutoPbrRoughnessBias.Value : 0f;
+                    if (RemixImGui.SliderFloat("Roughness bias", ref roughBias, -1f, 1f))
+                    {
+                        if (matMgr.ConfigAutoPbrRoughnessBias != null)
+                            matMgr.ConfigAutoPbrRoughnessBias.Value = roughBias;
+                        _plugin.OnAutoPbrSettingChanged();
+                    }
+                    Tooltip("Added to every generated roughness (0): above 0 rougher, below 0 glossier.");
+                    float metalBias = matMgr.ConfigAutoPbrMetallicBias != null ? matMgr.ConfigAutoPbrMetallicBias.Value : 0f;
+                    if (RemixImGui.SliderFloat("Metallic bias", ref metalBias, -1f, 1f))
+                    {
+                        if (matMgr.ConfigAutoPbrMetallicBias != null)
+                            matMgr.ConfigAutoPbrMetallicBias.Value = metalBias;
+                        _plugin.OnAutoPbrSettingChanged();
+                    }
+                    Tooltip("Added to every generated metalness (0): above 0 more metallic, below 0 less.");
                     RemixImGui.Unindent();
                 }
             }
