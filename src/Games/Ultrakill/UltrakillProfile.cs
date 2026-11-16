@@ -22,8 +22,7 @@ namespace UnityRemix.Games.Ultrakill
         private static readonly string[] dynamicParentNames = { "SpawnEffect", "SeasonalHats", "Halloween", "Christmas", "Easter" };
 
         private Type[] dynamicTypes;
-        private Type checkPointType;
-        private bool checkPointTypeSearched;
+        private Type[] followTypes;
         private readonly UltrakillBloodStains bloodStains = new UltrakillBloodStains();
         private readonly UltrakillOilStains oilStains = new UltrakillOilStains();
 
@@ -838,21 +837,30 @@ namespace UnityRemix.Games.Ultrakill
             return parent != null && ContainsAny(parent.name, dynamicParentNames);
         }
 
-        // Checkpoint graphics and the doors' "NoPass" skull locks are toggled by deactivation.
+        // Checkpoint graphics, the doors' "NoPass" skull locks and weapon pickups (a pickup
+        // deactivates its root once taken) are toggled by deactivation.
         public override bool FollowsActiveState(MeshFilter filter, Renderer renderer)
         {
-            if (!checkPointTypeSearched)
+            if (followTypes == null)
             {
-                checkPointTypeSearched = true;
+                var found = new List<Type>();
                 foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
                 {
-                    try { checkPointType = asm.GetType("CheckPoint"); } catch { }
-                    if (checkPointType != null)
-                        break;
+                    foreach (var name in followTypeNames)
+                    {
+                        Type t = null;
+                        try { t = asm.GetType(name); } catch { }
+                        if (t != null && !found.Contains(t))
+                            found.Add(t);
+                    }
                 }
+                followTypes = found.ToArray();
             }
-            if (checkPointType != null && renderer.GetComponentInParent(checkPointType) != null)
-                return true;
+            for (int i = 0; i < followTypes.Length; i++)
+            {
+                if (renderer.GetComponentInParent(followTypes[i]) != null)
+                    return true;
+            }
 
             var parent = filter.transform.parent;
             string parentName = parent != null ? parent.name : null;
@@ -874,6 +882,7 @@ namespace UnityRemix.Games.Ultrakill
                    Mathf.RoundToInt(material.GetFloat("_DstBlend")) == (int)UnityEngine.Rendering.BlendMode.One;
         }
 
+        private static readonly string[] followTypeNames = { "CheckPoint", "WeaponPickUp", "AltPickUp", "DualWieldPickup" };
         private static readonly string[] followNames = { "CheckPoint", "NoPass" };
         private static readonly string[] noPassNames = { "NoPass" };
 
