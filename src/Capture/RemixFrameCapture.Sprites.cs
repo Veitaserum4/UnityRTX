@@ -26,6 +26,9 @@ namespace UnityRemix
         // render thread may still be reading the last.
         private readonly Dictionary<int, Color32[]> spriteColors = new Dictionary<int, Color32[]>();
 
+        // An additive sprite's coverage scale (its emission scaled up to match).
+        private const float AdditiveSpriteCoverage = 0.5f;
+
         public void CaptureSpriteRenderers(FrameState state, int frameCount)
         {
             Camera mainCam = cameraHandler?.GetPreferredCamera() ?? Camera.main;
@@ -101,11 +104,16 @@ namespace UnityRemix
                     // Unity binds the sprite's texture as _MainTex (a property block). One material
                     // per texture: an animation's frames may be one atlas or a texture each.
                     int spriteMatId = unchecked(((mat.GetInstanceID() * 397 ^ texture.GetInstanceID()) * 31 ^ colorKey) * 31 ^ 0x53505254);
+                    // An additive sprite adds its light over what is behind it; OpenRemix blends it
+                    // over, its brightness its coverage, so a bright one (a fire's white-hot
+                    // flipbook) would stand solid. Half the coverage at twice the emission adds
+                    // the same light and leaves the rest showing through.
+                    float coverage = look.IsAdditive ? AdditiveSpriteCoverage : 1f;
                     if (_capturedParticleMatIds.Add(spriteMatId))
                     {
                         materialManager.CaptureMaterialTextures(mat, spriteMatId,
                             mpbEmissiveColor: emissive ? emission : (Color?)null,
-                            mpbEmissiveIntensity: emissive ? 0.8f : (float?)null,
+                            mpbEmissiveIntensity: emissive ? 0.8f / coverage : (float?)null,
                             mpbMainTex: texture,
                             mpbColor: look.MaterialColor,
                             suppressLightGeneration: true,
@@ -114,6 +122,7 @@ namespace UnityRemix
 
                     int id = sr.GetInstanceID();
                     Color32 color = look.Vertex(sr.color);
+                    color.a = (byte)Mathf.RoundToInt(color.a * coverage);
                     if (!spriteColors.TryGetValue(id, out var colors) || colors.Length != geometry.vertices.Length ||
                         !colors[0].Equals(color))
                     {
