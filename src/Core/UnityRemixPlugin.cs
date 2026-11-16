@@ -925,6 +925,14 @@ namespace UnityRemix
                 {
                     LogSource.LogError($"CaptureLineRenderers exception: {ex}");
                 }
+                try
+                {
+                    frameCapture.CaptureSpriteRenderers(nextState, frameCount);
+                }
+                catch (Exception ex)
+                {
+                    LogSource.LogError($"CaptureSpriteRenderers exception: {ex}");
+                }
                 RemixProfiler.AddDetail(RemixProfiler.Detail.Trails, RemixProfiler.ElapsedMs(trailsStart));
                 Games.GameProfiles.CaptureFrame(materialManager, nextState, frameCount);
                 ShaderPassThrough.Capture(cameraHandler?.CurrentCamera ?? Camera.main, frameCount);

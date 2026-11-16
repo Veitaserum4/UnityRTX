@@ -137,6 +137,13 @@ namespace UnityRemix
             shaderName == "Sprites/Default" || shaderName.EndsWith("/Sprites/Default", StringComparison.Ordinal) ||
             shaderName == "UI/Default" || shaderName.StartsWith("Unlit/Transparent", StringComparison.Ordinal);
 
+        // Sprite shaders that take the scene's light (Sprites/Diffuse, URP's Sprite-Lit-Default).
+        // Every other sprite shader shows its texture as is, an unlit sheet (a game's own fire
+        // or glow sprite shader included).
+        private static bool IsLitSpriteShader(string shaderName) =>
+            shaderName.IndexOf("Diffuse", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            shaderName.IndexOf("Sprite-Lit", StringComparison.OrdinalIgnoreCase) >= 0;
+
         public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null, Iridescence? film = null)
         {
             if (material == null)
@@ -357,6 +364,10 @@ namespace UnityRemix
             {
                 matData.alphaMode = AlphaMode.Blend;
             }
+            // Sprites are alpha-blended whatever their shader's queue says (a sprite's mesh is
+            // only its outline; the texture's alpha cuts the rest).
+            if (renderer is SpriteRenderer && matData.alphaMode == AlphaMode.Opaque)
+                matData.alphaMode = AlphaMode.Blend;
             // A layered material's _Shape alpha cuts out its leaves and blades when it alpha tests.
             if (layeredComposite && material.HasProperty("_Shape") && material.GetTexture("_Shape") != null &&
                 (material.IsKeywordEnabled("_ALPHATEST_ON") || (material.HasProperty("_AlphaClip") && material.GetFloat("_AlphaClip") > 0f)))
@@ -879,7 +890,8 @@ namespace UnityRemix
                                    $"coverage x{matData.glowCoverage:F2}, emission ({matData.glowColor.r:F2},{matData.glowColor.g:F2},{matData.glowColor.b:F2})");
                 }
                 else if (!isParticleOrTrailRenderer && matData.alphaMode == AlphaMode.Blend &&
-                         matData.albedoHandle != IntPtr.Zero && IsUnlitSheetShader(shaderName))
+                         matData.albedoHandle != IntPtr.Zero &&
+                         (IsUnlitSheetShader(shaderName) || (renderer is SpriteRenderer && !IsLitSpriteShader(shaderName))))
                 {
                     // An unlit see-through sheet on a mesh (Sprites/Default, Unlit/Transparent,
                     // UI/Default): Unity shows its own colour whatever lights it. Black (nothing
