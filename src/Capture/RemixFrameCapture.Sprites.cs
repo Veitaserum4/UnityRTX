@@ -81,15 +81,39 @@ namespace UnityRemix
                     if (geometry == null)
                         continue;
 
-                    // Unity binds the sprite's texture as _MainTex (a property block); the material
-                    // gives the rest. One material per texture: an animation's frames may be one
-                    // atlas or a texture each.
-                    int spriteMatId = unchecked((mat.GetInstanceID() * 397 ^ texture.GetInstanceID()) * 31 ^ 0x53505254);
+                    // As a particle's: the material's blend and tint, the renderer's colour its
+                    // vertex colours. Sprite shaders are unlit (bar a lit one's, which takes the
+                    // scene's light): they emit their colour, quantized as a particle's is.
+                    ParticleLook look = GetParticleLook(mat, false);
+                    bool emissive = !look.IsMultiply && !IsLitSpriteShader(mat);
+                    int colorKey = 0;
+                    Color emission = Color.black;
+                    if (emissive)
+                    {
+                        emission = look.EmissionColor(sr.color);
+                        int r4 = Mathf.Clamp((int)(emission.r * 15f + 0.5f), 0, 15);
+                        int g4 = Mathf.Clamp((int)(emission.g * 15f + 0.5f), 0, 15);
+                        int b4 = Mathf.Clamp((int)(emission.b * 15f + 0.5f), 0, 15);
+                        colorKey = (1 << 12) | (r4 << 8) | (g4 << 4) | b4;
+                        emission = new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f);
+                    }
+
+                    // Unity binds the sprite's texture as _MainTex (a property block). One material
+                    // per texture: an animation's frames may be one atlas or a texture each.
+                    int spriteMatId = unchecked(((mat.GetInstanceID() * 397 ^ texture.GetInstanceID()) * 31 ^ colorKey) * 31 ^ 0x53505254);
                     if (_capturedParticleMatIds.Add(spriteMatId))
-                        materialManager.CaptureMaterialTextures(mat, spriteMatId, mpbMainTex: texture, renderer: sr);
+                    {
+                        materialManager.CaptureMaterialTextures(mat, spriteMatId,
+                            mpbEmissiveColor: emissive ? emission : (Color?)null,
+                            mpbEmissiveIntensity: emissive ? 0.8f : (float?)null,
+                            mpbMainTex: texture,
+                            mpbColor: look.MaterialColor,
+                            suppressLightGeneration: true,
+                            renderer: sr);
+                    }
 
                     int id = sr.GetInstanceID();
-                    Color32 color = sr.color;
+                    Color32 color = look.Vertex(sr.color);
                     if (!spriteColors.TryGetValue(id, out var colors) || colors.Length != geometry.vertices.Length ||
                         !colors[0].Equals(color))
                     {
@@ -128,6 +152,14 @@ namespace UnityRemix
                         logger.LogWarning($"CaptureSpriteRenderers failed on '{sr.name}': {ex.Message}");
                 }
             }
+        }
+
+        // Sprite shaders that take the scene's light (Sprites/Diffuse, URP's Sprite-Lit-Default).
+        private static bool IsLitSpriteShader(Material mat)
+        {
+            string s = mat.shader != null ? mat.shader.name : "";
+            return s.IndexOf("Diffuse", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   s.IndexOf("Sprite-Lit", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private SpriteGeometry GetSpriteGeometry(Sprite sprite)
