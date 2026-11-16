@@ -45,8 +45,38 @@ namespace UnityRemix.Games.Ultrakill
                 }
             }
             logger?.LogInfo($"[UltrakillSpawnPatch] Hooked {patched} spawn methods");
+
+            // Explosion.Start shows a copy of the game's blank white material for its first 0.1 s.
+            // Copies of one material share a converted material (StaticGeometryDedupe, by name),
+            // and other objects copy that one too: named apart, the flash is captured as its
+            // explosion's own and can be a light (UltrakillProfile.SceneLightScale).
+            var start = AccessTools.TypeByName("Explosion")?.GetMethod("Start",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+            if (start == null)
+            {
+                logger?.LogWarning("[UltrakillSpawnPatch] Explosion.Start not found: explosion flashes stay unlit");
+                return;
+            }
+            try
+            {
+                harmony.Patch(start, postfix: new HarmonyMethod(typeof(UltrakillSpawnPatch), nameof(NameExplosionFlash)));
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning($"[UltrakillSpawnPatch] Explosion.Start: {ex.Message}");
+            }
         }
 
+        private const string ExplosionFlashName = "Explosion Flash";
+
         private static void OnSpawned(Component __instance) => RemixFrameCapture.TrackSpawnedObject(__instance);
+
+        private static void NameExplosionFlash(Component __instance)
+        {
+            var renderer = __instance.GetComponent<MeshRenderer>();
+            var flash = renderer != null ? renderer.sharedMaterial : null;
+            if (flash != null)
+                flash.name = ExplosionFlashName;
+        }
     }
 }

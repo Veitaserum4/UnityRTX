@@ -301,7 +301,8 @@ namespace UnityRemix.Games.Ultrakill
              light.GetComponentInParent(ExplosionType) != null);
 
         // An explosion's fireball (the sphere its Explosion component grows and fades, after a
-        // first moment as a solid white "Blank" sphere) casts the light it shows, with
+        // first moment as a solid white sphere, its material named apart by
+        // UltrakillSpawnPatch) casts the light it shows, with
         // EmissiveExplosions, ExplosionBrightness times as bright as the game draws it.
         public static BepInEx.Configuration.ConfigEntry<bool> EmissiveExplosions;
         public static BepInEx.Configuration.ConfigEntry<float> ExplosionBrightness;
