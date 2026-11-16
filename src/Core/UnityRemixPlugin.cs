@@ -232,6 +232,9 @@ namespace UnityRemix
                 "An explosion's fireball casts its own light (OpenRemix lights the scene with its emissive surface, " +
                 "at the coverage it shows and fading with it), instead of the game's point light at its centre. " +
                 "Needs an OpenRemix runtime that weighs blended emission by its coverage.");
+            Games.Ultrakill.UltrakillProfile.ExplosionBrightness = Config.Bind("Ultrakill", "ExplosionBrightness", 5f,
+                "With EmissiveExplosions: how many times brighter than the game draws it a fireball shows and lights " +
+                "(0.1 to 20), its first white flash included.");
 
             Games.Ultrakill.UltrakillProfile.GamePostProcess = Config.Bind("Ultrakill", "GamePostProcess", true,
                 "ULTRAKILL's own screen post-process over the path-traced frame, as its graphics menu sets it " +

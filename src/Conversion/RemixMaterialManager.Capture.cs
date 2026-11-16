@@ -990,10 +990,29 @@ namespace UnityRemix
             matData.blendedInstance = !isParticleOrTrailRenderer && matData.suppressLightGeneration &&
                                       matData.alphaMode == AlphaMode.Blend && !matData.emissionAsShown &&
                                       !shaderName.Contains("TextMeshPro") && matData.rayPortalIndex < 0;
-            // A glow the game's profile lets light the scene (an explosion's fireball): OpenRemix
-            // casts its light at the coverage it shows, its instance's fade included.
-            matData.glowLightsScene = matData.glowCoverage > 0f && matData.glowStrength > 0f && renderer != null &&
-                                      Games.GameProfiles.GlowLightsScene(material, renderer);
+            // A surface the game's profile makes a light of (an explosion's fireball): its emission,
+            // times the profile's scale, lights the scene. An additive glow's at the coverage it
+            // shows (its instance's fade included); an opaque one (the fireball's first white
+            // flash) emits its colour instead of being lit.
+            float lightScale = renderer != null ? Games.GameProfiles.SceneLightScale(material, renderer) : 0f;
+            matData.lightsScene = false;
+            if (lightScale > 0f && matData.glowCoverage > 0f)
+            {
+                if (matData.glowStrength > 0f)
+                {
+                    matData.lightsScene = true;
+                    matData.emissiveIntensity *= lightScale;
+                }
+            }
+            else if (lightScale > 0f && matData.alphaMode == AlphaMode.Opaque && matData.translucentKind == TranslucentKind.None)
+            {
+                matData.lightsScene = true;
+                matData.emissiveHandle = matData.albedoHandle;
+                matData.emissiveTextureHash = matData.albedoTextureHash;
+                matData.emissiveColor = new Color(matData.albedoColor.r, matData.albedoColor.g, matData.albedoColor.b, 1f);
+                matData.emissiveIntensity = lightScale;
+                matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a);
+            }
 
             // A coating's film: a smooth, darkened surface whose reflection carries the film's colours.
             if (film.HasValue && matData.translucentKind == TranslucentKind.None && !matData.suppressLightGeneration)

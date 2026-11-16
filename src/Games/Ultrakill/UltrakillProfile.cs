@@ -221,6 +221,17 @@ namespace UnityRemix.Games.Ultrakill
                 if (RemixImGui.IsItemHovered())
                     RemixImGui.SetTooltip("An explosion's fireball casts its own light, from its whole surface, fading with it, " +
                                           "instead of the game's point light at its centre. Applies to explosions from then on.");
+                if (emissive && ExplosionBrightness != null)
+                {
+                    RemixImGui.Indent();
+                    float brightness = ExplosionBrightness.Value;
+                    if (RemixImGui.SliderFloat("Explosion brightness", ref brightness, 0.1f, 20f))
+                        ExplosionBrightness.Value = brightness;
+                    if (RemixImGui.IsItemHovered())
+                        RemixImGui.SetTooltip("How many times brighter than the game draws it a fireball shows and lights (5). " +
+                                              "Applies to explosions from then on.");
+                    RemixImGui.Unindent();
+                }
             }
 
             RemixImGui.Spacing();
@@ -289,13 +300,17 @@ namespace UnityRemix.Games.Ultrakill
             (EmissiveExplosions != null && EmissiveExplosions.Value && ExplosionType != null &&
              light.GetComponentInParent(ExplosionType) != null);
 
-        // An explosion's fireball (the sphere its Explosion component grows and fades) casts
-        // the light it shows, with EmissiveExplosions.
+        // An explosion's fireball (the sphere its Explosion component grows and fades, after a
+        // first moment as a solid white "Blank" sphere) casts the light it shows, with
+        // EmissiveExplosions, ExplosionBrightness times as bright as the game draws it.
         public static BepInEx.Configuration.ConfigEntry<bool> EmissiveExplosions;
+        public static BepInEx.Configuration.ConfigEntry<float> ExplosionBrightness;
 
-        public override bool GlowLightsScene(Material material, Renderer renderer) =>
+        public override float SceneLightScale(Material material, Renderer renderer) =>
             EmissiveExplosions != null && EmissiveExplosions.Value && ExplosionType != null &&
-            renderer.GetComponent(ExplosionType) != null;
+            renderer.GetComponent(ExplosionType) != null
+                ? Mathf.Clamp(ExplosionBrightness != null ? ExplosionBrightness.Value : 5f, 0.1f, 20f)
+                : 0f;
 
         private static Type explosionType;
         private static bool explosionTypeSearched;

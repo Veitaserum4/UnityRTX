@@ -132,11 +132,12 @@ namespace UnityRemix.Games
         // lighting (a fill light on the player that path tracing makes glaring). Main thread.
         public virtual bool IsHiddenLight(Light light) => false;
 
-        // An additive glow on a mesh whose light the path tracer casts (an explosion's
-        // fireball): its emission lights the scene, at the coverage it shows. Others only
-        // show their glow (the game's lights do the lighting). Asked when the material is
-        // captured.
-        public virtual bool GlowLightsScene(Material material, Renderer renderer) => false;
+        // A renderer's surface that is a light (an explosion's fireball), and how bright: above 0
+        // its emission, times this, lights the scene. An additive glow casts what it shows (its
+        // coverage and fade); an opaque surface emits its own colour. 0: as converted (glows
+        // only show their light; the game's lights do the lighting). Asked when the material
+        // is captured.
+        public virtual float SceneLightScale(Material material, Renderer renderer) => 0f;
 
         // The fog density the game's world camera draws with, given RenderSettings.fogDensity:
         // for a game that changes it per camera while rendering. Main thread, each frame.
