@@ -355,13 +355,16 @@ namespace UnityRemix
         /// <summary>
         /// Varies AutoPBR's keyword-table values by the albedo, so materials in one category (a
         /// level of materials named METAL) differ: saturated "metal" is painted (a dielectric),
-        /// near-black metal is roughened, busy textures are rougher, and each texture gets a small
-        /// stable offset. Inferred roughness also varies across the surface: the albedo's green
+        /// near-black metal is roughened, busy textures are rougher, and each texture gets its own
+        /// stable offset from its name's hash (AutoPbrVariation scales it): roughness by up to
+        /// +/-0.18, a metal's metalness down by up to 0.15. A level's textures of one kind
+        /// (MetalDeco1, MetalDeco2, ...) otherwise read as one material. Inferred roughness also varies across the surface: the albedo's green
         /// channel serves as the roughness map, brighter texels smoother.
         /// </summary>
         private void RefineInferredPbr(ref MaterialTextureData d, Texture2D tex)
         {
             d.pbrRefined = true;
+            d.pbrVariation = AutoPbrVariation;
             d.hasRoughnessDetail = false;
             if (tex == null)
                 return;
@@ -379,7 +382,13 @@ namespace UnityRemix
                 rough = Mathf.Lerp(rough, Mathf.Max(rough, 0.55f), dark);
             }
             rough += Mathf.Clamp((stats.detail - 0.05f) * 1.5f, -0.08f, 0.15f);
-            rough += ((int)(HashUtils.HashStringFNV(tex.name) & 0xFF) / 255f - 0.5f) * 0.12f;
+            // Two independent offsets from the name's hash, the second from its high bits mixed.
+            uint hash = (uint)HashUtils.HashStringFNV(tex.name);
+            float roughOffset = (hash & 0xFF) / 255f - 0.5f;
+            float metalOffset = ((hash * 0x9E3779B1u) >> 24) / 255f;
+            rough += roughOffset * 0.36f * d.pbrVariation;
+            if (metal > 0.5f)
+                metal -= metalOffset * 0.15f * d.pbrVariation;
             metal = Mathf.Clamp01(metal);
             rough = Mathf.Clamp(rough, 0.04f, 1f);
 
@@ -571,7 +580,7 @@ namespace UnityRemix
 
                 if (pbrEnabled && matData.hasInferredPbr)
                 {
-                    if (!matData.pbrRefined)
+                    if (!matData.pbrRefined || matData.pbrVariation != AutoPbrVariation)
                     {
                         RefineInferredPbr(ref matData, matData.albedoTex);
                         changed = true;

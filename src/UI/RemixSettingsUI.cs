@@ -414,6 +414,15 @@ namespace UnityRemix
                         _plugin.OnAutoPbrSettingChanged();
                     }
                     Tooltip("Bump depth of the generated normal maps (1.0).");
+                    float variation = matMgr.ConfigAutoPbrVariation != null ? matMgr.ConfigAutoPbrVariation.Value : 1.0f;
+                    if (RemixImGui.SliderFloat("Variation", ref variation, 0f, 2f))
+                    {
+                        if (matMgr.ConfigAutoPbrVariation != null)
+                            matMgr.ConfigAutoPbrVariation.Value = variation;
+                        _plugin.OnAutoPbrSettingChanged();
+                    }
+                    Tooltip("How much materials of one kind differ, each texture by its own stable amount (1.0):\n" +
+                            "roughness up to +/-0.18, metals' metalness down to 0.15 less.");
                     RemixImGui.Unindent();
                 }
             }

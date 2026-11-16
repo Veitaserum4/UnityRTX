@@ -253,10 +253,12 @@ namespace UnityRemix
             public ulong originalNormalTextureHash;
             public Texture2D albedoTex;
             // AutoPBR: which values it may set (the material has no explicit one), the keyword
-            // table's values, and whether the albedo's statistics refined them (RefineInferredPbr).
+            // table's values, and whether the albedo's statistics refined them (RefineInferredPbr),
+            // at which AutoPbrVariation.
             public bool inferMetallic, inferRoughness;
             public float categoryMetallic, categoryRoughness;
             public bool pbrRefined;
+            public float pbrVariation;
             // AutoPBR roughness detail: the albedo doubles as the roughness map, its inverted green
             // channel remapped to bias + scale * x (remixapi_MaterialPbrRemapEXT).
             public bool hasRoughnessDetail;
@@ -288,6 +290,8 @@ namespace UnityRemix
         // irradiance, times albedo / pi) the multiplier over pi.
         public static float UnlitRadianceScale => (LightIntensityMultiplier != null ? LightIntensityMultiplier.Value : 1f) / Mathf.PI;
         public BepInEx.Configuration.ConfigEntry<float> ConfigAutoNormalStrength { get; private set; }
+        public BepInEx.Configuration.ConfigEntry<float> ConfigAutoPbrVariation { get; private set; }
+        private float AutoPbrVariation => ConfigAutoPbrVariation != null ? Mathf.Clamp(ConfigAutoPbrVariation.Value, 0f, 2f) : 1f;
         private int autoPbrMaterialCount = 0;
         private int autoNormalMapCount = 0;
         public int AutoPbrMaterialCount => autoPbrMaterialCount;
@@ -329,6 +333,9 @@ namespace UnityRemix
                     "Generate tangent-space normal maps from albedo textures via Sobel filter when no normal map exists (Experimental).");
                 ConfigAutoNormalStrength = config.Bind("Materials", "AutoNormalStrength", 1.0f,
                     "Strength/intensity of automatically generated normal maps (0.1 to 3.0) (Experimental).");
+                ConfigAutoPbrVariation = config.Bind("Materials", "AutoPbrVariation", 1.0f,
+                    "How much AutoPBR varies materials of one kind, each texture by its own stable amount (0 to 2): " +
+                    "roughness up to +/-0.18 and metals' metalness down to 0.15 less at 1.");
             }
             
             // Cache delegates
