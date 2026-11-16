@@ -567,8 +567,34 @@ namespace UnityRemix
         /// Updates all captured materials to apply or remove auto PBR heuristics and auto normal maps live.
         /// Resets remixMaterialHandle for altered materials so Remix creates new material instances.
         /// </summary>
+        // The AutoPBR settings the materials were last updated for: a change to any of them (the
+        // UI, the config file) is applied on the main thread's next frame (AutoPbrSettingsChanged).
+        private (bool pbr, bool normals, float normalStrength, Vector3 tuning) appliedAutoPbr;
+        private bool appliedAutoPbrKnown;
+
+        private (bool, bool, float, Vector3) CurrentAutoPbrSettings() => (
+            ConfigAutoPBR != null && ConfigAutoPBR.Value,
+            ConfigAutoNormalMaps != null && ConfigAutoNormalMaps.Value,
+            ConfigAutoNormalStrength != null ? ConfigAutoNormalStrength.Value : 1.0f,
+            AutoPbrTuning);
+
+        public bool AutoPbrSettingsChanged()
+        {
+            var current = CurrentAutoPbrSettings();
+            if (!appliedAutoPbrKnown)
+            {
+                // The materials captured so far were made with these.
+                appliedAutoPbr = current;
+                appliedAutoPbrKnown = true;
+                return false;
+            }
+            return !current.Equals(appliedAutoPbr);
+        }
+
         public void UpdateAllAutoPbrMaterials()
         {
+            appliedAutoPbr = CurrentAutoPbrSettings();
+            appliedAutoPbrKnown = true;
             bool pbrEnabled = ConfigAutoPBR != null && ConfigAutoPBR.Value;
             bool normalEnabled = ConfigAutoNormalMaps != null && ConfigAutoNormalMaps.Value;
             float normalStrength = ConfigAutoNormalStrength != null ? ConfigAutoNormalStrength.Value : 1.0f;

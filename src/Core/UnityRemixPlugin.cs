@@ -1279,7 +1279,8 @@ namespace UnityRemix
 
         private void ApplyAutoPbrSettingChange()
         {
-            if (System.Threading.Interlocked.Exchange(ref autoPbrChangeRequested, 0) == 0)
+            bool requested = System.Threading.Interlocked.Exchange(ref autoPbrChangeRequested, 0) != 0;
+            if (!requested && (materialManager == null || !materialManager.AutoPbrSettingsChanged()))
                 return;
             // Materials are replaced in place (UpdateAllAutoPbrMaterials); meshes keep their handles.
             materialManager?.UpdateAllAutoPbrMaterials();
