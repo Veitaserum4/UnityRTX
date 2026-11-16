@@ -40,8 +40,17 @@ namespace UnityRemix
             if (frameCount % 4 == 0)
             {
                 foreach (var sprite in UnityCompat.FindActiveSceneComponents<SpriteRenderer>())
-                    if (sprite != null && trackedSpriteIds.Add(sprite.GetInstanceID()))
-                        trackedSprites.Add(sprite);
+                {
+                    if (sprite == null || !trackedSpriteIds.Add(sprite.GetInstanceID()))
+                        continue;
+                    trackedSprites.Add(sprite);
+                    // Single Window draws nothing with the game's cameras: an animator culled
+                    // with its renderer would hold a flipbook (a fire just lit) on one frame until
+                    // the next scene-wide sweep (RefreshRendererCache) let it run.
+                    var animator = sprite.GetComponent<Animator>();
+                    if (animator != null && animator.cullingMode != AnimatorCullingMode.AlwaysAnimate)
+                        animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                }
             }
             if (frameCount % 180 == 0)
             {
