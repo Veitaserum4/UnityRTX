@@ -199,6 +199,13 @@ namespace UnityRemix.Games
             return scale;
         }
 
+        public static float SelfIlluminationScale(Material material, Renderer renderer)
+        {
+            float scale = 0f;
+            Run(nameof(SelfIlluminationScale), p => scale = p.SelfIlluminationScale(material, renderer));
+            return scale;
+        }
+
         public static bool ReadsBlendProperties(string shaderName)
         {
             bool reads = false;

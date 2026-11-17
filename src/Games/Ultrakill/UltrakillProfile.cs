@@ -313,6 +313,33 @@ namespace UnityRemix.Games.Ultrakill
                 ? Mathf.Clamp(ExplosionBrightness != null ? ExplosionBrightness.Value : 5f, 0.1f, 20f)
                 : 0f;
 
+        // An enemy projectile's orb: ULTRAKILL/Master with EMISSIVE off but _UseAlbedoAsEmissive
+        // on, lit in the game by the light at its centre, which path tracing hides inside the
+        // orb. It shows its texture as light; its own light still lights the scene.
+        public override float SelfIlluminationScale(Material material, Renderer renderer) =>
+            ProjectileType != null && material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
+            material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") > 0.5f &&
+            renderer.GetComponentInParent(ProjectileType) != null
+                ? 1f
+                : 0f;
+
+        private static Type projectileType;
+        private static bool projectileTypeSearched;
+        private static Type ProjectileType
+        {
+            get
+            {
+                if (!projectileTypeSearched)
+                {
+                    projectileTypeSearched = true;
+                    projectileType = AccessTools.TypeByName("Projectile");
+                    if (projectileType == null)
+                        Debug.Log("[Ultrakill] Projectile type not found: projectiles draw as lit surfaces");
+                }
+                return projectileType;
+            }
+        }
+
         private static Type explosionType;
         private static bool explosionTypeSearched;
         private static Type ExplosionType

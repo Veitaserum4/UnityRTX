@@ -139,6 +139,12 @@ namespace UnityRemix.Games
         // is captured.
         public virtual float SceneLightScale(Material material, Renderer renderer) => 0f;
 
+        // An opaque surface that shows its own colour as light without lighting the scene (a
+        // projectile whose game light sits inside it), and how bright: above 0 it emits its
+        // albedo times this instead of being lit. 0: as converted. Asked when the material is
+        // captured.
+        public virtual float SelfIlluminationScale(Material material, Renderer renderer) => 0f;
+
         // The fog density the game's world camera draws with, given RenderSettings.fogDensity:
         // for a game that changes it per camera while rendering. Main thread, each frame.
         public virtual float WorldFogDensity(float density) => density;

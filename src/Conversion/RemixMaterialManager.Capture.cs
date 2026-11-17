@@ -1013,6 +1013,21 @@ namespace UnityRemix
                 matData.emissiveIntensity = lightScale;
                 matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a);
             }
+            else if (renderer != null && matData.alphaMode == AlphaMode.Opaque && matData.translucentKind == TranslucentKind.None)
+            {
+                // A self-illuminated surface (the profile's): its colour as emission, not lit,
+                // and no light of its own (the game's light does the lighting).
+                float selfScale = Games.GameProfiles.SelfIlluminationScale(material, renderer);
+                if (selfScale > 0f)
+                {
+                    matData.suppressLightGeneration = true;
+                    matData.emissiveHandle = matData.albedoHandle;
+                    matData.emissiveTextureHash = matData.albedoTextureHash;
+                    matData.emissiveColor = new Color(matData.albedoColor.r, matData.albedoColor.g, matData.albedoColor.b, 1f);
+                    matData.emissiveIntensity = selfScale;
+                    matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a);
+                }
+            }
 
             // A coating's film: a smooth, darkened surface whose reflection carries the film's colours.
             if (film.HasValue && matData.translucentKind == TranslucentKind.None && !matData.suppressLightGeneration)
