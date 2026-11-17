@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using BepInEx.Logging;
 using HarmonyLib;
@@ -8,20 +9,23 @@ namespace UnityRemix.Games.Ultrakill
 {
     /// <summary>
     /// Hooks the spawn lifecycle (Awake / Start / OnEnable) of ULTRAKILL's short-lived
-    /// objects (projectiles, explosions, rockets, magnets, nails, enemies) so their
+    /// objects (projectiles, explosions, rockets, magnets, nails, coins, enemies) so their
     /// renderers are tracked on the frame they appear, not at the next cache refresh.
     /// </summary>
     internal static class UltrakillSpawnPatch
     {
         private static readonly string[] typeNames =
         {
-            "Projectile", "Explosion", "Grenade", "Magnet", "Nail", "Harpoon", "Cannonball",
+            "Projectile", "Explosion", "Grenade", "Magnet", "Nail", "Harpoon", "Cannonball", "Coin",
             "EnemyIdentifier", "VirtueInsignia", "PhysicalShockwave", "Shockwave"
         };
         private static readonly string[] methodNames = { "Awake", "Start", "OnEnable" };
 
+        private static ManualLogSource log;
+
         public static void Apply(Harmony harmony, ManualLogSource logger)
         {
+            log = logger;
             var postfix = new HarmonyMethod(typeof(UltrakillSpawnPatch), nameof(OnSpawned));
             int patched = 0;
             foreach (var typeName in typeNames)
@@ -69,7 +73,36 @@ namespace UnityRemix.Games.Ultrakill
 
         private const string ExplosionFlashName = "Explosion Flash";
 
-        private static void OnSpawned(Component __instance) => RemixFrameCapture.TrackSpawnedObject(__instance);
+        private static void OnSpawned(Component __instance)
+        {
+            RemixFrameCapture.TrackSpawnedObject(__instance);
+            if (VerboseLog.On && __instance != null && __instance.GetType().Name == "Projectile")
+                DescribeProjectile(__instance);
+        }
+
+        // Projectile materials as captured once each (verbose): which emission properties a
+        // projectile's renderers carry, for why some draw lit and others unlit.
+        private static readonly HashSet<int> describedMaterials = new HashSet<int>();
+
+        private static void DescribeProjectile(Component projectile)
+        {
+            foreach (var renderer in projectile.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material == null || !describedMaterials.Add(material.GetInstanceID()))
+                        continue;
+                    string Float(string name) => material.HasProperty(name) ? material.GetFloat(name).ToString("0.###") : "-";
+                    string Colour(string name) => material.HasProperty(name) ? material.GetColor(name).ToString() : "-";
+                    log?.LogInfo($"[UltrakillSpawnPatch] projectile '{projectile.name}' {renderer.GetType().Name} '{renderer.name}' " +
+                                 $"layer {renderer.gameObject.layer} enabled {renderer.enabled}/{renderer.gameObject.activeInHierarchy}: " +
+                                 $"material '{material.name}' shader '{material.shader.name}' keywords [{string.Join(",", material.shaderKeywords)}] " +
+                                 $"EMISSIVE {Float("EMISSIVE")} _EmissiveColor {Colour("_EmissiveColor")} _EmissiveIntensity {Float("_EmissiveIntensity")} " +
+                                 $"_UseAlbedoAsEmissive {Float("_UseAlbedoAsEmissive")} _EmissionColor {Colour("_EmissionColor")} _Color {Colour("_Color")} " +
+                                 $"_TintColor {Colour("_TintColor")} _BlendMode {Float("_BlendMode")} _SrcBlend {Float("_SrcBlend")} _DstBlend {Float("_DstBlend")}");
+                }
+            }
+        }
 
         private static void NameExplosionFlash(Component __instance)
         {
