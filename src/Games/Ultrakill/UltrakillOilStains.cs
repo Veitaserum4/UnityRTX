@@ -37,6 +37,10 @@ namespace UnityRemix.Games.Ultrakill
         private const int CellSize = 128;
         // 2 (1 - |N.V|)^2 at an average view: where the ramp is read beside the noise.
         private const float AverageGrazing = 0.15f;
+        // The game's multiplier times this: path-traced, its light purple let the lit surface
+        // through as a faint tint; spilled fuel reads as a near-black coat (the sheen stays,
+        // the finish's and the film's).
+        private const float Darkness = 0.15f;
 
         /// <summary>Config: the paint carries a thin film (needs OpenRemix's paint film) instead of the baked ramp.</summary>
         public static BepInEx.Configuration.ConfigEntry<bool> Film;
@@ -323,8 +327,8 @@ namespace UnityRemix.Games.Ultrakill
                 var outside = new Color32(255, 255, 255, 0);
                 if (film)
                 {
-                    var flat = new Color(Mathf.Clamp01(meanRamp.r * meanCover + 0.32f), Mathf.Clamp01(meanRamp.g * meanCover),
-                                         Mathf.Clamp01(meanRamp.b * meanCover + 0.55f), 1f);
+                    var flat = new Color(Mathf.Clamp01(meanRamp.r * meanCover + 0.32f) * Darkness, Mathf.Clamp01(meanRamp.g * meanCover) * Darkness,
+                                         Mathf.Clamp01(meanRamp.b * meanCover + 0.55f) * Darkness, 1f);
                     outside = linearSpace ? (Color32)flat.gamma : (Color32)flat;
                     outside.a = 0;
                 }
@@ -346,9 +350,9 @@ namespace UnityRemix.Games.Ultrakill
                         Color ramp = film ? meanRamp : slickPixels.GetPixelBilinear(n + AverageGrazing, n * 5f);
                         float cover = film ? meanCover : splat.r * splat.r;
                         var m = new Color(
-                            Mathf.Clamp01(ramp.r * cover + 0.32f),
-                            Mathf.Clamp01(ramp.g * cover),
-                            Mathf.Clamp01(ramp.b * cover + 0.55f), 1f);
+                            Mathf.Clamp01(ramp.r * cover + 0.32f) * Darkness,
+                            Mathf.Clamp01(ramp.g * cover) * Darkness,
+                            Mathf.Clamp01(ramp.b * cover + 0.55f) * Darkness, 1f);
                         // OpenRemix reads the texture as sRGB. In a gamma project the game's
                         // multiply happens on gamma values, which that decode turns linear.
                         pixels[y * width + x] = linearSpace ? (Color32)m.gamma : (Color32)m;
