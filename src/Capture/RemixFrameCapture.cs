@@ -1398,11 +1398,13 @@ namespace UnityRemix
             if (frameCount >= 0)
                 lastCameraTrackFrame = frameCount;
             
+            // Invisible ones as TrackMeshRenderer leaves them out: a camera's child can be an
+            // effect the profile hides (a screen distortion its pass-through replays).
             var childRenderers = cam.GetComponentsInChildren<MeshRenderer>(false);
             for (int i = 0; i < childRenderers.Length; i++)
             {
                 var r = childRenderers[i];
-                if (r != null && cachedRendererIds.Add(r.GetInstanceID()))
+                if (r != null && !SceneMeshScanner.IsRendererInvisible(r) && cachedRendererIds.Add(r.GetInstanceID()))
                 {
                     cachedRenderers.Add(r);
                     GetOrCreateStaticInfo(r);
@@ -1413,7 +1415,7 @@ namespace UnityRemix
             for (int i = 0; i < childSkinned.Length; i++)
             {
                 var sr = childSkinned[i];
-                if (sr != null && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
+                if (sr != null && !SceneMeshScanner.IsRendererInvisible(sr) && cachedSkinnedRendererIds.Add(sr.GetInstanceID()))
                 {
                     cachedSkinnedRenderers.Add(sr);
                     if (!sr.updateWhenOffscreen)

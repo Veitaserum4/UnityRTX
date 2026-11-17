@@ -635,7 +635,8 @@ namespace UnityRemix
                 var renderer = viewmodelRenderers[i];
                 if (renderer == null || !renderer.enabled || !renderer.gameObject.activeInHierarchy || SceneMeshScanner.IsRenderingOff(renderer))
                     continue;
-                if (IsLayerDisabled(renderer.gameObject.layer) || IsRendererDisabled(renderer.GetInstanceID()))
+                if (IsLayerDisabled(renderer.gameObject.layer) || IsRendererDisabled(renderer.GetInstanceID()) ||
+                    SceneMeshScanner.IsRendererInvisible(renderer))
                     continue;
                 var meshFilter = renderer.GetComponent<MeshFilter>();
                 if (meshFilter == null || meshFilter.sharedMesh == null)
