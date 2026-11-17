@@ -32,7 +32,11 @@ namespace UnityRemix.Games.Ultrakill
             UltrakillGameState.Apply(harmony, Logger);
             UltrakillSpawnPatch.Apply(harmony, Logger);
             UltrakillOilStains.Apply(harmony, Logger);
+            UltrakillStaticOptimizer.Apply(harmony, Logger);
         }
+
+        public override bool GetOriginalGeometry(Renderer renderer, out Mesh mesh, out Material[] materials) =>
+            UltrakillStaticOptimizer.TryGetOriginal(renderer, out mesh, out materials);
 
         // Weapons and arms are drawn by the main camera's "HUD Camera" child, at the weapon FOV.
         private Camera worldCamera, hudCamera;
