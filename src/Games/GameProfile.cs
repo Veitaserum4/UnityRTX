@@ -151,6 +151,17 @@ namespace UnityRemix.Games
         // when the material is captured, also for static meshes (no renderer).
         public virtual bool IsBackdropEmission(Material material) => false;
 
+        // A static renderer the game rewrote at runtime for its own batching (its mesh a slice of
+        // a combined mesh, its materials an atlas material the converter cannot read): the mesh
+        // and materials it had before, drawn at its own transform. False: as it is. Asked when
+        // the scene scan reads the renderer.
+        public virtual bool GetOriginalGeometry(Renderer renderer, out Mesh mesh, out Material[] materials)
+        {
+            mesh = null;
+            materials = null;
+            return false;
+        }
+
         // The fog density the game's world camera draws with, given RenderSettings.fogDensity:
         // for a game that changes it per camera while rendering. Main thread, each frame.
         public virtual float WorldFogDensity(float density) => density;

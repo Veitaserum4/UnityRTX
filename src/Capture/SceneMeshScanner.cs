@@ -1040,10 +1040,20 @@ int queued = 0;
                     continue;
                 }
 
+                // A renderer the game rewrote for its own batching: its original mesh and
+                // materials (GameProfile.GetOriginalGeometry), an ordinary mesh at its transform.
+                var rendererMaterials = renderer.sharedMaterials;
+                bool restored = Games.GameProfiles.GetOriginalGeometry(renderer, out var originalMesh, out var originalMaterials);
+                if (restored)
+                {
+                    mesh = originalMesh;
+                    rendererMaterials = originalMaterials;
+                }
+
                 // Unity's static batching merges renderers into a single "Combined Mesh" with
                 // pre-transformed world-space vertices. Each renderer owns a slice of submeshes
                 // at [subMeshStartIndex .. subMeshStartIndex + sharedMaterials.Length).
-                bool isCombinedMesh = mesh.name != null && mesh.name.StartsWith("Combined Mesh");
+                bool isCombinedMesh = !restored && mesh.name != null && mesh.name.StartsWith("Combined Mesh");
 
                 // Skip dynamic entities (enemies, spawn effects, seasonal hats, player, projectiles)
                 // SceneMeshScanner is strictly for static level geometry; dynamic objects are captured per-frame.
@@ -1118,7 +1128,7 @@ int queued = 0;
                             if (ReadMeshFromGPU(mesh, out vertices, out normals, out uvs, out subMeshIndices))
                             {
                                 gpuReadbackCount++;
-                                if (LayeredMaterialCompositor.UsesVertexColorAsColor(renderer.sharedMaterials))
+                                if (LayeredMaterialCompositor.UsesVertexColorAsColor(rendererMaterials))
                                     colors = SkinnedMeshGpuReader.TryReadColors(mesh);
                             }
                         }
@@ -1145,7 +1155,7 @@ int queued = 0;
                 }
 
                 // Build per-submesh surfaces with separate materials
-                var materials = renderer.sharedMaterials;
+                var materials = rendererMaterials;
                 var surfaces = new List<SubMeshSurface>();
                 var surfaceMaterials = new List<Material>();
 

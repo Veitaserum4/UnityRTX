@@ -397,12 +397,20 @@ namespace UnityRemix
             return body;
         }
 
+        // A renderer the game rewrote for its own batching is the scene scan's too: it draws the
+        // original geometry (GameProfile.GetOriginalGeometry). Asked once a renderer.
+        private readonly Dictionary<int, bool> restoredRenderers = new Dictionary<int, bool>();
+
         private bool ShouldPreferSceneScan(MeshRenderer renderer, Mesh mesh)
         {
             if (renderer == null || mesh == null)
                 return false;
-
-            return renderer.isPartOfStaticBatch;
+            if (renderer.isPartOfStaticBatch)
+                return true;
+            int id = renderer.GetInstanceID();
+            if (!restoredRenderers.TryGetValue(id, out bool restored))
+                restoredRenderers[id] = restored = Games.GameProfiles.GetOriginalGeometry(renderer, out _, out _);
+            return restored;
         }
 
         public StaticGeometryStats GetStaticGeometryStats(SceneMeshScanner scanner)

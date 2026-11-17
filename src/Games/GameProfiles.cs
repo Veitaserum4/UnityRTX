@@ -206,6 +206,17 @@ namespace UnityRemix.Games
             return scale;
         }
 
+        public static bool GetOriginalGeometry(Renderer renderer, out Mesh mesh, out Material[] materials)
+        {
+            bool found = false;
+            Mesh foundMesh = null;
+            Material[] foundMaterials = null;
+            Run(nameof(GetOriginalGeometry), p => found = p.GetOriginalGeometry(renderer, out foundMesh, out foundMaterials));
+            mesh = foundMesh;
+            materials = foundMaterials;
+            return found && foundMesh != null;
+        }
+
         public static bool IsBackdropEmission(Material material)
         {
             bool backdrop = false;
