@@ -1029,6 +1029,9 @@ namespace UnityRemix
                 }
             }
 
+            if (!matData.lightsScene && Games.GameProfiles.IsBackdropEmission(material))
+                matData.suppressLightGeneration = true;
+
             // A coating's film: a smooth, darkened surface whose reflection carries the film's colours.
             if (film.HasValue && matData.translucentKind == TranslucentKind.None && !matData.suppressLightGeneration)
             {

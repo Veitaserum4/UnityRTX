@@ -327,6 +327,13 @@ namespace UnityRemix.Games.Ultrakill
                 ? 5f
                 : 0f;
 
+        // Lust's city skyline around its levels (M_LustCityWalls, M_LustCityRooftops): lit
+        // windows across tens of thousands of triangles, far outside the arena. As lights they
+        // drew most local light samples (2-2: 67k emitters against a few lamps), leaving the
+        // lamps' light noisy and dim.
+        public override bool IsBackdropEmission(Material material) =>
+            material.name.StartsWith("M_LustCity", StringComparison.Ordinal);
+
         private static Type projectileType;
         private static bool projectileTypeSearched;
         private static Type ProjectileType

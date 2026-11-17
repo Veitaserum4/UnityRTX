@@ -145,6 +145,12 @@ namespace UnityRemix.Games
         // captured.
         public virtual float SelfIlluminationScale(Material material, Renderer renderer) => 0f;
 
+        // An emissive material of the level's far backdrop (a skyline's lit windows): it glows
+        // as converted but is no light of the scene. Converted to lights, its many triangles
+        // take the light sampler's samples from the lights that reach the play space. Asked
+        // when the material is captured, also for static meshes (no renderer).
+        public virtual bool IsBackdropEmission(Material material) => false;
+
         // The fog density the game's world camera draws with, given RenderSettings.fogDensity:
         // for a game that changes it per camera while rendering. Main thread, each frame.
         public virtual float WorldFogDensity(float density) => density;

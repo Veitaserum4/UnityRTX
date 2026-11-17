@@ -206,6 +206,13 @@ namespace UnityRemix.Games
             return scale;
         }
 
+        public static bool IsBackdropEmission(Material material)
+        {
+            bool backdrop = false;
+            Run(nameof(IsBackdropEmission), p => backdrop = p.IsBackdropEmission(material));
+            return backdrop;
+        }
+
         public static bool ReadsBlendProperties(string shaderName)
         {
             bool reads = false;
