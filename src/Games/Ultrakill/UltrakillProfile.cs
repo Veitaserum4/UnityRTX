@@ -78,7 +78,7 @@ namespace UnityRemix.Games.Ultrakill
         public override bool IsHiddenMaterial(Material material) =>
             material.name.StartsWith("Default-Material", StringComparison.Ordinal) ||
             UltrakillOilStains.IsStainMaterial(material) ||
-            (material.shader != null && material.shader.name == "ULTRAKILL/HeatWave") ||
+            IsHeatWave(material) ||
             (ShaderPassThrough.Installed && IsFresnelGlass(material));
 
         // Limbo's TV-screen walls (LIMBO_WALLS) show _LimboSky in screen space (times their own
@@ -91,7 +91,7 @@ namespace UnityRemix.Games.Ultrakill
 
         // The Limbo walls (LIMBO_WALLS): their shader passes through (its sky texture, _LimboSky,
         // becomes the path-traced frame), scanned on scene load and every 600 frames (a scan
-        // walks every MeshRenderer in the scene).
+        // walks every MeshRenderer in the scene), with the soul orbs and heat-haze meshes.
         private readonly List<Renderer> limboWalls = new List<Renderer>();
         private int limboWallsFrame = -1000;
 
@@ -115,7 +115,7 @@ namespace UnityRemix.Games.Ultrakill
                 limboWalls.Clear();
                 foreach (var r in UnityCompat.FindSceneComponentsIncludingInactive<MeshRenderer>())
                     foreach (var m in r.sharedMaterials)
-                        if (m != null && (m.IsKeywordEnabled("LIMBO_WALLS") || IsFresnelGlass(m)))
+                        if (m != null && (m.IsKeywordEnabled("LIMBO_WALLS") || IsFresnelGlass(m) || IsHeatWave(m)))
                         {
                             // A soul orb's glow quad (its sibling, drawn just before it) too.
                             if (IsFresnelGlass(m) && r.transform.parent != null)
@@ -177,9 +177,12 @@ namespace UnityRemix.Games.Ultrakill
 
         // ULTRAKILL/HeatWave: heat haze, the view behind it bent by scrolling noise. Its pass 0
         // is a GrabPass (_GrabTexture), pass 1 the distortion, which the replay draws over the
-        // path-traced frame.
+        // path-traced frame. HeatWave_Camera (Greed's haze in front of the camera once its first
+        // door opens) has the same passes, with _Scale and _Speed; path-traced it was
+        // its noise texture drawn as an alpha sheet over the view.
         private static bool IsHeatWave(Material material) =>
-            material != null && material.shader != null && material.shader.name == "ULTRAKILL/HeatWave";
+            material != null && material.shader != null &&
+            (material.shader.name == "ULTRAKILL/HeatWave" || material.shader.name == "ULTRAKILL/HeatWave_Camera");
 
         private readonly List<Renderer> heatWaves = new List<Renderer>();
         private int heatWavesFrame = -1000;
@@ -315,12 +318,13 @@ namespace UnityRemix.Games.Ultrakill
 
         // An enemy projectile's orb: ULTRAKILL/Master with EMISSIVE off but _UseAlbedoAsEmissive
         // on, lit in the game by the light at its centre, which path tracing hides inside the
-        // orb. It shows its texture as light; its own light still lights the scene.
+        // orb. It shows its texture as light, five times as bright as the game draws it to read as
+        // glowing; its own light still lights the scene.
         public override float SelfIlluminationScale(Material material, Renderer renderer) =>
             ProjectileType != null && material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
             material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") > 0.5f &&
             renderer.GetComponentInParent(ProjectileType) != null
-                ? 1f
+                ? 5f
                 : 0f;
 
         private static Type projectileType;
