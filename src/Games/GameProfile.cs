@@ -142,7 +142,7 @@ namespace UnityRemix.Games
         // An opaque surface that shows its own colour as light without lighting the scene (a
         // projectile whose game light sits inside it), and how bright: above 0 it emits its
         // albedo times this instead of being lit. 0: as converted. Asked when the material is
-        // captured.
+        // captured, once a material: renderer is null on capture paths that have none.
         public virtual float SelfIlluminationScale(Material material, Renderer renderer) => 0f;
 
         // An emissive material of the level's far backdrop (a skyline's lit windows): it glows

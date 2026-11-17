@@ -320,14 +320,16 @@ namespace UnityRemix.Games.Ultrakill
                 ? Mathf.Clamp(ExplosionBrightness != null ? ExplosionBrightness.Value : 5f, 0.1f, 20f)
                 : 0f;
 
-        // An enemy projectile's orb: ULTRAKILL/Master with EMISSIVE off but _UseAlbedoAsEmissive
-        // on, lit in the game by the light at its centre, which path tracing hides inside the
-        // orb. It shows its texture as light, five times as bright as the game draws it to read as
-        // glowing; its own light still lights the scene.
+        // An enemy projectile's orb (materials "Projectile", "Projectile 2", ...): ULTRAKILL/Master
+        // with EMISSIVE off but _UseAlbedoAsEmissive on, lit in the game by the light at its
+        // centre, which path tracing hides inside the orb. It shows its texture as light, five
+        // times as bright as the game draws it to read as glowing; its own light still lights the
+        // scene. Told by the material alone: it is converted once, by whichever capture path
+        // meets it first, some without the renderer.
         public override float SelfIlluminationScale(Material material, Renderer renderer) =>
-            ProjectileType != null && material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
-            material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") > 0.5f &&
-            renderer.GetComponentInParent(ProjectileType) != null
+            material.name.StartsWith("Projectile", StringComparison.Ordinal) &&
+            material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
+            material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") > 0.5f
                 ? 5f
                 : 0f;
 
@@ -337,23 +339,6 @@ namespace UnityRemix.Games.Ultrakill
         // lamps' light noisy and dim.
         public override bool IsBackdropEmission(Material material) =>
             material.name.StartsWith("M_LustCity", StringComparison.Ordinal);
-
-        private static Type projectileType;
-        private static bool projectileTypeSearched;
-        private static Type ProjectileType
-        {
-            get
-            {
-                if (!projectileTypeSearched)
-                {
-                    projectileTypeSearched = true;
-                    projectileType = AccessTools.TypeByName("Projectile");
-                    if (projectileType == null)
-                        Debug.Log("[Ultrakill] Projectile type not found: projectiles draw as lit surfaces");
-                }
-                return projectileType;
-            }
-        }
 
         private static Type explosionType;
         private static bool explosionTypeSearched;

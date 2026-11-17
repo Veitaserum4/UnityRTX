@@ -1013,7 +1013,7 @@ namespace UnityRemix
                 matData.emissiveIntensity = lightScale;
                 matData.albedoColor = new Color(0f, 0f, 0f, matData.albedoColor.a);
             }
-            else if (renderer != null && matData.alphaMode == AlphaMode.Opaque && matData.translucentKind == TranslucentKind.None)
+            else if (matData.alphaMode == AlphaMode.Opaque && matData.translucentKind == TranslucentKind.None)
             {
                 // A self-illuminated surface (the profile's): its colour as emission, not lit,
                 // and no light of its own (the game's light does the lighting).
