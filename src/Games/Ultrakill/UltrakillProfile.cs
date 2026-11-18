@@ -65,12 +65,16 @@ namespace UnityRemix.Games.Ultrakill
         {
             bloodStains.Capture(Logger, materials, state);
             oilStains.Capture(Logger, materials, state);
+            lightning.Update(Logger, frameCount);
         }
+
+        private readonly UltrakillLightning lightning = new UltrakillLightning();
 
         public override void OnSceneLoaded()
         {
             bloodStains.Reset();
             oilStains.Reset();
+            lightning.Reset();
             limboWallsFrame = -100000; // rescan the Limbo walls
         }
 

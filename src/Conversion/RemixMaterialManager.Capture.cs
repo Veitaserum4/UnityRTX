@@ -671,7 +671,17 @@ namespace UnityRemix
                     bool hasEmissiveTex = false;
                     if (material.HasProperty("_EmissiveTex"))
                         hasEmissiveTex = material.GetTexture("_EmissiveTex") != null;
-                    
+
+                    // The EMISSIVE keyword without a glow map, the albedo or a mask: _EmissiveTex's
+                    // default (white) glows _EmissiveColor x _EmissiveIntensity over the whole
+                    // surface, its shape the albedo's alpha (a lightning bolt). The material's
+                    // EMISSIVE float is the editor's toggle and stays 0.
+                    bool uniformEmission = material.IsKeywordEnabled("EMISSIVE") && !hasEmissiveTex &&
+                        material.HasProperty("_UseAlbedoAsEmissive") && material.GetFloat("_UseAlbedoAsEmissive") <= 0.5f &&
+                        material.HasProperty("_EmissiveMask") && material.GetFloat("_EmissiveMask") <= 0.5f;
+                    if (uniformEmission)
+                        emissiveToggle = true;
+
                     if (emissiveToggle || hasEmissiveTex || hasMpbOverride)
                     {
                         Color defaultCol = material.HasProperty("_EmissiveColor") ? material.GetColor("_EmissiveColor") : Color.black;
@@ -723,7 +733,8 @@ namespace UnityRemix
                             }
                         }
                         
-                        hasEmission = matData.emissiveIntensity > 0f && matData.emissiveHandle != IntPtr.Zero;
+                        // Without a texture OpenRemix emits the constant colour (uniformEmission).
+                        hasEmission = matData.emissiveIntensity > 0f && (matData.emissiveHandle != IntPtr.Zero || uniformEmission);
                     }
                 }
                 
