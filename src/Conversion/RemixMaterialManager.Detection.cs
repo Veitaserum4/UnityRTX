@@ -250,7 +250,7 @@ namespace UnityRemix
                 }
                 // Material name heuristics
                 else if (MatchesAnyKeyword(mName, "water", "ocean", "river", "lake", "pond", "waterfall", "liquid", "aquatic", "puddle", "stream",
-                         "blood", "mulch", "gore", "flesh", "slime", "toxic", "acid", "sewer", "poison") &&
+                         "blood", "mulch", "gore", "slime", "toxic", "acid", "sewer", "poison") &&
                          !MatchesAnyKeyword(mName, "watermark", "resistwater", "resistWater", "waterproof", "decal", "splatter", "spray", "particle", "drop", "splash", "stain", "pool", "fallback", "trail"))
                 {
                     isLiquid = true;
