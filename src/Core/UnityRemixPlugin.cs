@@ -222,6 +222,9 @@ namespace UnityRemix
             Games.Ultrakill.UltrakillBloodStains.Overlay = Config.Bind("Ultrakill", "BloodStainOverlay", false,
                 "ULTRAKILL's blood stains drawn over the frame as the game composites them (exact look, cheaper, " +
                 "in no reflection) instead of path-traced as wet paint (in reflections, glossy).");
+            Games.Ultrakill.UltrakillBloodStains.Prune = Config.Bind("Ultrakill", "BloodStainPruning", true,
+                "Path-traced blood stains that other stains wholly cover are left out (the game shows the union " +
+                "of its stains, so nothing changes). Deep piles of stains otherwise cost every ray that meets them.");
 
             Games.Ultrakill.UltrakillOilStains.Film = Config.Bind("Ultrakill", "OilStainFilm", true,
                 "Firestarter oil on walls and floors as a real thin film over the surface (its rainbow in the " +

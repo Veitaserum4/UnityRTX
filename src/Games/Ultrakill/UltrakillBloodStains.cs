@@ -35,6 +35,8 @@ namespace UnityRemix.Games.Ultrakill
 
         /// <summary>Config: draw the stains over the frame as the game does (host passes) instead of path-traced.</summary>
         public static BepInEx.Configuration.ConfigEntry<bool> Overlay;
+        /// <summary>Config: leave out traced stains that other stains wholly cover (UltrakillStainPruner).</summary>
+        public static BepInEx.Configuration.ConfigEntry<bool> Prune;
 
         // Albedo color of the stain material: ULTRAKILL's stain shader colors the splatter
         // atlas itself, which Remix doesn't run.
@@ -53,6 +55,11 @@ namespace UnityRemix.Games.Ultrakill
         private Vector2[] uvs;
         private Color32[] colors;
         private int[] triangles;
+        // The game's stain quads as last read, for rebuilding what is drawn when the kept set changes.
+        private UltrakillStainPruning.Stains current;
+        private readonly UltrakillStainPruning pruning = new UltrakillStainPruning();
+        private UltrakillStainPruning.Result shown;
+        private bool pruneEnabled;
         // The host-pass stains: (x, y, z, u, v) per vertex, and whether any were sent.
         private float[] stainVertices;
         private bool stainsSent;
@@ -71,6 +78,9 @@ namespace UnityRemix.Games.Ultrakill
         {
             manager = null;
             vertices = null;
+            current = null;
+            shown = null;
+            pruning.Reset();
             capturedCount = capturedVerts = -1;
             ClearHostStains();
         }
@@ -143,18 +153,51 @@ namespace UnityRemix.Games.Ultrakill
                 return;
             }
 
+            // The paint first: its atlas is what the pruner tests coverage with.
+            int materialId = PaintMaterial(logger, materials);
+            if (materialId == 0)
+                return;
+
+            bool prune = Prune == null || Prune.Value;
+            if (prune != pruneEnabled)
+            {
+                pruneEnabled = prune;
+                pruning.Reset();
+                shown = null;
+                vertices = null;
+            }
             if (vertices == null || count != capturedCount || mesh.vertexCount != capturedVerts)
             {
-                if (!Extract(mesh))
+                if (!Read(mesh))
                     return;
+                bool[] kept = null;
+                if (pruneEnabled)
+                {
+                    pruning.Submit(current);
+                    // Stains added since the last result: its stains are as it saw them, the new
+                    // ones drawn until the worker has tested them. Fewer stains (a checkpoint
+                    // reload, the ring wrapping): all drawn until it has.
+                    shown = pruning.Latest;
+                    if (shown != null && shown.stains.Count <= current.Count)
+                        kept = shown.kept;
+                    if (VerboseLog.On && shown != null)
+                        logger.LogInfo($"[UltrakillBloodStains] {current.Count} stains, {shown.hidden} hidden under others{(shown.testing ? " (testing)" : "")}");
+                }
+                Build(current, kept);
                 capturedCount = count;
                 capturedVerts = mesh.vertexCount;
                 version++;
             }
-
-            int materialId = PaintMaterial(logger, materials);
-            if (materialId == 0)
-                return;
+            else if (pruneEnabled)
+            {
+                var result = pruning.Latest;
+                if (result != null && result != shown && result.stains == current)
+                {
+                    shown = result;
+                    Build(current, result.kept);
+                    version++;
+                }
+            }
 
             state.skinned.Add(new RemixFrameCapture.SkinnedMeshData
             {
@@ -206,6 +249,11 @@ namespace UnityRemix.Games.Ultrakill
                     };
                 paintTexture.SetPixels32(pixels);
                 paintTexture.Apply(false, false);
+                var opaque = new bool[pixels.Length];
+                for (int i = 0; i < pixels.Length; i++)
+                    opaque[i] = pixels[i].a == 255;
+                pruning.SetAtlas(opaque, atlas.width, atlas.height);
+                vertices = null;
                 paintMaterialId = materials.RegisterCustomMaterial("UnityRTX blood paint " + atlas.GetInstanceID(), paintTexture,
                     roughness: PaintRoughness, metallic: 0f, alphaCutoff: 0.5f, paintFinish: true);
                 logger.LogInfo($"[UltrakillBloodStains] blood paint from '{atlas.name}' {atlas.width}x{atlas.height}");
@@ -296,16 +344,29 @@ namespace UnityRemix.Games.Ultrakill
             return quadCount;
         }
 
-        // One quad per stain: just above its surface (paint), wound to face out, mapped to its atlas cell.
-        private bool Extract(Mesh mesh)
+        // The game's stain quads, read once per change of its mesh.
+        private bool Read(Mesh mesh)
         {
-            Vector3[] rawVerts = mesh.vertices;
-            Vector3[] rawNorms = mesh.normals;
-            Vector2[] rawUvs = mesh.uv;
-            if (rawVerts == null || rawVerts.Length < 4)
+            var stains = new UltrakillStainPruning.Stains { vertices = mesh.vertices, normals = mesh.normals, uvs = mesh.uv };
+            if (stains.vertices == null || stains.vertices.Length < 4)
                 return false;
+            current = stains;
+            return true;
+        }
 
-            int quadCount = rawVerts.Length / 4;
+        // One quad per stain drawn: just above its surface (paint), wound to face out, mapped to its atlas cell.
+        // kept: which to draw (null, or past its end: drawn).
+        private void Build(UltrakillStainPruning.Stains stains, bool[] kept)
+        {
+            Vector3[] rawVerts = stains.vertices;
+            Vector3[] rawNorms = stains.normals;
+            Vector2[] rawUvs = stains.uvs;
+            int stainCount = rawVerts.Length / 4;
+            bool Drawn(int s) => kept == null || s >= kept.Length || kept[s];
+            int quadCount = 0;
+            for (int s = 0; s < stainCount; s++)
+                if (Drawn(s))
+                    quadCount++;
             int vertexCount = quadCount * 4;
             var verts = new Vector3[vertexCount];
             var norms = new Vector3[vertexCount];
@@ -314,13 +375,15 @@ namespace UnityRemix.Games.Ultrakill
             bool hasNorms = rawNorms != null && rawNorms.Length == rawVerts.Length;
             bool hasUvs = rawUvs != null && rawUvs.Length == rawVerts.Length;
 
-            for (int s = 0; s < quadCount; s++)
+            for (int stain = 0, s = 0; stain < stainCount; stain++)
             {
-                int vBase = s * 4;
-                Vector3 v0 = rawVerts[vBase], v1 = rawVerts[vBase + 1], v2 = rawVerts[vBase + 2];
+                if (!Drawn(stain))
+                    continue;
+                int quad = s++, vBase = quad * 4, from = stain * 4;
+                Vector3 v0 = rawVerts[from], v1 = rawVerts[from + 1], v2 = rawVerts[from + 2];
 
                 // The game stores each stain's normal into its surface (-hit.normal): out of it.
-                Vector3 normal = hasNorms ? -rawNorms[vBase] : Vector3.zero;
+                Vector3 normal = hasNorms ? -rawNorms[from] : Vector3.zero;
                 if (normal.sqrMagnitude < 0.001f)
                     normal = Vector3.Cross(v2 - v0, v1 - v0).normalized;
                 if (normal.sqrMagnitude < 0.001f)
@@ -331,17 +394,17 @@ namespace UnityRemix.Games.Ultrakill
 
                 // _SplatterAtlas holds 5 splatters side by side; ULTRAKILL's vertex shader picks
                 // cell (index % 5) by scaling u by 0.2.
-                float uOffset = (s % 5) * 0.2f;
+                float uOffset = (stain % 5) * 0.2f;
                 for (int k = 0; k < 4; k++)
                 {
-                    verts[vBase + k] = rawVerts[vBase + k] + offset;
+                    verts[vBase + k] = rawVerts[from + k] + offset;
                     norms[vBase + k] = normal;
-                    Vector2 raw = hasUvs ? rawUvs[vBase + k] : new Vector2(k == 1 || k == 2 ? 1f : 0f, k >= 2 ? 1f : 0f);
+                    Vector2 raw = hasUvs ? rawUvs[from + k] : new Vector2(k == 1 || k == 2 ? 1f : 0f, k >= 2 ? 1f : 0f);
                     uv[vBase + k] = new Vector2(uOffset + raw.x * 0.2f, raw.y);
                 }
 
                 // (0, 2, 1) and (0, 3, 2): facing out into the room.
-                int tBase = s * 6;
+                int tBase = quad * 6;
                 tris[tBase + 0] = vBase;
                 tris[tBase + 1] = vBase + 2;
                 tris[tBase + 2] = vBase + 1;
@@ -360,7 +423,6 @@ namespace UnityRemix.Games.Ultrakill
             normals = norms;
             uvs = uv;
             triangles = tris;
-            return true;
         }
     }
 }
