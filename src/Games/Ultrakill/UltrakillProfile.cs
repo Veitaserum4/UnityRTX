@@ -116,7 +116,16 @@ namespace UnityRemix.Games.Ultrakill
 
         public override void GetPassThroughRenderers(Camera worldCamera, List<Renderer> renderers)
         {
-            if (Time.frameCount - limboWallsFrame >= 600)
+            // One destroyed: its room was replaced (a checkpoint restores a clone of it), whose
+            // copies, hidden from the path tracer by material, are drawn only once listed.
+            bool replaced = false;
+            foreach (var r in limboWalls)
+                if (r == null)
+                {
+                    replaced = true;
+                    break;
+                }
+            if (replaced || Time.frameCount - limboWallsFrame >= 600)
             {
                 // Inactive ones too: soul orbs wait in rooms not yet reached.
                 limboWallsFrame = Time.frameCount;
