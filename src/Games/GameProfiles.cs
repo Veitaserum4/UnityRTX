@@ -91,7 +91,15 @@ namespace UnityRemix.Games
         {
             bool hidden = false;
             Run(nameof(IsHiddenRenderer), p => hidden = p.IsHiddenRenderer(renderer));
-            return hidden;
+            // A light shaft drawn as a volume (LightShafts) is not path-traced as its mesh.
+            return hidden || LightShafts.Replaces(renderer);
+        }
+
+        public static bool IsLightShaft(Renderer renderer)
+        {
+            bool shaft = false;
+            Run(nameof(IsLightShaft), p => shaft = p.IsLightShaft(renderer));
+            return shaft;
         }
 
         public static bool IsHiddenMaterial(Material material)

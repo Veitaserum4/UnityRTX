@@ -367,6 +367,18 @@ namespace UnityRemix.Games.Ultrakill
             !material.IsKeywordEnabled("VERTEX_LIGHTING") && !material.IsKeywordEnabled("EMISSIVE") &&
             (!material.IsKeywordEnabled("ENEMY") || material.IsKeywordEnabled("_FOG_OFF"));
 
+        // ULTRAKILL's light shafts: the LightPillar materials (under windows and lamps, Greed's
+        // skylights) and Minos's searchlights, additive meshes fading along their length.
+        public override bool IsLightShaft(Renderer renderer)
+        {
+            var material = renderer.sharedMaterial;
+            if (material == null)
+                return false;
+            string name = material.name;
+            return name.IndexOf("LightPillar", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("SearchLight", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         // ULTRAKILL/Master marks what it blends with TRANSPARENCY; without it the surface is
         // drawn solid, whatever its name (M_WaterCooler, WaterTank, WaterControl1). Fraud's
         // water cooler jug blends but is plastic; only M_WaterCooler_Water is its water.

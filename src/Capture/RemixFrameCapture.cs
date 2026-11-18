@@ -813,6 +813,8 @@ namespace UnityRemix
             public CameraData camera;
             public List<MeshInstanceData> instances = new List<MeshInstanceData>();
             public List<SkinnedMeshData> skinned = new List<SkinnedMeshData>();
+            // Light shafts drawn as glowing air (Conversion/LightShafts), Remix space.
+            public List<RemixAPI.remixapi_VolumeShaftEXT> shafts = new List<RemixAPI.remixapi_VolumeShaftEXT>();
             public int frameCount;
         }
         

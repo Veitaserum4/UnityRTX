@@ -334,6 +334,7 @@ namespace UnityRemix
                 EmissionInLightUnits = config.Bind("Materials", "EmissionInLightUnits", true,
                     "Scale emission into the units Unity lights reach Remix in (Lighting/IntensityMultiplier over pi): " +
                     "an emissive surface then stands against lit ones as it does in Unity. Off: Unity's emission values as Remix radiance (about 3x brighter).");
+                LightShafts.Bind(config, logger);
                 ConfigAutoPBR = config.Bind("Materials", "AutoPBR", false,
                     "Infer PBR metallic and roughness from material/texture names for non-PBR materials (Experimental).");
                 ConfigAutoNormalMaps = config.Bind("Materials", "AutoNormalMaps", false,
@@ -418,7 +419,7 @@ namespace UnityRemix
         // (ULTRAKILL/Master, Standard, Particles/Standard) set to it. glow: what Unity adds for a
         // white, opaque texel. (The psx transparent shaders keep stale _DstBlend values: they
         // alpha blend.)
-        private static bool TryGetAdditiveGlow(Material material, out Color glow)
+        internal static bool TryGetAdditiveGlow(Material material, out Color glow)
         {
             glow = Color.black;
             if (material == null || material.shader == null)

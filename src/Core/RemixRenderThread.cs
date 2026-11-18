@@ -599,6 +599,8 @@ namespace UnityRemix
                 );
             }
             
+            LightShafts.Submit(state.shafts);
+
             if (Interlocked.Exchange(ref needClearRetained, 0) != 0)
             {
                 Interlocked.Exchange(ref needRebake, 0);

@@ -457,6 +457,7 @@ namespace UnityRemix
                 renderThread?.SetBakeSceneName(scene.name);
                 renderThread?.RequestClearRetainedSceneInstances();
                 Games.GameProfiles.OnSceneLoaded();
+                LightShafts.Reset();
                 PrimitiveDiagnostics.Clear();
             }
             else
@@ -946,6 +947,14 @@ namespace UnityRemix
                 }
                 RemixProfiler.AddDetail(RemixProfiler.Detail.Trails, RemixProfiler.ElapsedMs(trailsStart));
                 Games.GameProfiles.CaptureFrame(materialManager, nextState, frameCount);
+                try
+                {
+                    LightShafts.Capture(nextState);
+                }
+                catch (Exception ex)
+                {
+                    LogSource.LogError($"LightShafts.Capture exception: {ex}");
+                }
                 ShaderPassThrough.Capture(cameraHandler?.CurrentCamera ?? Camera.main, frameCount);
                 dynamicMs += mainPhaseSw.Elapsed.TotalMilliseconds;
                 

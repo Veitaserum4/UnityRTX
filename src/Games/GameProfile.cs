@@ -80,6 +80,11 @@ namespace UnityRemix.Games
         // cached or scanned, not every frame.
         public virtual bool IsHiddenRenderer(Renderer renderer) => false;
 
+        // A mesh renderer that fakes a light shaft (an additive cone or box under a window or a
+        // lamp): drawn as glowing air instead (LightShafts), when its mesh is readable and its
+        // material additive. Asked once per renderer, when it is first met.
+        public virtual bool IsLightShaft(Renderer renderer) => false;
+
         // Adds the game's own per-frame meshes (geometry Unity's renderers don't show).
         public virtual void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) { }
 

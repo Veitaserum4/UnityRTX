@@ -692,6 +692,35 @@ namespace UnityRemix
             public IntPtr pNext;
         }
 
+        /// <summary>A light shaft drawn as glowing air (remixapi_DrawVolumeShaftsEXT).</summary>
+        public const int REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT = 0x7fff107C;
+        public const uint REMIXAPI_VOLUME_SHAFT_BOX_EXT = 0;
+        public const uint REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT = 1;
+
+        /// <summary>
+        /// A tapered box (or the cone inscribed in it) from a near cap at origin (half extents halfU,
+        /// halfV across the axis) to a far cap at origin + axis, scaled by farScale. It glows radiance
+        /// per world unit seen through it at the near cap, fading to farFade times that at the far one;
+        /// softness is the part of its half width over which it fades at the sides. Remix space.
+        /// </summary>
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_VolumeShaftEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+            public remixapi_Float3D origin;
+            public remixapi_Float3D axis;
+            public remixapi_Float3D halfU, halfV;
+            public float farScaleU, farScaleV;
+            public remixapi_Float3D radiance;
+            public float farFade;
+            public float softness;
+            public uint shape;
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        public delegate remixapi_ErrorCode PFN_remixapi_DrawVolumeShaftsEXT(IntPtr shafts, uint count);
+
         /// <summary>Optional pNext on opaque MaterialInfo: remaps its roughness and metallic maps.</summary>
         [StructLayout(LayoutKind.Sequential)]
         public struct remixapi_MaterialPbrRemapEXT
@@ -1225,6 +1254,8 @@ namespace UnityRemix
         public static PFN_remixapi_GetTracingStatisticsEXT GetTracingStatisticsEXTFunc { get; private set; }
         public static PFN_remixapi_GetTextureStatisticsEXT GetTextureStatisticsEXTFunc { get; private set; }
         public static PFN_remixapi_AddSceneInstancesEXT AddSceneInstancesEXTFunc { get; private set; }
+        /// <summary>Null on a remix.dll without light shafts.</summary>
+        public static PFN_remixapi_DrawVolumeShaftsEXT DrawVolumeShaftsEXTFunc { get; private set; }
         public static PFN_remixapi_ChangeSceneInstancesEXT ChangeSceneInstancesEXTFunc { get; private set; }
         public static PFN_remixapi_RemoveSceneInstancesEXT RemoveSceneInstancesEXTFunc { get; private set; }
         public static PFN_remixapi_DrawSceneInstancesEXT DrawSceneInstancesEXTFunc { get; private set; }
@@ -1342,6 +1373,10 @@ namespace UnityRemix
             IntPtr addSceneInstPtr = GetProcAddress(hModule, "remixapi_AddSceneInstancesEXT");
             if (addSceneInstPtr != IntPtr.Zero)
                 AddSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_AddSceneInstancesEXT>(addSceneInstPtr);
+
+            IntPtr shaftsPtr = GetProcAddress(hModule, "remixapi_DrawVolumeShaftsEXT");
+            if (shaftsPtr != IntPtr.Zero)
+                DrawVolumeShaftsEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_DrawVolumeShaftsEXT>(shaftsPtr);
 
             IntPtr changeSceneInstPtr = GetProcAddress(hModule, "remixapi_ChangeSceneInstancesEXT");
             if (changeSceneInstPtr != IntPtr.Zero)
