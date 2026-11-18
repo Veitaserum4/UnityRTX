@@ -403,6 +403,20 @@ namespace UnityRemix
         // Filters left to the scan that it had not read, for which a rescan was asked.
         private readonly HashSet<int> rescanAsked = new HashSet<int>();
 
+        // Geometry left to the scan (a static batch's slice, a rewritten renderer), which may not
+        // have it: a room a checkpoint cloned after the scan's rescans ended. Asked once a filter,
+        // only while active (the scan skips inactive objects and reads them once active).
+        private void AskScan(MeshFilter filter, GameObject go)
+        {
+            var scanner = SceneMeshScanner.Current;
+            if (scanner == null || filter == null || go == null || !go.activeInHierarchy || scanner.HasScanned(filter) ||
+                !rescanAsked.Add(filter.GetInstanceID()))
+                return;
+            scanner.RequestRescan();
+            if (VerboseLog.On)
+                logger.LogInfo($"[StaticCapture] '{go.name}' is the scan's but not scanned: rescan asked");
+        }
+
         private bool ShouldPreferSceneScan(MeshRenderer renderer, Mesh mesh)
         {
             if (renderer == null || mesh == null)
