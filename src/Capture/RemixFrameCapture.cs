@@ -400,6 +400,8 @@ namespace UnityRemix
         // A renderer the game rewrote for its own batching is the scene scan's too: it draws the
         // original geometry (GameProfile.GetOriginalGeometry). Asked once a renderer.
         private readonly Dictionary<int, bool> restoredRenderers = new Dictionary<int, bool>();
+        // Filters left to the scan that it had not read, for which a rescan was asked.
+        private readonly HashSet<int> rescanAsked = new HashSet<int>();
 
         private bool ShouldPreferSceneScan(MeshRenderer renderer, Mesh mesh)
         {

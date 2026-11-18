@@ -187,6 +187,11 @@ namespace UnityRemix
                     {
                         persistentStaticInstances.Remove(rendererInstanceId);
                     }
+                    // Left to the scan, which may not have it: a room a checkpoint cloned after
+                    // the scan's rescans ended. Asked once a filter.
+                    var scanner = SceneMeshScanner.Current;
+                    if (scanner != null && !scanner.HasScanned(meshFilter) && rescanAsked.Add(meshFilter.GetInstanceID()))
+                        scanner.RequestRescan();
                     continue;
                 }
                 PrimitiveDiagnostics.Note(renderer, mesh, "Runtime");

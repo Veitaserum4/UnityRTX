@@ -232,6 +232,14 @@ namespace UnityRemix
             return layer == 5 || Games.GameProfiles.IsNeverRenderedLayer(layer);
         }
 
+        // Whether the scan has read this filter (or decided to skip it for good).
+        public bool HasScanned(MeshFilter filter) => filter != null && scannedFilterIds.Contains(filter.GetInstanceID());
+
+        // Geometry only the scan draws appeared after the rescans ended (a room a checkpoint
+        // cloned again, an object activated late): scan again, at most every
+        // RequestedRescanInterval seconds.
+        public void RequestRescan() => rescanRequested = true;
+
         public static bool IsIntermediateAncestorDisabled(Transform t)
         {
             if (t == null) return false;
@@ -340,6 +348,11 @@ namespace UnityRemix
         private const float RescanInterval = 1.0f;
         private const float RescanDuration = 30.0f;
         private int visLogTimer;
+        // The scene last loaded, for rescans asked later (RequestRescan), past RescanDuration.
+        private Scene loadedScene;
+        private bool rescanRequested;
+        private float sinceRequestedScan;
+        private const float RequestedRescanInterval = 2.0f;
 
         // Streaming: meshes created per render frame until StreamBudgetMs is spent (at least
         // MinMeshesPerFrame, at most MaxMeshesPerFrame).
@@ -457,7 +470,12 @@ namespace UnityRemix
             this.isLayerDisabled = isLayerDisabled;
             this.scanActiveOnly = scanActiveOnly;
             NativeMeshReader.SetLogger(logger);
+            Current = this;
         }
+
+        // The plugin's one scanner (main thread), for the frame capture to hand it geometry it
+        // leaves to the scan (RequestRescan).
+        public static SceneMeshScanner Current { get; private set; }
 
         /// <summary>
         /// Must be called on the main thread. Performs the initial scan and starts
@@ -470,6 +488,8 @@ namespace UnityRemix
 
             scannedFilterIds.Clear();
             activeScene = scene;
+            loadedScene = scene;
+            rescanRequested = false;
             timeSinceSceneLoad = 0f;
             rescanTimer = 0f;
 
@@ -534,6 +554,14 @@ namespace UnityRemix
             if (scanJob != null)
             {
                 StepScan();
+                return;
+            }
+            sinceRequestedScan += deltaTime;
+            if (rescanRequested && sinceRequestedScan >= RequestedRescanInterval && loadedScene.IsValid())
+            {
+                rescanRequested = false;
+                sinceRequestedScan = 0f;
+                StartScan(loadedScene, initial: false);
                 return;
             }
             if (!activeScene.IsValid())
