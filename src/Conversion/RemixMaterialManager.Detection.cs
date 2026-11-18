@@ -226,7 +226,8 @@ namespace UnityRemix
                 return (TranslucentKind.None, 1.0f, 0f, Color.white, "excluded");
             }
 
-            bool enableWater = waterManager == null || waterManager.ConfigEnableWater.Value;
+            bool enableWater = (waterManager == null || waterManager.ConfigEnableWater.Value) &&
+                               !(material != null && Games.GameProfiles.IsNeverLiquid(material));
             bool enableGlass = waterManager == null || waterManager.ConfigEnableGlass.Value;
 
             // 1. Water & Fluid Body Detection (Translucent Body with refraction, TIR, Snell's window, and volumetric depth fog)

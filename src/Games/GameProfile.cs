@@ -151,6 +151,10 @@ namespace UnityRemix.Games
         // it is an unlit sheet, as Unlit/Transparent. Asked when the material is captured.
         public virtual bool IsUnlit(Material material) => false;
 
+        // A material that is never a liquid body, though its name reads like one (a water
+        // cooler, a water tank): it skips water detection; glass detection still applies.
+        public virtual bool IsNeverLiquid(Material material) => false;
+
         // An emissive material of the level's far backdrop (a skyline's lit windows): it glows
         // as converted but is no light of the scene. Converted to lights, its many triangles
         // take the light sampler's samples from the lights that reach the play space. Asked

@@ -354,6 +354,13 @@ namespace UnityRemix.Games.Ultrakill
             !material.IsKeywordEnabled("VERTEX_LIGHTING") && !material.IsKeywordEnabled("EMISSIVE") &&
             (!material.IsKeywordEnabled("ENEMY") || material.IsKeywordEnabled("_FOG_OFF"));
 
+        // ULTRAKILL/Master marks what it blends with TRANSPARENCY; without it the surface is
+        // drawn solid, whatever its name (M_WaterCooler, WaterTank, WaterControl1). Fraud's
+        // water cooler jug blends but is plastic; only M_WaterCooler_Water is its water.
+        public override bool IsNeverLiquid(Material material) =>
+            material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
+            (!material.IsKeywordEnabled("TRANSPARENCY") || material.name.IndexOf("_Jug", StringComparison.OrdinalIgnoreCase) >= 0);
+
         // Lust's city skyline around its levels (M_LustCityWalls, M_LustCityRooftops): lit
         // windows across tens of thousands of triangles, far outside the arena. As lights they
         // drew most local light samples (2-2: 67k emitters against a few lamps), leaving the

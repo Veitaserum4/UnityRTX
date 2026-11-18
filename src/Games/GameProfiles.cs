@@ -224,6 +224,13 @@ namespace UnityRemix.Games
             return unlit;
         }
 
+        public static bool IsNeverLiquid(Material material)
+        {
+            bool never = false;
+            Run(nameof(IsNeverLiquid), p => never = p.IsNeverLiquid(material));
+            return never;
+        }
+
         public static bool IsBackdropEmission(Material material)
         {
             bool backdrop = false;
