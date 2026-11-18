@@ -254,6 +254,16 @@ namespace UnityRemix.Games.Ultrakill
                     RemixImGui.SetTooltip("Composites stains over the image exactly as the game does (cheaper, not in reflections). " +
                                           "Off: path-traced wet paint (glossy, in reflections).");
             }
+            var prune = UltrakillBloodStains.Prune;
+            if (prune != null && (overlay == null || !overlay.Value))
+            {
+                bool value = prune.Value;
+                if (RemixImGui.Checkbox("Leave out covered blood stains", ref value))
+                    prune.Value = value;
+                if (RemixImGui.IsItemHovered())
+                    RemixImGui.SetTooltip("Path-traced stains that newer stains wholly cover are left out: the game shows the union of " +
+                                          "its stains, so nothing changes, and deep piles of blood cost far less. Tested off the main thread.");
+            }
             var oilFilm = UltrakillOilStains.Film;
             if (oilFilm != null)
             {
