@@ -217,6 +217,13 @@ namespace UnityRemix.Games
             return found && foundMesh != null;
         }
 
+        public static bool IsUnlit(Material material)
+        {
+            bool unlit = false;
+            Run(nameof(IsUnlit), p => unlit = p.IsUnlit(material));
+            return unlit;
+        }
+
         public static bool IsBackdropEmission(Material material)
         {
             bool backdrop = false;

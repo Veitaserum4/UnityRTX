@@ -145,6 +145,12 @@ namespace UnityRemix.Games
         // captured, once a material: renderer is null on capture paths that have none.
         public virtual float SelfIlluminationScale(Material material, Renderer renderer) => 0f;
 
+        // A material the game draws unlit (its colour whatever lights it, as Unity's Unlit
+        // shaders) through a shader that can be lit. Opaque, it shows its colour as its own
+        // light (self-illumination 1, unless SelfIlluminationScale gives one); alpha-blended,
+        // it is an unlit sheet, as Unlit/Transparent. Asked when the material is captured.
+        public virtual bool IsUnlit(Material material) => false;
+
         // An emissive material of the level's far backdrop (a skyline's lit windows): it glows
         // as converted but is no light of the scene. Converted to lights, its many triangles
         // take the light sampler's samples from the lights that reach the play space. Asked

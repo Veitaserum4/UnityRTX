@@ -881,7 +881,9 @@ namespace UnityRemix
                                    $"coverage x{matData.glowCoverage:F2}, emission ({matData.glowColor.r:F2},{matData.glowColor.g:F2},{matData.glowColor.b:F2})");
                 }
                 else if (!isParticleOrTrailRenderer && matData.alphaMode == AlphaMode.Blend &&
-                         matData.albedoHandle != IntPtr.Zero && IsUnlitSheetShader(shaderName))
+                         matData.albedoHandle != IntPtr.Zero &&
+                         (IsUnlitSheetShader(shaderName) ||
+                          (matData.translucentKind == TranslucentKind.None && Games.GameProfiles.IsUnlit(material))))
                 {
                     // An unlit see-through sheet on a mesh (Sprites/Default, Unlit/Transparent,
                     // UI/Default): Unity shows its own colour whatever lights it. Black (nothing
@@ -1018,6 +1020,8 @@ namespace UnityRemix
                 // A self-illuminated surface (the profile's): its colour as emission, not lit,
                 // and no light of its own (the game's light does the lighting).
                 float selfScale = Games.GameProfiles.SelfIlluminationScale(material, renderer);
+                if (selfScale <= 0f && Games.GameProfiles.IsUnlit(material))
+                    selfScale = 1f;
                 if (selfScale > 0f)
                 {
                     matData.suppressLightGeneration = true;

@@ -343,6 +343,13 @@ namespace UnityRemix.Games.Ultrakill
                 ? 5f
                 : 0f;
 
+        // ULTRAKILL/Master without VERTEX_LIGHTING is drawn unlit: light pillars, screens, the
+        // laser grids and the Corpse of King Minos in 2-3, shown in their own colour. Path-traced
+        // as lit surfaces they were dim. EMISSIVE ones keep their emission as converted.
+        public override bool IsUnlit(Material material) =>
+            material.shader != null && material.shader.name == "ULTRAKILL/Master" &&
+            !material.IsKeywordEnabled("VERTEX_LIGHTING") && !material.IsKeywordEnabled("EMISSIVE");
+
         // Lust's city skyline around its levels (M_LustCityWalls, M_LustCityRooftops): lit
         // windows across tens of thousands of triangles, far outside the arena. As lights they
         // drew most local light samples (2-2: 67k emitters against a few lamps), leaving the
