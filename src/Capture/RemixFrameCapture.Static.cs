@@ -552,6 +552,21 @@ namespace UnityRemix
                         if (entry.renderer.enabled && entry.renderer.gameObject.activeInHierarchy)
                             continue;
 
+                        // Kept only for a disabled renderer or a hidden root (a room the game culls).
+                        // Deactivated itself or under its root, the game has replaced or removed it
+                        // (a ceiling swapped for its breaking pieces), as the scene scan judges it.
+                        // Checked when it goes inactive, then staggered.
+                        if (frameCount - entry.drawnFrame <= 2 || ((kv.Key + frameCount) & 15) == 0)
+                        {
+                            var go = entry.renderer.gameObject;
+                            if (!go.activeInHierarchy && (!go.activeSelf || SceneMeshScanner.IsIntermediateAncestorDisabled(go.transform)))
+                            {
+                                if (keysToRemove == null) keysToRemove = new List<int>();
+                                keysToRemove.Add(kv.Key);
+                                continue;
+                            }
+                        }
+
                         var lossy = entry.renderer.transform.lossyScale;
                         if (lossy.sqrMagnitude < 0.0001f)
                         {
