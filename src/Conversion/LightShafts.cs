@@ -216,6 +216,11 @@ namespace UnityRemix
                 }
                 vertices = read.positions;
                 gpuIndices = read.indices;
+                if (vertices != null)
+                {
+                    try { colors = ReadGpuColors(mesh, vertices.Length); }
+                    catch (Exception) { colors = null; } // Unity before 2019.3: no vertex attribute queries
+                }
                 if (vertices != null && subMesh < 0)
                     subMesh = -2; // the whole mesh, from its index lists
             }
@@ -247,6 +252,35 @@ namespace UnityRemix
             }
             fits[id] = fit;
             return fit;
+        }
+
+        // A non-readable mesh's vertex colours from its GPU vertex buffer (8-bit or float RGBA),
+        // its fade along the shaft. Null without them or in another format.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static Color32[] ReadGpuColors(Mesh mesh, int count)
+        {
+            var color = UnityEngine.Rendering.VertexAttribute.Color;
+            if (!mesh.HasVertexAttribute(color))
+                return null;
+            int stream = mesh.GetVertexAttributeStream(color), offset = mesh.GetVertexAttributeOffset(color);
+            var format = mesh.GetVertexAttributeFormat(color);
+            int stride = mesh.GetVertexBufferStride(stream);
+            if (!NativeMeshReader.ReadVertexBuffer(mesh, stream, out var bytes) || bytes == null || stride <= 0)
+                return null;
+            int n = Math.Min(count, bytes.Length / stride);
+            var colors = new Color32[count];
+            for (int i = 0; i < n; i++)
+            {
+                int at = i * stride + offset;
+                if (format == UnityEngine.Rendering.VertexAttributeFormat.UNorm8 && at + 4 <= bytes.Length)
+                    colors[i] = new Color32(bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]);
+                else if (format == UnityEngine.Rendering.VertexAttributeFormat.Float32 && at + 16 <= bytes.Length)
+                    colors[i] = new Color(BitConverter.ToSingle(bytes, at), BitConverter.ToSingle(bytes, at + 4),
+                                          BitConverter.ToSingle(bytes, at + 8), BitConverter.ToSingle(bytes, at + 12));
+                else
+                    return null;
+            }
+            return colors;
         }
 
         private static float VertexBrightness(Color32 c) => Mathf.Max(c.r, Mathf.Max(c.g, c.b)) / 255f;
