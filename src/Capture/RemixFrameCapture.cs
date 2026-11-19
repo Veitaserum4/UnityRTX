@@ -934,6 +934,9 @@ namespace UnityRemix
         private readonly Dictionary<int, CachedStaticRendererInfo> cachedStaticInfo = new Dictionary<int, CachedStaticRendererInfo>(1024);
         private readonly Dictionary<int, CachedSkinnedRendererInfo> cachedSkinnedInfo = new Dictionary<int, CachedSkinnedRendererInfo>(128);
         private readonly HashSet<int> reusableValidSkinnedIds = new HashSet<int>();
+        private readonly HashSet<int> overlaySkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: a later skin of the same mesh and skeleton
+        private Dictionary<long, (int lowestQueue, int count)> skinPassesLast = new Dictionary<long, (int, int)>(),
+                                                               skinPassesNext = new Dictionary<long, (int, int)>();
         private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
         // The player's body (GameProfile.IsPlayerBody, asked once per renderer): reflection-only.
         private readonly HashSet<int> playerBodySkinnedIds = new HashSet<int>();

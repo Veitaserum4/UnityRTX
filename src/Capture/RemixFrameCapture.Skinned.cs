@@ -48,6 +48,12 @@ namespace UnityRemix
             Transform mainCamTransform = mainCam != null ? mainCam.transform : null;
             viewModelSkinnedIds.Clear();
             playerBodySkinnedIds.Clear();
+            overlaySkinnedIds.Clear();
+            // Last frame's skins by mesh and skeleton; this frame's gathered for the next.
+            var swapOverlay = skinPassesLast;
+            skinPassesLast = skinPassesNext;
+            skinPassesNext = swapOverlay;
+            skinPassesNext.Clear();
 
             if (mainCam != null)
             {
@@ -144,6 +150,21 @@ namespace UnityRemix
                 }
                 
                 validSkinnedIds.Add(skinnedId);
+                // A second skin of the same mesh on the same skeleton, drawn later in the queue
+                // (armour painted over a character's body as a cutout copy of it): Unity draws it
+                // over the first at equal depth; path-traced the two coincide and the body shows
+                // through. It is drawn as a decal over the surface beneath. One frame behind.
+                {
+                    var root = skinned.rootBone != null ? skinned.rootBone : tr.parent;
+                    long passKey = ((long)sharedMesh.GetInstanceID() << 32) ^ (uint)(root != null ? root.GetInstanceID() : 0);
+                    int queue = info.primarySharedMaterial != null ? info.primarySharedMaterial.renderQueue : 2000;
+                    if (skinPassesNext.TryGetValue(passKey, out var seen))
+                        skinPassesNext[passKey] = (Math.Min(seen.lowestQueue, queue), seen.count + 1);
+                    else
+                        skinPassesNext[passKey] = (queue, 1);
+                    if (skinPassesLast.TryGetValue(passKey, out var last) && last.count > 1 && queue > last.lowestQueue)
+                        overlaySkinnedIds.Add(skinnedId);
+                }
                 // Held by the camera (arms, weapons) or on a view-model layer: drawn as view models.
                 bool viewModel = IsViewModel(tr, go.layer, mainCamTransform, "skinned mesh");
                 if (viewModel)
@@ -165,6 +186,8 @@ namespace UnityRemix
                             viewModelSkinnedIds.Add(subKey);
                         if (playerBody)
                             playerBodySkinnedIds.Add(subKey);
+                        if (overlaySkinnedIds.Contains(skinnedId))
+                            overlaySkinnedIds.Add(subKey);
                     }
                 }
                 
@@ -395,6 +418,8 @@ namespace UnityRemix
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
                     if (playerBodySkinnedIds.Contains(entry.meshId))
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY;
+                    if (overlaySkinnedIds.Contains(entry.meshId))
+                        submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC;
                     state.skinned.Add(submitted);
                 }
             }
