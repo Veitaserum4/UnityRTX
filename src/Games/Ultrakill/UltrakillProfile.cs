@@ -368,7 +368,8 @@ namespace UnityRemix.Games.Ultrakill
             (!material.IsKeywordEnabled("ENEMY") || material.IsKeywordEnabled("_FOG_OFF"));
 
         // ULTRAKILL's light shafts: the LightPillar materials (under windows and lamps, Greed's
-        // skylights) and Minos's searchlights, additive meshes fading along their length.
+        // skylights, 5-2's lighthouse), LightLighter(er) (7-2's windows), LightShaft (7-S) and
+        // Minos's searchlights, additive meshes fading along their length.
         public override bool IsLightShaft(Renderer renderer)
         {
             var material = renderer.sharedMaterial;
@@ -376,6 +377,8 @@ namespace UnityRemix.Games.Ultrakill
                 return false;
             string name = material.name;
             return name.IndexOf("LightPillar", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("LightLighter", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   name.IndexOf("LightShaft", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    name.IndexOf("SearchLight", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 

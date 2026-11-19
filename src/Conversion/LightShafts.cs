@@ -146,9 +146,10 @@ namespace UnityRemix
             float scaleU = fit.farU / fit.nearU, scaleV = fit.farV / fit.nearV;
             float softness = Mathf.Clamp01(Softness.Value);
             // What the game adds through the sheet seen side-on: the glow at each face drawn (both
-            // without culling), over the thickness seen through, the sides' fade made up for.
+            // without culling), over the thickness seen through at the near cap (OpenRemix thins it
+            // as the shaft widens, so a crossing glows alike all along), the sides' fade made up for.
             float faces = material.HasProperty("_CullMode") && Mathf.RoundToInt(material.GetFloat("_CullMode")) == 0 ? 2f : 1f;
-            float thickness = 0.5f * (u.magnitude * (1 + scaleU) + v.magnitude * (1 + scaleV));
+            float thickness = u.magnitude + v.magnitude;
             float scale = faces * fit.nearBright / Mathf.Max(thickness, 1e-3f) / (1f - 0.5f * softness) * Brightness.Value;
             if (RemixMaterialManager.EmissionInLightUnits == null || RemixMaterialManager.EmissionInLightUnits.Value)
                 scale *= RemixMaterialManager.UnlitRadianceScale;
