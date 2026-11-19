@@ -85,6 +85,10 @@ namespace UnityRemix
                 if (CheckHierarchyForScroller(renderer.gameObject))
                     return true;
 
+                // 1b. A shader that scrolls by time (the game's profile knows it).
+                if (Games.GameProfiles.GetShaderScroll(renderer.sharedMaterial, out _))
+                    return true;
+
                 // 2. Check MaterialPropertyBlock for active _ScrollOffset
                 if (renderer.HasPropertyBlock())
                 {
@@ -239,6 +243,13 @@ namespace UnityRemix
         {
             uvST = new Vector4(1f, 1f, 0f, 0f);
             if (!_enabled || renderer == null) return false;
+
+            // A shader that scrolls by time: its transform as it samples it.
+            if (Games.GameProfiles.GetShaderScroll(renderer.sharedMaterial, out var shaderST))
+            {
+                uvST = shaderST;
+                return true;
+            }
 
             bool hasOffset = false;
 

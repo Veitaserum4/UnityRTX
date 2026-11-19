@@ -307,6 +307,16 @@ namespace UnityRemix.Games
             return aberration;
         }
 
+        public static bool GetShaderScroll(Material material, out Vector4 uvST)
+        {
+            bool found = false;
+            var result = default(Vector4);
+            if (material != null)
+                Run(nameof(GetShaderScroll), p => found = p.GetShaderScroll(material, out result));
+            uvST = result;
+            return found;
+        }
+
         public static bool GetSkyboxView(Camera worldCamera, out SkyboxView view)
         {
             bool found = false;

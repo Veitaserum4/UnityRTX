@@ -141,6 +141,14 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // A material whose shader scrolls its texture by time (no script moves it): its UV
+        // transform now (x, y the tiling, z, w the offset), as the shader samples it.
+        public virtual bool GetShaderScroll(Material material, out Vector4 uvST)
+        {
+            uvST = default;
+            return false;
+        }
+
         // The game's 3D skybox this frame (worldCamera: the player's view), when it has one.
         public virtual bool GetSkyboxView(Camera worldCamera, out SkyboxView view)
         {

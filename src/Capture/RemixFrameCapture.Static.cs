@@ -840,7 +840,8 @@ namespace UnityRemix
             var materials = renderer.sharedMaterials;
             int rendererId = renderer.GetInstanceID();
             // A static batch's vertices are already in world space.
-            Matrix4x4 localToWorld = renderer.isPartOfStaticBatch ? Matrix4x4.identity : renderer.transform.localToWorldMatrix;
+            Matrix4x4 localToWorld = SkyPlaced(renderer.gameObject.layer,
+                renderer.isPartOfStaticBatch ? Matrix4x4.identity : renderer.transform.localToWorldMatrix);
 
             for (int s = 0; s < cachedMesh.submeshTriangles.Count; s++)
             {
@@ -904,7 +905,7 @@ namespace UnityRemix
                 if (r.transform.lossyScale.sqrMagnitude < 0.0001f) continue;
                 if (IsLayerDisabled(r.gameObject.layer) || IsRendererDisabled(r.GetInstanceID())) continue;
                 if (configUseVisibilityCulling.Value && !r.isVisible) continue;
-                if (configUseDistanceCulling.Value)
+                if (configUseDistanceCulling.Value && !IsSkyLayer(r.gameObject.layer))
                 {
                     float maxDist = configMaxRenderDistance.Value;
                     if ((r.bounds.center - camPos).sqrMagnitude > maxDist * maxDist) continue;
