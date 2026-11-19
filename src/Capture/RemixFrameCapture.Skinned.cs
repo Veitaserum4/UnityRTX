@@ -130,7 +130,7 @@ namespace UnityRemix
                     continue;
                 }
                 
-                if (useDistCulling)
+                if (useDistCulling && !IsSkyLayer(go.layer))
                 {
                     float sqrDistance = (skinned.bounds.center - camPos).sqrMagnitude;
                     if (sqrDistance > maxDistSqr)
@@ -204,6 +204,8 @@ namespace UnityRemix
                     tr.rotation,
                     new Vector3(Mathf.Sign(ls.x), Mathf.Sign(ls.y), Mathf.Sign(ls.z))
                 );
+                // Placed in the world when it is the 3D skybox's (its bones stay relative to it).
+                Matrix4x4 drawMatrix = SkyPlaced(go.layer, unscaledMatrix);
                 
                 Material primaryMat = info.primarySharedMaterial;
                 int matId = ResolveMaterial(skinned, primaryMat, doLog);
@@ -326,13 +328,13 @@ namespace UnityRemix
                         if (subFilm.HasValue && SplitByFilm(sharedMesh, sub, subTris, subFilm.Value, out var coated, out var bare))
                         {
                             int filmKey = (int)((uint)subSkinnedId ^ 0x5F11C0A7u);
-                            AddGpuSkinned(subSkinnedId, subMeshHash, bareMatId, bare, skinData, unscaledMatrix, boneMatrices);
-                            AddGpuSkinned(filmKey, subMeshHash ^ 0x5F11C0A75F11C0A7UL, subMatId, coated, skinData, unscaledMatrix, boneMatrices);
+                            AddGpuSkinned(subSkinnedId, subMeshHash, bareMatId, bare, skinData, drawMatrix, boneMatrices);
+                            AddGpuSkinned(filmKey, subMeshHash ^ 0x5F11C0A75F11C0A7UL, subMatId, coated, skinData, drawMatrix, boneMatrices);
                             if (viewModel) viewModelSkinnedIds.Add(filmKey);
                             if (playerBody) playerBodySkinnedIds.Add(filmKey);
                             continue;
                         }
-                        AddGpuSkinned(subSkinnedId, subMeshHash, subMatId, subTris, skinData, unscaledMatrix, boneMatrices);
+                        AddGpuSkinned(subSkinnedId, subMeshHash, subMatId, subTris, skinData, drawMatrix, boneMatrices);
                     }
                     gpuSkinned++;
                     continue;
@@ -345,7 +347,7 @@ namespace UnityRemix
                     int subKey = (sub == 0) ? skinnedId : (int)((uint)skinnedId ^ ((uint)sub * 0x9E3779B9u));
                     if (persistentSkinnedData.TryGetValue(subKey, out var existing))
                     {
-                        existing.localToWorld = unscaledMatrix;
+                        existing.localToWorld = drawMatrix;
                         persistentSkinnedData[subKey] = existing;
                     }
                 }
@@ -359,7 +361,7 @@ namespace UnityRemix
                 }
 
                 // Queue for BakeMesh fallback
-                bakeFallbackQueue.Add((i, skinned, skinnedId, unscaledMatrix, matId));
+                bakeFallbackQueue.Add((i, skinned, skinnedId, drawMatrix, matId));
             }
             
             // Process BakeMesh fallback queue with round-robin + time budget

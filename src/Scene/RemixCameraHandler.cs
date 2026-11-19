@@ -370,30 +370,19 @@ namespace UnityRemix
                 }
             }
 
-            // REMIXAPI_CAMERA_TYPE_SKY: at the origin with the world camera's orientation and
-            // projection (the skybox sphere around it), unless the game has a 3D skybox camera
-            // (SetupSkyCamera after this).
-            SetupSkyCamera(Vector3.zero, forward, up, right, fov, aspect, 0.1f, 1000f);
-        }
-
-        /// <summary>REMIXAPI_CAMERA_TYPE_SKY: what SKY instances are rasterized from, behind the world.</summary>
-        public void SetupSkyCamera(Vector3 position, Vector3 forward, Vector3 up, Vector3 right,
-            float fov, float aspect, float nearPlane, float farPlane)
-        {
-            if (setupCameraFunc == null)
-                return;
+            // Also setup REMIXAPI_CAMERA_TYPE_SKY (centered at origin with same orientation and projection)
             var skyParamCamera = new RemixAPI.remixapi_CameraInfoParameterizedEXT
             {
                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_CAMERA_INFO_PARAMETERIZED_EXT,
                 pNext = IntPtr.Zero,
-                position = new RemixAPI.remixapi_Float3D(position.x, position.z, position.y),
+                position = new RemixAPI.remixapi_Float3D(0f, 0f, 0f),
                 forward = new RemixAPI.remixapi_Float3D(forward.x, forward.z, forward.y),
                 up = new RemixAPI.remixapi_Float3D(up.x, up.z, up.y),
                 right = new RemixAPI.remixapi_Float3D(right.x, right.z, right.y),
                 fovYInDegrees = fov,
                 aspect = aspect,
-                nearPlane = nearPlane,
-                farPlane = farPlane
+                nearPlane = 0.1f,
+                farPlane = 1000.0f
             };
 
             GCHandle skyParamHandle = GCHandle.Alloc(skyParamCamera, GCHandleType.Pinned);

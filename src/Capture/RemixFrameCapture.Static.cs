@@ -71,7 +71,7 @@ namespace UnityRemix
                 state.camera.portals = framePortals.Count > 0 ? framePortals.ToArray() : null;
                 if (state.camera.portalActive || state.camera.portals != null)
                     RayPortals.Ensure(this, materialManager);
-                CaptureSkyCamera(ref state.camera, mainCam);
+                CaptureSkybox(mainCam, ref state.camera);
 
                 // Update skybox state on main thread
                 skyboxManager?.UpdateSkybox(mainCam, frameCount);
@@ -161,7 +161,8 @@ namespace UnityRemix
                 Bounds bounds = renderer.bounds;
                 
                 // Optional distance culling
-                if (useDistCulling)
+                // (never the 3D skybox's: the distant land)
+                if (useDistCulling && !IsSkyLayer(layer))
                 {
                     float sqrDistance = (bounds.center - camPos).sqrMagnitude;
                     if (sqrDistance > maxDistSqr)
@@ -275,7 +276,7 @@ namespace UnityRemix
                 }
                 ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
                 bool isViewModel = !playerBody && IsViewModel(tr, layer, mainCamTransform, "mesh");
-                uint categoryFlags = IsSkyLayer(layer) ? (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY : 0u;
+                uint categoryFlags = 0;
                 if (isViewModel)
                 {
                     categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
@@ -490,7 +491,7 @@ namespace UnityRemix
                 }
                 
                 // Add instance
-                var transform = tr.localToWorldMatrix;
+                var transform = SkyPlaced(layer, tr.localToWorldMatrix);
                 var instanceData = new MeshInstanceData
                 {
                     meshKey = meshKey,

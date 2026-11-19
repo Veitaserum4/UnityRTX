@@ -307,11 +307,13 @@ namespace UnityRemix.Games
             return aberration;
         }
 
-        public static Camera FindSkyCamera(Camera worldCamera)
+        public static bool GetSkyboxView(Camera worldCamera, out SkyboxView view)
         {
-            Camera camera = null;
-            Run(nameof(FindSkyCamera), p => camera = p.FindSkyCamera(worldCamera));
-            return camera;
+            bool found = false;
+            var result = default(SkyboxView);
+            Run(nameof(GetSkyboxView), p => found = p.GetSkyboxView(worldCamera, out result));
+            view = result;
+            return found && result.camera != null && result.scale > 0f;
         }
 
         public static Camera FindViewModelCamera(Camera worldCamera)

@@ -616,6 +616,11 @@ namespace UnityRemix
         /// active state, scale-zero, distance culling, and visibility culling,
         /// and dynamically updates transforms for moving non-combined objects.
         /// </summary>
+        // The 3D skybox's layers and its placement in the world this frame (main thread;
+        // RemixFrameCapture.CaptureSkybox).
+        public static int SkyLayers;
+        public static Matrix4x4 SkyToWorld = Matrix4x4.identity;
+
         // The game's view portal exit region this frame (main thread; GameProfile.GetRayPortalView):
         // geometry seen through the portal, wherever the player is. Null without one.
         public static Games.RayPortalView? PortalExitRegion;
@@ -842,8 +847,10 @@ namespace UnityRemix
                         }
                     }
 
-                    // Distance culling using up-to-date bounds center (not what a view portal shows)
-                    if (useDistanceCulling && !(portalExit.HasValue && portalExit.Value.InExitRegion(instance.BoundsCenter)))
+                    // Distance culling using up-to-date bounds center (not what a view portal shows,
+                    // nor the 3D skybox: the distant land)
+                    if (useDistanceCulling && !(portalExit.HasValue && portalExit.Value.InExitRegion(instance.BoundsCenter)) &&
+                        (SkyLayers & (1 << (instance.Layer & 31))) == 0)
                     {
                         float sqrDist = (instance.BoundsCenter - cameraPosition).sqrMagnitude;
                         if (sqrDist > maxDistSqr)
@@ -853,6 +860,15 @@ namespace UnityRemix
                         }
                     }
 
+                    // The 3D skybox's: placed in the world (GameProfile.GetSkyboxView).
+                    if ((SkyLayers & (1 << (instance.Layer & 31))) != 0)
+                    {
+                        var placed = SkyToWorld * instance.LastLocalToWorld;
+                        instance.Transform = RemixAPI.remixapi_Transform.FromMatrix(
+                            placed.m00, placed.m02, placed.m01, placed.m03,
+                            placed.m20, placed.m22, placed.m21, placed.m23,
+                            placed.m10, placed.m12, placed.m11, placed.m13);
+                    }
                     reusableVisibleInstances.Add(instance);
                 }
 

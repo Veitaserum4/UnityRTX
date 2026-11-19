@@ -323,15 +323,12 @@ namespace UnityRemix
             }
 
             Quaternion skyRot = Quaternion.Euler(0f, -rot, 0f);
-            // Around the sky camera: the game's 3D skybox camera when it has one (its miniature
-            // drawn inside the sphere), else the origin.
-            Vector3 centre = state.camera.skyActive ? state.camera.skyPosition : Vector3.zero;
 
             state.instances.Add(new RemixFrameCapture.MeshInstanceData
             {
                 meshKey = skyboxMeshKey,
                 meshId = skyboxMeshId,
-                localToWorld = Matrix4x4.TRS(centre, skyRot, Vector3.one * 500f),
+                localToWorld = Matrix4x4.TRS(Vector3.zero, skyRot, Vector3.one * 500f),
                 rendererInstanceId = -999999,
                 categoryFlags = (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY
             });

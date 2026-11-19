@@ -31,16 +31,38 @@ namespace UnityRemix.Games.Atlyss
         // the main camera's rotation and, under its parent, the main camera's position / 100
         // (_skyboxScale), drawing a miniature of the distant land the main camera draws over.
         private Type skyboxCameraType;
+        private FieldInfo skyboxScaleField;
         private bool skyLookedUp;
         private Behaviour[] skyComponents = Array.Empty<Behaviour>();
         private float nextSkyRefresh;
 
-        public override Camera FindSkyCamera(Camera worldCamera)
+        // The sky camera stands at parent + parent scale x mainCamera.position / _skyboxScale, so a
+        // sky point p is seen from the main camera at (p - parent) x _skyboxScale / parent scale.
+        public override bool GetSkyboxView(Camera worldCamera, out SkyboxView view)
         {
+            view = default;
+            var sky = FindSkyComponent(worldCamera, out var cam);
+            if (sky == null)
+                return false;
+            float scale = skyboxScaleField != null ? (float)skyboxScaleField.GetValue(sky) : 100f;
+            var parent = sky.transform.parent;
+            float parentScale = parent != null ? parent.lossyScale.x : 1f;
+            if (!(scale > 0f) || !(parentScale > 0f))
+                return false;
+            view.camera = cam;
+            view.origin = parent != null ? parent.position : Vector3.zero;
+            view.scale = scale / parentScale;
+            return true;
+        }
+
+        private Behaviour FindSkyComponent(Camera worldCamera, out Camera camera)
+        {
+            camera = null;
             if (!skyLookedUp)
             {
                 skyLookedUp = true;
                 skyboxCameraType = AccessTools.TypeByName("SkyboxCamera");
+                skyboxScaleField = skyboxCameraType != null ? AccessTools.Field(skyboxCameraType, "_skyboxScale") : null;
                 if (skyboxCameraType == null)
                     Logger.LogInfo("[ATLYSS] SkyboxCamera not found: no 3D skybox");
             }
@@ -61,7 +83,10 @@ namespace UnityRemix.Games.Atlyss
                     continue;
                 var cam = c.GetComponent<Camera>();
                 if (cam != null && cam.enabled && cam != worldCamera)
-                    return cam;
+                {
+                    camera = cam;
+                    return c;
+                }
             }
             return null;
         }

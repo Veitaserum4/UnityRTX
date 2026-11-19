@@ -225,56 +225,54 @@ namespace UnityRemix
         // helper geometry the game never shows. -1 until known.
         private volatile int gameLayerMask = -1;
 
-        // This frame's sky layers (CameraData.skyLayers; main thread).
+        // This frame's 3D skybox (GameProfile.GetSkyboxView; main thread): the layers only its
+        // camera draws, and where their geometry stands in the world.
         private int skyLayers;
+        private Matrix4x4 skyToWorld = Matrix4x4.identity;
         private int loggedSkyLayers = -1;
 
         private bool IsSkyLayer(int layer) => (uint)layer < 32 && (skyLayers & (1 << layer)) != 0;
 
-        // The game's 3D skybox camera (GameProfile.FindSkyCamera). Its layers are those the world
-        // camera does not draw: both draw some (the sun's flare, the player's light), which stay
-        // the world's.
-        private void CaptureSkyCamera(ref CameraData camera, Camera worldCamera)
+        // A sky layer's transform placed in the world (else as it is).
+        private Matrix4x4 SkyPlaced(int layer, Matrix4x4 localToWorld) =>
+            IsSkyLayer(layer) ? skyToWorld * localToWorld : localToWorld;
+
+        // Its layers are those the world camera does not draw: both draw some (the player's
+        // light, effects), which stay the world's.
+        // The world camera's far plane reaches as far as the sky camera's does, placed.
+        private void CaptureSkybox(Camera worldCamera, ref CameraData camera)
         {
-            var sky = Games.GameProfiles.FindSkyCamera(worldCamera);
-            camera.skyActive = sky != null;
-            skyLayers = sky != null ? GameCameraMasks.Get(sky) & ~GameCameraMasks.Get(worldCamera) : 0;
-            camera.skyLayers = skyLayers;
-            if (skyLayers != loggedSkyLayers)
-            {
-                loggedSkyLayers = skyLayers;
-                var names = new List<string>();
-                for (int layer = 0; layer < 32; layer++)
-                    if ((skyLayers & (1 << layer)) != 0)
-                        names.Add($"{LayerMask.LayerToName(layer)}({layer})");
-                logger.LogInfo(sky != null
-                    ? $"[Sky] 3D skybox camera '{sky.name}' (mask 0x{GameCameraMasks.Get(sky):X8}, world 0x{GameCameraMasks.Get(worldCamera):X8}): sky layers {(names.Count > 0 ? string.Join(", ", names) : "none")}"
-                    : "[Sky] no 3D skybox camera");
-                // Once per change: what the sky holds.
-                if (skyLayers != 0)
-                {
-                    int listed = 0;
-                    foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
-                    {
-                        if ((skyLayers & (1 << r.gameObject.layer)) == 0 || listed++ >= 40)
-                            continue;
-                        var m = r.sharedMaterial;
-                        logger.LogInfo($"[Sky]   '{r.name}' ({r.GetType().Name}, mesh '{r.GetComponent<MeshFilter>()?.sharedMesh?.name}'), material '{m?.name}' " +
-                                       $"shader '{m?.shader?.name}' queue {m?.renderQueue}, keywords [{(m != null ? string.Join(" ", m.shaderKeywords) : "")}], " +
-                                       $"scale {r.transform.lossyScale}, bounds {r.bounds.center} +- {r.bounds.extents}");
-                    }
-                }
-            }
-            if (sky == null)
+            bool found = Games.GameProfiles.GetSkyboxView(worldCamera, out var view);
+            skyLayers = found ? GameCameraMasks.Get(view.camera) & ~GameCameraMasks.Get(worldCamera) : 0;
+            skyToWorld = found ? view.ToWorld : Matrix4x4.identity;
+            if (skyLayers != 0)
+                camera.farPlane = Mathf.Max(camera.farPlane, view.camera.farClipPlane * view.scale);
+            SceneMeshScanner.SkyLayers = skyLayers;
+            SceneMeshScanner.SkyToWorld = skyToWorld;
+            if (skyLayers == loggedSkyLayers)
                 return;
-            var t = sky.transform;
-            camera.skyPosition = t.position;
-            camera.skyForward = t.forward;
-            camera.skyUp = t.up;
-            camera.skyRight = t.right;
-            camera.skyFov = sky.fieldOfView;
-            camera.skyNearPlane = sky.nearClipPlane;
-            camera.skyFarPlane = sky.farClipPlane;
+            loggedSkyLayers = skyLayers;
+            var names = new List<string>();
+            for (int layer = 0; layer < 32; layer++)
+                if ((skyLayers & (1 << layer)) != 0)
+                    names.Add($"{LayerMask.LayerToName(layer)}({layer})");
+            logger.LogInfo(found
+                ? $"[Sky] 3D skybox camera '{view.camera.name}' (mask 0x{GameCameraMasks.Get(view.camera):X8}, world 0x{GameCameraMasks.Get(worldCamera):X8}), " +
+                  $"origin {view.origin}, scale {view.scale}: sky layers {(names.Count > 0 ? string.Join(", ", names) : "none")}"
+                : "[Sky] no 3D skybox");
+            // Once per change: what the sky holds.
+            if (skyLayers == 0)
+                return;
+            int listed = 0;
+            foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+            {
+                if ((skyLayers & (1 << r.gameObject.layer)) == 0 || listed++ >= 40)
+                    continue;
+                var m = r.sharedMaterial;
+                logger.LogInfo($"[Sky]   '{r.name}' ({r.GetType().Name}, mesh '{r.GetComponent<MeshFilter>()?.sharedMesh?.name}'), material '{m?.name}' " +
+                               $"shader '{m?.shader?.name}' queue {m?.renderQueue}, keywords [{(m != null ? string.Join(" ", m.shaderKeywords) : "")}], " +
+                               $"scale {r.transform.lossyScale}, bounds {r.bounds.center} +- {r.bounds.extents}");
+            }
         }
 
         public void SetGameLayerMask(int mask)
@@ -792,12 +790,6 @@ namespace UnityRemix
             public Games.RayPortalView portal;
             // The game's portals this frame, nearest first (GameProfile.GetPortals), or null.
             public Games.PortalPair[] portals;
-            // The game's 3D skybox camera (GameProfile.FindSkyCamera): REMIXAPI_CAMERA_TYPE_SKY,
-            // and the layers only it draws (skyLayers), whose instances are the sky's.
-            public bool skyActive;
-            public Vector3 skyPosition, skyForward, skyUp, skyRight;
-            public float skyFov, skyNearPlane, skyFarPlane;
-            public int skyLayers;
         }
         
         public struct MeshInstanceData

@@ -29,6 +29,22 @@ namespace UnityRemix.Games
     }
 
     /// <summary>
+    /// A 3D skybox: a miniature of the distant land, drawn behind the world by a camera of the
+    /// game's own that moves with the player's at 1/scale of its movement (as Source's
+    /// sky_camera). What only that camera draws is placed in the world at full size, at
+    /// (point - origin) x scale, where the player's camera sees it as the game shows it, and
+    /// path-traced with the rest (lit by the sun, in reflections and fog).
+    /// </summary>
+    public struct SkyboxView
+    {
+        public Camera camera;
+        public Vector3 origin;
+        public float scale;
+
+        public Matrix4x4 ToWorld => Matrix4x4.Scale(Vector3.one * scale) * Matrix4x4.Translate(-origin);
+    }
+
+    /// <summary>
     /// One of the game's portals: its two ends (unscaled frames; the opening lies in the frame's
     /// local XY plane, normal +Z, width along x, height along y). What is seen through the entry
     /// is at the exit mapped by exit diag(-1, 1, -1) entry^-1, and the other way round.
@@ -125,11 +141,12 @@ namespace UnityRemix.Games
             return false;
         }
 
-        // The camera that draws the game's 3D skybox this frame: a miniature scene drawn behind
-        // the world from a camera that moves with the player's at a fraction of its movement (as
-        // Source's sky_camera). The layers only it draws are the sky's
-        // (REMIXAPI_CAMERA_TYPE_SKY, rasterized from it behind everything). Null: none.
-        public virtual Camera FindSkyCamera(Camera worldCamera) => null;
+        // The game's 3D skybox this frame (worldCamera: the player's view), when it has one.
+        public virtual bool GetSkyboxView(Camera worldCamera, out SkyboxView view)
+        {
+            view = default;
+            return false;
+        }
 
         // The player's own body, which the game shows only in mirrors and through portals: drawn
         // as Remix's reflection-only player body (camera rays pass it), whatever its layer.
