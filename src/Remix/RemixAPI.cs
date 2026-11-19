@@ -696,6 +696,8 @@ namespace UnityRemix
         public const int REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT = 0x7fff107C;
         public const uint REMIXAPI_VOLUME_SHAFT_BOX_EXT = 0;
         public const uint REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT = 1;
+        /// <summary>What stands in the shaft shadows it, down its length from its near cap.</summary>
+        public const uint REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT = 1;
 
         /// <summary>
         /// A tapered box (or the cone inscribed in it) from a near cap at origin (half extents halfU,
@@ -716,6 +718,7 @@ namespace UnityRemix
             public float farFade;
             public float softness;
             public uint shape;
+            public uint flags; // REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT
         }
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]

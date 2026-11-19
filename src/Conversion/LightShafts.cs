@@ -19,6 +19,7 @@ namespace UnityRemix
         public static ConfigEntry<bool> Enabled;
         public static ConfigEntry<float> Brightness;
         public static ConfigEntry<float> Softness;
+        public static ConfigEntry<bool> Shadows;
 
         // A fitted mesh, in its object space: the near cap's centre, the axis to the far cap's,
         // the half extents across it (u, v) at both caps, the vertex brightness at both.
@@ -44,6 +45,8 @@ namespace UnityRemix
                 "as glowing air: brighter seen through more of them, cut softly by walls. Off: the game's sheets.");
             Brightness = config.Bind("Rendering", "LightShaftBrightness", 2f,
                 "Light shaft volumes' strength, 1 matching the game's sheet seen side-on.");
+            Shadows = config.Bind("Rendering", "LightShaftShadows", true,
+                "What stands in a light shaft casts a shadow down it, from the window or lamp it starts at (a shadow ray per sample).");
             Softness = config.Bind("Rendering", "LightShaftSoftness", 0.5f,
                 "The part of a light shaft's half width over which it fades out at its sides (0 to 1).");
         }
@@ -162,7 +165,8 @@ namespace UnityRemix
                 radiance = new RemixAPI.remixapi_Float3D(linear.r * scale, linear.g * scale, linear.b * scale),
                 farFade = fit.nearBright > 0 ? fit.farBright / fit.nearBright : 1f,
                 softness = softness,
-                shape = RemixAPI.REMIXAPI_VOLUME_SHAFT_BOX_EXT
+                shape = RemixAPI.REMIXAPI_VOLUME_SHAFT_BOX_EXT,
+                flags = Shadows.Value ? RemixAPI.REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0u
             };
         }
 

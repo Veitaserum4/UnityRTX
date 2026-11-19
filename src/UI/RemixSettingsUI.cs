@@ -357,6 +357,11 @@ namespace UnityRemix
                     if (RemixImGui.SliderFloat("Edge softness##shafts", ref softness, 0f, 1f))
                         LightShafts.Softness.Value = softness;
                     Tooltip("The part of a shaft's half width over which it fades out at its sides.");
+                    bool shadows = LightShafts.Shadows.Value;
+                    if (RemixImGui.Checkbox("Shadows##shafts", ref shadows))
+                        LightShafts.Shadows.Value = shadows;
+                    Tooltip("What stands in a shaft casts a shadow down it, from the window or lamp it starts at. " +
+                            "Costs a shadow ray per sample (8 along each camera ray through a shaft).");
                     RemixImGui.Unindent();
                 }
             }
