@@ -224,8 +224,12 @@ namespace UnityRemix.Games
             return found && foundMesh != null;
         }
 
+        // A surface opening a view portal shows the place past it, not its own colour: drawn
+        // unlit it would emit, and an emitting surface is not replaced by its portal's view.
         public static bool IsUnlit(Material material)
         {
+            if (OpensViewPortal(material))
+                return false;
             bool unlit = false;
             Run(nameof(IsUnlit), p => unlit = p.IsUnlit(material));
             return unlit;
