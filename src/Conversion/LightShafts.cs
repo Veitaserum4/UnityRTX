@@ -217,11 +217,105 @@ namespace UnityRemix
             return fit;
         }
 
-        // Along the longest side of the mesh's bounds: the vertices within a tenth of each end are its caps.
+        private static float VertexBrightness(Color32 c) => Mathf.Max(c.r, Mathf.Max(c.g, c.b)) / 255f;
+
+        // A shaft fading along its length (vertex colours bright at one end, dark at the other):
+        // from the bright vertices' centre to the dark ones', its caps their extents across that
+        // axis. Its longest side may well be across it (a lamp's wide, short cone; fins about an axis).
+        private static Fit FitByFade(Vector3[] vertices, Color32[] colors, float threshold)
+        {
+            Vector3 brightMin = Vector3.positiveInfinity, brightMax = Vector3.negativeInfinity;
+            Vector3 darkMin = Vector3.positiveInfinity, darkMax = Vector3.negativeInfinity;
+            float brightSum = 0, darkSum = 0;
+            int brightCount = 0, darkCount = 0;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                float b = VertexBrightness(colors[i]);
+                if (b >= threshold)
+                {
+                    brightMin = Vector3.Min(brightMin, vertices[i]);
+                    brightMax = Vector3.Max(brightMax, vertices[i]);
+                    brightSum += b;
+                    brightCount++;
+                }
+                else
+                {
+                    darkMin = Vector3.Min(darkMin, vertices[i]);
+                    darkMax = Vector3.Max(darkMax, vertices[i]);
+                    darkSum += b;
+                    darkCount++;
+                }
+            }
+            if (brightCount == 0 || darkCount == 0)
+                return null;
+            Vector3 near = (brightMin + brightMax) * 0.5f, far = (darkMin + darkMax) * 0.5f;
+            Vector3 axis = far - near;
+            if (axis.magnitude <= 1e-4f)
+                return null;
+            Vector3 along = axis.normalized;
+            // Across: the coordinate axis least along the shaft, made perpendicular to it.
+            Vector3 seed = Mathf.Abs(along.x) <= Mathf.Abs(along.y) && Mathf.Abs(along.x) <= Mathf.Abs(along.z) ? Vector3.right
+                         : Mathf.Abs(along.y) <= Mathf.Abs(along.z) ? Vector3.up : Vector3.forward;
+            Vector3 u = (seed - Vector3.Dot(seed, along) * along).normalized, v = Vector3.Cross(along, u);
+            float nearU = 0, nearV = 0, farU = 0, farV = 0;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                bool bright = VertexBrightness(colors[i]) >= threshold;
+                Vector3 d = vertices[i] - (bright ? near : far);
+                float x = Mathf.Abs(Vector3.Dot(d, u)), y = Mathf.Abs(Vector3.Dot(d, v));
+                if (bright)
+                {
+                    nearU = Mathf.Max(nearU, x);
+                    nearV = Mathf.Max(nearV, y);
+                }
+                else
+                {
+                    farU = Mathf.Max(farU, x);
+                    farV = Mathf.Max(farV, y);
+                }
+            }
+            var fit = new Fit { origin = near, axis = axis, u = u, v = v, nearBright = brightSum / brightCount, farBright = darkSum / darkCount };
+            SetCaps(fit, new Vector2(nearU, nearV), new Vector2(farU, farV));
+            return fit;
+        }
+
+        // The caps' half extents. A sheet (a cap flat across one side) is as deep as it is wide:
+        // seen from the side the game drew it to be seen from, the volume then glows as it did.
+        // A cap that is a point (a cone's apex) keeps a sliver of the other's width.
+        private static void SetCaps(Fit fit, Vector2 nearHalf, Vector2 farHalf)
+        {
+            Vector2 Thicken(Vector2 h) =>
+                h.x < 0.1f * h.y ? new Vector2(h.y, h.y) : h.y < 0.1f * h.x ? new Vector2(h.x, h.x) : h;
+            nearHalf = Thicken(nearHalf);
+            farHalf = Thicken(farHalf);
+            fit.nearU = Mathf.Max(nearHalf.x, farHalf.x * 0.01f, 1e-4f);
+            fit.nearV = Mathf.Max(nearHalf.y, farHalf.y * 0.01f, 1e-4f);
+            fit.farU = Mathf.Max(farHalf.x, nearHalf.x * 0.01f, 1e-4f);
+            fit.farV = Mathf.Max(farHalf.y, nearHalf.y * 0.01f, 1e-4f);
+        }
+
+        // Fading along its length: FitByFade. Else along the longest side of the mesh's bounds, the
+        // vertices within a tenth of each end its caps.
         private static Fit FitShaft(Vector3[] vertices, Color32[] colors)
         {
             if (vertices == null || vertices.Length < 4)
                 return null;
+            if (colors != null)
+            {
+                float lo = 1, hi = 0;
+                foreach (var colour in colors)
+                {
+                    float shade = VertexBrightness(colour);
+                    lo = Mathf.Min(lo, shade);
+                    hi = Mathf.Max(hi, shade);
+                }
+                if (hi - lo > 0.25f)
+                {
+                    var faded = FitByFade(vertices, colors, (lo + hi) * 0.5f);
+                    if (faded != null)
+                        return faded;
+                }
+            }
             Vector3 min = vertices[0], max = vertices[0];
             foreach (var p in vertices)
             {
@@ -272,12 +366,7 @@ namespace UnityRemix
             fit.u[b] = 1;
             fit.v = Vector3.zero;
             fit.v[c] = 1;
-            Vector2 nearHalf = (ends[near].max - ends[near].min) * 0.5f, farHalf = (ends[far].max - ends[far].min) * 0.5f;
-            // A cap that is a point (a cone's apex) keeps a sliver of the other's width.
-            fit.nearU = Mathf.Max(nearHalf.x, farHalf.x * 0.01f, 1e-4f);
-            fit.nearV = Mathf.Max(nearHalf.y, farHalf.y * 0.01f, 1e-4f);
-            fit.farU = Mathf.Max(farHalf.x, nearHalf.x * 0.01f, 1e-4f);
-            fit.farV = Mathf.Max(farHalf.y, nearHalf.y * 0.01f, 1e-4f);
+            SetCaps(fit, (ends[near].max - ends[near].min) * 0.5f, (ends[far].max - ends[far].min) * 0.5f);
             fit.nearBright = ends[near].bright;
             fit.farBright = ends[far].bright;
             return fit;
