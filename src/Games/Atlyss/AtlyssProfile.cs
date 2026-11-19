@@ -21,7 +21,50 @@ namespace UnityRemix.Games.Atlyss
         private Behaviour[] fogComponents = Array.Empty<Behaviour>();
         private float nextRefresh;
 
-        public override void OnSceneLoaded() => nextRefresh = 0f;
+        public override void OnSceneLoaded()
+        {
+            nextRefresh = 0f;
+            nextSkyRefresh = 0f;
+        }
+
+        // Areas with a 3D skybox (the Sanctum's) carry a SkyboxCamera: each LateUpdate it takes
+        // the main camera's rotation and, under its parent, the main camera's position / 100
+        // (_skyboxScale), drawing a miniature of the distant land the main camera draws over.
+        private Type skyboxCameraType;
+        private bool skyLookedUp;
+        private Behaviour[] skyComponents = Array.Empty<Behaviour>();
+        private float nextSkyRefresh;
+
+        public override Camera FindSkyCamera(Camera worldCamera)
+        {
+            if (!skyLookedUp)
+            {
+                skyLookedUp = true;
+                skyboxCameraType = AccessTools.TypeByName("SkyboxCamera");
+                if (skyboxCameraType == null)
+                    Logger.LogInfo("[ATLYSS] SkyboxCamera not found: no 3D skybox");
+            }
+            if (skyboxCameraType == null)
+                return null;
+            // Looked up again on each scene load (areas load additively) and once a second.
+            if (Time.unscaledTime >= nextSkyRefresh)
+            {
+                nextSkyRefresh = Time.unscaledTime + 1f;
+                var found = UnityEngine.Object.FindObjectsOfType(skyboxCameraType);
+                skyComponents = new Behaviour[found.Length];
+                for (int i = 0; i < found.Length; i++)
+                    skyComponents[i] = found[i] as Behaviour;
+            }
+            foreach (var c in skyComponents)
+            {
+                if (c == null || !c.isActiveAndEnabled)
+                    continue;
+                var cam = c.GetComponent<Camera>();
+                if (cam != null && cam.enabled && cam != worldCamera)
+                    return cam;
+            }
+            return null;
+        }
 
         public override float WorldFogDensity(float density)
         {
