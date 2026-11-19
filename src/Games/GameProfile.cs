@@ -141,6 +141,15 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // A material whose shader blends a colour over its texture in overlay mode (per channel:
+        // 2 x texel x colour below a colour of one half, 1 - 2 (1 - colour)(1 - texel) above):
+        // that colour, baked into the albedo. Not a multiply tint.
+        public virtual bool GetOverlayTint(Material material, out Color tint)
+        {
+            tint = default;
+            return false;
+        }
+
         // A material whose shader scrolls its texture by time (no script moves it): its UV
         // transform now (x, y the tiling, z, w the offset), as the shader samples it.
         public virtual bool GetShaderScroll(Material material, out Vector4 uvST)

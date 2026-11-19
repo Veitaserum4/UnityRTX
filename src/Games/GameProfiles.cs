@@ -307,6 +307,15 @@ namespace UnityRemix.Games
             return aberration;
         }
 
+        public static Color? GetOverlayTint(Material material)
+        {
+            bool found = false;
+            var result = default(Color);
+            if (material != null)
+                Run(nameof(GetOverlayTint), p => found = p.GetOverlayTint(material, out result));
+            return found ? result : (Color?)null;
+        }
+
         public static bool GetShaderScroll(Material material, out Vector4 uvST)
         {
             bool found = false;

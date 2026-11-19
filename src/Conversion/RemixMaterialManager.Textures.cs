@@ -701,13 +701,18 @@ namespace UnityRemix
             }
         }
 
-        private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap, Vector4? hsbc = null)
+        // Overlay blend with the colour as the blend layer (GameProfile.GetOverlayTint).
+        private static float Overlay(float texel, float colour) =>
+            colour > 0.5f ? 1f - (2f - 2f * colour) * (1f - texel) : 2f * texel * colour;
+
+        private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap, Vector4? hsbc = null,
+                                                                       Color? overlay = null)
         {
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
 
             // If color is white, no remap, and no hsbc, fast path to standard upload
-            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue && !hsbc.HasValue)
+            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue && !hsbc.HasValue && !overlay.HasValue)
             {
                 var handle = UploadUnityTexture(tex);
                 int texId = tex.GetInstanceID();
@@ -733,6 +738,11 @@ namespace UnityRemix
                 hsbcKey = (hInt << 16) | (bInt << 8) | (cInt ^ sInt);
             }
             long cacheKey = unchecked((long)0x4100000000000000L ^ ((long)tex.GetInstanceID() << 28) ^ ((long)remapKey << 20) ^ (uint)tintKey ^ ((long)hsbcKey << 32));
+            if (overlay.HasValue)
+            {
+                Color32 o = overlay.Value;
+                cacheKey = unchecked(cacheKey * 1099511628211L ^ ((o.r << 16) | (o.g << 8) | o.b) ^ 0x0F000000L);
+            }
 
             lock (pendingTextureLock)
             {
@@ -839,7 +849,7 @@ namespace UnityRemix
                         float lum = 0.299f * r + 0.587f * g + 0.114f * b;
                         r = lum + (r - lum) * hsbcS;
                         g = lum + (g - lum) * hsbcS;
-                        b = lum + (g - lum) * hsbcS;
+                        b = lum + (b - lum) * hsbcS;
                     }
 
                     if (hasTint)
@@ -847,6 +857,13 @@ namespace UnityRemix
                         r *= tintR;
                         g *= tintG;
                         b *= tintB;
+                    }
+
+                    if (overlay.HasValue)
+                    {
+                        r = Overlay(r, overlay.Value.r);
+                        g = Overlay(g, overlay.Value.g);
+                        b = Overlay(b, overlay.Value.b);
                     }
 
                     pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r) * 255f);

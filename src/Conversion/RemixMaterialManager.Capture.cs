@@ -233,6 +233,9 @@ namespace UnityRemix
                 }
             }
 
+            // A colour the game's shader overlays on the texture (GameProfile.GetOverlayTint).
+            Color? overlayTint = Games.GameProfiles.GetOverlayTint(material);
+
             // Check for HSV / Brightness / Contrast adjustments (e.g. Unlit/ColorAdjust, stylized character customization)
             Vector4? hsbc = null;
             try
@@ -494,9 +497,11 @@ namespace UnityRemix
                         matData.pbrRoughBias = 0f; matData.pbrRoughScale = 1f;
                     }
                 }
-                else if (remap.HasValue || hsbc.HasValue)
+                else if (remap.HasValue || hsbc.HasValue || overlayTint.HasValue)
                 {
-                    var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, effectiveTint, remap, hsbc);
+                    // An overlay colour replaces the multiply tint (the shader has no other).
+                    var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, overlayTint.HasValue ? Color.white : effectiveTint,
+                                                                               remap, hsbc, overlayTint);
                     matData.albedoHandle = tintedHandle;
                     matData.albedoTextureHash = tintedHash;
                     matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);
