@@ -278,6 +278,11 @@ namespace UnityRemix
         public void SetGameLayerMask(int mask)
         {
             if (mask == 0) mask = -1;
+            // Less the layers the game's profile says it never shows in the world (a minimap's
+            // icons, drawn by its map camera only).
+            for (int layer = 0; layer < 32; layer++)
+                if ((mask & (1 << layer)) != 0 && Games.GameProfiles.IsNeverRenderedLayer(layer))
+                    mask &= ~(1 << layer);
             if (mask == gameLayerMask) return;
             gameLayerMask = mask;
             var hidden = new List<string>();

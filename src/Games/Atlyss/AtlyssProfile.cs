@@ -21,6 +21,17 @@ namespace UnityRemix.Games.Atlyss
         private Behaviour[] fogComponents = Array.Empty<Behaviour>();
         private float nextRefresh;
 
+        // The minimap's icons (SpriteRenderers on Minimap, drawn by _camera_overworldMinimap into
+        // the map): never in the world.
+        private int minimapLayer = -2;
+
+        public override bool IsNeverRenderedLayer(int layer)
+        {
+            if (minimapLayer == -2)
+                minimapLayer = LayerMask.NameToLayer("Minimap");
+            return layer == minimapLayer;
+        }
+
         public override void OnSceneLoaded()
         {
             nextRefresh = 0f;
