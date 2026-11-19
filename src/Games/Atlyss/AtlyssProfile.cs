@@ -21,6 +21,26 @@ namespace UnityRemix.Games.Atlyss
         private Behaviour[] fogComponents = Array.Empty<Behaviour>();
         private float nextRefresh;
 
+        // Unlit/panUV (ShaderForge; the Sanctum's sky dome and its sea): its texture _mainTex
+        // sampled at (uv + (_Value01, _Value02) x _Time.y) x _mainTex_ST.xy + _mainTex_ST.zw.
+        private static readonly int PanSpeedX = Shader.PropertyToID("_Value01");
+        private static readonly int PanSpeedY = Shader.PropertyToID("_Value02");
+
+        public override bool GetShaderScroll(Material material, out Vector4 uvST)
+        {
+            uvST = default;
+            if (material.shader == null || material.shader.name != "Unlit/panUV")
+                return false;
+            var scale = material.GetTextureScale("_mainTex");
+            var offset = material.GetTextureOffset("_mainTex");
+            float t = Time.time;
+            float u = material.GetFloat(PanSpeedX) * t * scale.x + offset.x;
+            float v = material.GetFloat(PanSpeedY) * t * scale.y + offset.y;
+            // Kept within one repeat (the texture wraps): float precision as time grows.
+            uvST = new Vector4(scale.x, scale.y, u - Mathf.Floor(u), v - Mathf.Floor(v));
+            return true;
+        }
+
         // The minimap's icons (SpriteRenderers on Minimap, drawn by _camera_overworldMinimap into
         // the map): never in the world.
         private int minimapLayer = -2;
