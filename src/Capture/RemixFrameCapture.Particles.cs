@@ -924,8 +924,7 @@ namespace UnityRemix
                 if (useTexSheet)
                 {
                     float progress = p.startLifetime > 0.0001f ? (1f - (p.remainingLifetime / p.startLifetime)) : 0f;
-                    int totalFrames = tilesX * tilesY;
-                    int frameIdx = Mathf.Clamp(Mathf.FloorToInt(progress * totalFrames), 0, totalFrames - 1);
+                    int frameIdx = SheetFrame(texModule, tilesX, tilesY, progress, p.randomSeed);
                     int tx = frameIdx % tilesX;
                     int ty = tilesY - 1 - (frameIdx / tilesX);
                     uvX0 = tx * uvWidth;
@@ -1725,5 +1724,65 @@ namespace UnityRemix
                 return true;
             }
         }
+            // The texture sheet tile a particle shows, as Unity picks it: its start frame (random per
+        // particle between two constants or curves, from its seed) plus the frame-over-time curve
+        // at its age (repeated cycleCount times), both in sheet units of one whole sheet or row
+        // when no greater than one; a single row is one fixed row or, random, one per particle.
+        private static int SheetFrame(ParticleSystem.TextureSheetAnimationModule sheet, int tilesX, int tilesY, float age, uint seed)
+        {
+            bool singleRow = sheet.animation == ParticleSystemAnimationType.SingleRow;
+            int frames = singleRow ? tilesX : tilesX * tilesY;
+            float r0 = (seed * 2654435761u >> 8) / 16777216f;
+            float r1 = ((seed ^ 0x9E3779B9u) * 2246822519u >> 8) / 16777216f;
+            int cycles = Math.Max(1, sheet.cycleCount);
+            float t = age * cycles;
+            t -= Mathf.Floor(t);
+            float over = EvaluateCurve(sheet.frameOverTime, t, r0);
+            float start = EvaluateCurve(sheet.startFrame, 0f, r1);
+            float overFrames = Mathf.Abs(sheet.frameOverTimeMultiplier) <= 1.0001f ? over * frames : over;
+            float startFrames = CurveMaximum(sheet.startFrame) <= 1.0001f ? start * frames : start;
+            int frame = Mathf.FloorToInt(startFrames + overFrames);
+            frame = ((frame % frames) + frames) % frames;
+            if (!singleRow)
+                return frame;
+            int row = RandomRow(sheet)
+                ? Mathf.Min(tilesY - 1, (int)(r1 * tilesY))
+                : Mathf.Clamp(sheet.rowIndex, 0, tilesY - 1);
+            return row * tilesX + frame;
+        }
+
+        // rowMode (Unity 2019.1+; useRandomRow before), apart so older runtimes compile the caller.
+        private static bool rowModeMissing;
+
+        private static bool RandomRow(ParticleSystem.TextureSheetAnimationModule sheet)
+        {
+            if (!rowModeMissing)
+            {
+                try { return RowModeRandom(sheet); }
+                catch (MissingMethodException) { rowModeMissing = true; }
+            }
+#pragma warning disable 618
+            return sheet.useRandomRow;
+#pragma warning restore 618
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static bool RowModeRandom(ParticleSystem.TextureSheetAnimationModule sheet) =>
+            sheet.rowMode == ParticleSystemAnimationRowMode.Random;
+
+        private static float EvaluateCurve(ParticleSystem.MinMaxCurve curve, float time, float random)
+        {
+            switch (curve.mode)
+            {
+                case ParticleSystemCurveMode.Constant: return curve.constant;
+                case ParticleSystemCurveMode.TwoConstants: return Mathf.Lerp(curve.constantMin, curve.constantMax, random);
+                default: return curve.Evaluate(time, random);
+            }
+        }
+
+        private static float CurveMaximum(ParticleSystem.MinMaxCurve curve) =>
+            curve.mode == ParticleSystemCurveMode.Constant ? Mathf.Abs(curve.constant) :
+            curve.mode == ParticleSystemCurveMode.TwoConstants ? Mathf.Max(Mathf.Abs(curve.constantMin), Mathf.Abs(curve.constantMax)) :
+            Mathf.Abs(curve.curveMultiplier);
     }
 }
