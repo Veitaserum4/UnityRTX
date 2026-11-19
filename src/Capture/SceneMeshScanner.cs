@@ -55,6 +55,12 @@ namespace UnityRemix
             public Renderer Renderer;
             public GameObject GameObject;
             public Transform Transform;
+            // Its filter's mesh and its first material when scanned: a game that swaps either
+            // (a character display's weapon, given its item after the scan) leaves the scan's
+            // copy stale, and the frame capture draws the renderer instead (Swapped).
+            public MeshFilter Filter;
+            public int MeshId, MaterialId;
+            public bool Swapped;
         }
 
         private struct ScannedMeshData
@@ -72,6 +78,8 @@ namespace UnityRemix
             public Renderer SourceRenderer;
             public GameObject SourceGameObject;
             public Transform SourceTransform;
+            public MeshFilter SourceFilter;
+            public int SourceMeshId, SourceMaterialId;
             public InstanceFlags Flags;
             // World up in the mesh's space: which faces take a top-colored material's top variant.
             public Vector3 ObjectUp;
@@ -661,6 +669,29 @@ namespace UnityRemix
                         {
                             culledDisabled++;
                             continue;
+                        }
+
+                        // 2b. Its mesh or material swapped since the scan (staggered): the frame
+                        // capture draws it from then on.
+                        if (refObj.Swapped)
+                        {
+                            culledDisabled++;
+                            continue;
+                        }
+                        if (refObj.Filter != null && ((i + frameCount) & 7) == 0)
+                        {
+                            var nowMesh = refObj.Filter.sharedMesh;
+                            var nowMaterial = renderer.sharedMaterial;
+                            if ((nowMesh != null ? nowMesh.GetInstanceID() : 0) != refObj.MeshId ||
+                                (nowMaterial != null ? nowMaterial.GetInstanceID() : 0) != refObj.MaterialId)
+                            {
+                                refObj.Swapped = true;
+                                instanceRenderers[i] = refObj;
+                                if (VerboseLog.On)
+                                    logger.LogInfo($"[Scan] '{refObj.GameObject.name}' changed its mesh or material since the scan: drawn by the frame capture");
+                                culledDisabled++;
+                                continue;
+                            }
                         }
 
                         var go = refObj.GameObject;
@@ -1349,6 +1380,9 @@ int queued = 0;
                         SourceRenderer = renderer,
                         SourceGameObject = filter.gameObject,
                         SourceTransform = filter.transform,
+                        SourceFilter = isCombinedMesh ? null : filter,
+                        SourceMeshId = filter.sharedMesh != null ? filter.sharedMesh.GetInstanceID() : 0,
+                        SourceMaterialId = renderer.sharedMaterial != null ? renderer.sharedMaterial.GetInstanceID() : 0,
                         Flags = DetermineInstanceFlags(filter, renderer, isCombinedMesh),
                         ObjectUp = objectUp,
                         ObjectScale = objectScale,
@@ -1444,6 +1478,9 @@ int queued = 0;
                     Renderer = entry.SourceRenderer,
                     GameObject = entry.SourceGameObject,
                     Transform = entry.SourceTransform,
+                    Filter = entry.SourceFilter,
+                    MeshId = entry.SourceMeshId,
+                    MaterialId = entry.SourceMaterialId,
                 });
             }
 
