@@ -1220,7 +1220,7 @@ namespace UnityRemix
                 case "DetectScrollingTextures":
                     configDetectScrollingTextures.Value = value;
                     RemixScrollingTextureDetector.Enabled = value;
-                    frameCapture?.InvalidateCaches();
+                    frameCapture?.RequestInvalidateCaches();
                     break;
                 case "EnableLights": configEnableLights.Value = value; break;
                 case "CaptureStaticMeshes": configCaptureStaticMeshes.Value = value; break;

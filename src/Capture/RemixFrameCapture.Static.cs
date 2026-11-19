@@ -20,6 +20,8 @@ namespace UnityRemix
         /// </summary>
         public void CaptureStaticMeshes(FrameState state, int frameCount)
         {
+            if (invalidateRequested)
+                InvalidateCaches();
             // Rebuild cache if stale
             if (frameCount - rendererCacheFrame > configRendererCacheDuration.Value || rendererCacheFrame < 0)
             {

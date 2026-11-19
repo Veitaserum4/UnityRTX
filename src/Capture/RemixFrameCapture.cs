@@ -1085,11 +1085,17 @@ namespace UnityRemix
             return info;
         }
 
+        // A settings change from the panel (render thread): the main thread's next capture
+        // clears the caches. Cleared from the panel, the capture enumerating them threw.
+        private volatile bool invalidateRequested;
+        public void RequestInvalidateCaches() => invalidateRequested = true;
+
         /// <summary>
         /// Invalidate caches on scene change
         /// </summary>
         public void InvalidateCaches()
         {
+            invalidateRequested = false;
             rendererCacheFrame = -1;
             lastCameraTrackFrame = -100;
             lastTrackedCamera = null;
