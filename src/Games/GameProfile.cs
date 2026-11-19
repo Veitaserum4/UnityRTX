@@ -125,6 +125,12 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // The camera that draws the game's 3D skybox this frame: a miniature scene drawn behind
+        // the world from a camera that moves with the player's at a fraction of its movement (as
+        // Source's sky_camera). The layers only it draws are the sky's
+        // (REMIXAPI_CAMERA_TYPE_SKY, rasterized from it behind everything). Null: none.
+        public virtual Camera FindSkyCamera(Camera worldCamera) => null;
+
         // The player's own body, which the game shows only in mirrors and through portals: drawn
         // as Remix's reflection-only player body (camera rays pass it), whatever its layer.
         public virtual bool IsPlayerBody(Renderer renderer) => false;

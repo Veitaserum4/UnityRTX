@@ -128,6 +128,9 @@ namespace UnityRemix
         private RemixAPI.remixapi_SceneInstanceChangeEXT[] changesBuffer = new RemixAPI.remixapi_SceneInstanceChangeEXT[512];
         private int needClearRetained = 0;
 
+        // The sky layers the retained instances were added with (CameraData.skyLayers).
+        private int retainedSkyLayers;
+
         public void RequestClearRetainedSceneInstances()
         {
             Interlocked.Exchange(ref needClearRetained, 1);
@@ -588,6 +591,9 @@ namespace UnityRemix
                     cam.viewModelPosition, cam.viewModelForward, cam.viewModelUp, cam.viewModelRight,
                     cam.viewModelFov, cam.aspect, cam.viewModelNearPlane, cam.viewModelFarPlane
                 );
+                if (cam.skyActive)
+                    cameraHandler.SetupSkyCamera(cam.skyPosition, cam.skyForward, cam.skyUp, cam.skyRight,
+                        cam.skyFov, cam.aspect, cam.skyNearPlane, Math.Max(cam.skyFarPlane, 1000f));
             }
             else
             {
@@ -600,6 +606,15 @@ namespace UnityRemix
             }
             
             LightShafts.Submit(state.shafts);
+
+            // Retained instances keep the category they were added with: when the sky's layers
+            // change, they are added again.
+            int frameSkyLayers = state.camera.valid ? state.camera.skyLayers : 0;
+            if (frameSkyLayers != retainedSkyLayers)
+            {
+                retainedSkyLayers = frameSkyLayers;
+                Interlocked.Exchange(ref needClearRetained, 1);
+            }
 
             if (Interlocked.Exchange(ref needClearRetained, 0) != 0)
             {
@@ -679,7 +694,8 @@ namespace UnityRemix
                             {
                                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
                                 pNext = meshConverter.CameraOnlyExtension(instance.MeshHandle),
-                                categoryFlags = 0,
+                                categoryFlags = (retainedSkyLayers & (1 << (instance.Layer & 31))) != 0
+                                    ? (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY : 0u,
                                 mesh = instance.MeshHandle,
                                 transform = instance.Transform,
                                 doubleSided = 1
@@ -745,7 +761,8 @@ namespace UnityRemix
                             {
                                 sType = RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO,
                                 pNext = meshConverter.CameraOnlyExtension(instance.MeshHandle),
-                                categoryFlags = 0,
+                                categoryFlags = (retainedSkyLayers & (1 << (instance.Layer & 31))) != 0
+                                    ? (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY : 0u,
                                 mesh = instance.MeshHandle,
                                 transform = instance.Transform,
                                 doubleSided = 1

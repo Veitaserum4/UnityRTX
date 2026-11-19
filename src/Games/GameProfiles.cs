@@ -307,6 +307,13 @@ namespace UnityRemix.Games
             return aberration;
         }
 
+        public static Camera FindSkyCamera(Camera worldCamera)
+        {
+            Camera camera = null;
+            Run(nameof(FindSkyCamera), p => camera = p.FindSkyCamera(worldCamera));
+            return camera;
+        }
+
         public static Camera FindViewModelCamera(Camera worldCamera)
         {
             Camera camera = null;

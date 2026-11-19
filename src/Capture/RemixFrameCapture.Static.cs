@@ -71,6 +71,7 @@ namespace UnityRemix
                 state.camera.portals = framePortals.Count > 0 ? framePortals.ToArray() : null;
                 if (state.camera.portalActive || state.camera.portals != null)
                     RayPortals.Ensure(this, materialManager);
+                CaptureSkyCamera(ref state.camera, mainCam);
 
                 // Update skybox state on main thread
                 skyboxManager?.UpdateSkybox(mainCam, frameCount);
@@ -274,7 +275,7 @@ namespace UnityRemix
                 }
                 ulong meshKey = RemixMeshConverter.GetMeshKey(meshId, matSig);
                 bool isViewModel = !playerBody && IsViewModel(tr, layer, mainCamTransform, "mesh");
-                uint categoryFlags = 0;
+                uint categoryFlags = IsSkyLayer(layer) ? (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_SKY : 0u;
                 if (isViewModel)
                 {
                     categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
