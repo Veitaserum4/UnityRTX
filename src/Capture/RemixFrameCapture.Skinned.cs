@@ -94,6 +94,8 @@ namespace UnityRemix
 
                 if (!skinned.enabled || go == null || !go.activeInHierarchy || SceneMeshScanner.IsRenderingOff(skinned))
                 {
+                    if (go != null && go.activeInHierarchy)
+                        LogSkinSkip(skinned, !skinned.enabled ? "renderer disabled" : "rendering off");
                     persistentSkinnedData.Remove(skinnedId);
                     skipNull++;
                     continue;
@@ -126,6 +128,8 @@ namespace UnityRemix
                 bool playerBody = IsPlayerBodyRenderer(skinned);
                 if ((!playerBody && IsLayerDisabled(go.layer)) || IsRendererDisabled(skinnedId) || previewRendererIds.Contains(rendererId))
                 {
+                    LogSkinSkip(skinned, IsLayerDisabled(go.layer) ? $"layer {LayerMask.LayerToName(go.layer)}({go.layer}) not drawn" :
+                                         previewRendererIds.Contains(rendererId) ? "a live image's model" : "disabled in the panel");
                     skipLayer++;
                     continue;
                 }
@@ -135,6 +139,7 @@ namespace UnityRemix
                     float sqrDistance = (skinned.bounds.center - camPos).sqrMagnitude;
                     if (sqrDistance > maxDistSqr)
                     {
+                        LogSkinSkip(skinned, "beyond the render distance");
                         skipDist++;
                         continue;
                     }
@@ -226,6 +231,14 @@ namespace UnityRemix
                     }
                 }
                 long skinCacheKey = ((long)sharedMeshId << 32) | (uint)bsHash;
+                // Verbose: each skin's blendshape weights, once per set.
+                if (VerboseLog.On && bsCount > 0 && loggedSkinSkips.Add(((long)skinned.GetInstanceID() << 32) ^ bsHash ^ 0x5B5B5B5BL))
+                {
+                    var weights = new System.Text.StringBuilder();
+                    for (int bsi = 0; bsi < bsCount; bsi++)
+                        weights.Append($" {sharedMesh.GetBlendShapeName(bsi)}={skinned.GetBlendShapeWeight(bsi):F0}");
+                    logger.LogInfo($"[SkinShapes] '{skinned.name}' mesh '{sharedMesh.name}' layer {go.layer}:{weights}");
+                }
                 
                 // Try GPU skinning path: extract bone weights once, compute bone transforms each frame
                 var skinData = (CachedSkinningData)null;
@@ -453,5 +466,15 @@ namespace UnityRemix
         private static PropertyInfo _tmpMeshProperty;
         private static MethodInfo _tmpForceMeshUpdateMethod;
         private static bool _tmpReflectionChecked;
+        // Verbose: each skinned renderer an active object holds that is not drawn, and why, once.
+        private readonly HashSet<long> loggedSkinSkips = new HashSet<long>();
+
+        private void LogSkinSkip(SkinnedMeshRenderer skinned, string reason)
+        {
+            if (!VerboseLog.On || !loggedSkinSkips.Add(((long)skinned.GetInstanceID() << 8) ^ reason.GetHashCode()))
+                return;
+            logger.LogInfo($"[SkinSkip] '{skinned.name}' (mesh '{(skinned.sharedMesh != null ? skinned.sharedMesh.name : "none")}', " +
+                           $"layer {skinned.gameObject.layer}): {reason}");
+        }
     }
 }
