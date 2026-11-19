@@ -41,6 +41,21 @@ namespace UnityRemix.Games.Atlyss
             return true;
         }
 
+        // ATLYSS's light shafts: small cones (a ProBuilder cylinder of 16 vertices, tapered) under
+        // windows and canopies, drawn additively with the Swoosh01 streak texture (material
+        // 'Swoosh01 6', a warm tint). The same texture also streaks attack effects (the swing
+        // torus, Standard), so the shaft is the additive particle shader on a plain mesh.
+        public override bool IsLightShaft(Renderer renderer)
+        {
+            if (!(renderer is MeshRenderer))
+                return false;
+            var material = renderer.sharedMaterial;
+            if (material == null || material.shader == null || material.shader.name != "Legacy Shaders/Particles/Additive")
+                return false;
+            var texture = material.HasProperty("_MainTex") ? material.GetTexture("_MainTex") : null;
+            return texture != null && texture.name == "Swoosh01";
+        }
+
         // The minimap's icons (SpriteRenderers on Minimap, drawn by _camera_overworldMinimap into
         // the map): never in the world.
         private int minimapLayer = -2;
