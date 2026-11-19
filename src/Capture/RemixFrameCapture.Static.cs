@@ -40,26 +40,35 @@ namespace UnityRemix
         private static readonly int PropBlockBaseColor = Shader.PropertyToID("_BaseColor");
         private static readonly int PropBlockEmission = Shader.PropertyToID("_EmissionColor");
 
-        // The colour and emission a renderer's property block sets, quantized (Quantize).
-        private void ReadBlockColours(Renderer renderer, out Color? colour, out Color? emission)
+        // The colour and emission a renderer shows now, quantized (Quantize): its property
+        // block's, else its runtime material copy's (runtimeMaterial; null for a shared one).
+        private void ReadLiveColours(Renderer renderer, Material runtimeMaterial, out Color? colour, out Color? emission)
         {
             colour = null;
             emission = null;
-            if (!renderer.HasPropertyBlock())
+            if (renderer.HasPropertyBlock())
+            {
+                if (sharedStaticMpb == null)
+                    sharedStaticMpb = new MaterialPropertyBlock();
+                renderer.GetPropertyBlock(sharedStaticMpb);
+                if (!sharedStaticMpb.isEmpty)
+                {
+                    Color c = sharedStaticMpb.GetColor(PropBlockColor);
+                    if (c.a <= 0f && c.r <= 0f && c.g <= 0f && c.b <= 0f)
+                        c = sharedStaticMpb.GetColor(PropBlockBaseColor);
+                    if (c.a > 0f || c.r > 0f || c.g > 0f || c.b > 0f)
+                        colour = Quantize(c);
+                    Color e = sharedStaticMpb.GetColor(PropBlockEmission);
+                    if (e.a > 0f || e.r > 0f || e.g > 0f || e.b > 0f)
+                        emission = Quantize(e);
+                }
+            }
+            if (runtimeMaterial == null)
                 return;
-            if (sharedStaticMpb == null)
-                sharedStaticMpb = new MaterialPropertyBlock();
-            renderer.GetPropertyBlock(sharedStaticMpb);
-            if (sharedStaticMpb.isEmpty)
-                return;
-            Color c = sharedStaticMpb.GetColor(PropBlockColor);
-            if (c.a <= 0f && c.r <= 0f && c.g <= 0f && c.b <= 0f)
-                c = sharedStaticMpb.GetColor(PropBlockBaseColor);
-            if (c.a > 0f || c.r > 0f || c.g > 0f || c.b > 0f)
-                colour = Quantize(c);
-            Color e = sharedStaticMpb.GetColor(PropBlockEmission);
-            if (e.a > 0f || e.r > 0f || e.g > 0f || e.b > 0f)
-                emission = Quantize(e);
+            if (!colour.HasValue && runtimeMaterial.HasProperty(PropBlockColor))
+                colour = Quantize(runtimeMaterial.GetColor(PropBlockColor));
+            if (!emission.HasValue && runtimeMaterial.HasProperty(PropBlockEmission))
+                emission = Quantize(runtimeMaterial.GetColor(PropBlockEmission));
         }
 
         private static int ColourBits(Color c)
@@ -328,11 +337,14 @@ namespace UnityRemix
                     }
                 }
 
-                // A block colour that changes (animation fading or tinting a material): drawn as
+                // A live colour that changes (animation fading or tinting a material through the
+                // block, or a script its runtime copy): drawn as
                 // the scrolling meshes are, its mesh uploaded once and a material bound per
                 // colour step in the same frame. As a static mesh, each colour step would be a
                 // new mesh, queued and ready frames later, the fade over before it shows.
-                if ((mpbColor.HasValue || mpbEmissive.HasValue) && BlockColourAnimates(rendererInstanceId, mpbHash))
+                ReadLiveColours(renderer, info.runtimeMaterial ? info.primarySharedMaterial : null, out var liveColour, out var liveEmission);
+                if ((liveColour.HasValue || liveEmission.HasValue) &&
+                    BlockColourAnimates(rendererInstanceId, unchecked(ColourBits(liveColour ?? Color.clear) * 31 + ColourBits(liveEmission ?? Color.clear))))
                 {
                     if (scrollingRendererIds.Add(rendererInstanceId))
                     {
@@ -918,7 +930,8 @@ namespace UnityRemix
 
             var materials = renderer.sharedMaterials;
             int rendererId = renderer.GetInstanceID();
-            ReadBlockColours(renderer, out Color? blockColour, out Color? blockEmission);
+            var firstMaterial = renderer.sharedMaterial;
+            ReadLiveColours(renderer, IsRuntimeMaterial(firstMaterial) ? firstMaterial : null, out Color? blockColour, out Color? blockEmission);
             // A static batch's vertices are already in world space.
             Matrix4x4 localToWorld = SkyPlaced(renderer.gameObject.layer,
                 renderer.isPartOfStaticBatch ? Matrix4x4.identity : renderer.transform.localToWorldMatrix);

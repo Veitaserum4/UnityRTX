@@ -923,6 +923,9 @@ namespace UnityRemix
             public Material[] sharedMaterials;
             public int materialSignature;
             public bool isPartOfStaticBatch;
+            // Its first material is a runtime copy (renderer.material: "name (Instance)"), whose
+            // colour a script may animate (RemixFrameCapture.ReadLiveColours).
+            public bool runtimeMaterial;
         }
 
         private class CachedSkinnedRendererInfo
@@ -963,6 +966,9 @@ namespace UnityRemix
         private Camera lastTrackedCamera;
         private int lastCameraTrackFrame = -100;
 
+        private static bool IsRuntimeMaterial(Material m) =>
+            m != null && m.name.EndsWith(" (Instance)", StringComparison.Ordinal);
+
         private CachedStaticRendererInfo GetOrCreateStaticInfo(MeshRenderer r)
         {
             int id = r.GetInstanceID();
@@ -978,7 +984,8 @@ namespace UnityRemix
                     primarySharedMaterial = (mats != null && mats.Length > 0) ? mats[0] : null,
                     sharedMaterials = mats,
                     materialSignature = StaticGeometryDedupe.ComputeMaterialSignature(mats),
-                    isPartOfStaticBatch = r.isPartOfStaticBatch
+                    isPartOfStaticBatch = r.isPartOfStaticBatch,
+                    runtimeMaterial = IsRuntimeMaterial((mats != null && mats.Length > 0) ? mats[0] : null)
                 };
                 cachedStaticInfo[id] = info;
                 return info;
@@ -994,6 +1001,7 @@ namespace UnityRemix
                 info.primarySharedMaterial = currentPrimary;
                 info.sharedMaterials = mats;
                 info.materialSignature = StaticGeometryDedupe.ComputeMaterialSignature(mats);
+                info.runtimeMaterial = IsRuntimeMaterial(currentPrimary);
             }
 
             return info;
