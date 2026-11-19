@@ -251,8 +251,15 @@ namespace UnityRemix
                     if (mats != null && mats.Length > 0)
                         mat = mats[0];
                 }
-                // Materials that draw nothing of their own (hidden, or a screen distortion).
-                if (mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat)) continue;
+                // Materials that draw nothing of their own (hidden, or a screen distortion). A
+                // system's trails keep their own material: a system can hide its particles that
+                // way and show only their trails.
+                if (mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat))
+                {
+                    if (mat != null && ps.trails.enabled)
+                        BakeParticleTrails(pr, ps, mainCam, ps.main.startColor.color, 0f, state);
+                    continue;
+                }
 
                 // Sample color from active particles (fast struct read) or fallback
                 Color pCol = Color.white;
