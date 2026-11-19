@@ -26,6 +26,19 @@ namespace UnityRemix.Games.Atlyss
         private static readonly int PanSpeedX = Shader.PropertyToID("_Value01");
         private static readonly int PanSpeedY = Shader.PropertyToID("_Value02");
 
+        // Unlit/panUV overlays _colorTint on its texture (its fragment program): the Sanctum's
+        // sky is a turquoise tint with the clouds' texture faint in it.
+        private static readonly int PanTint = Shader.PropertyToID("_colorTint");
+
+        public override bool GetOverlayTint(Material material, out Color tint)
+        {
+            tint = default;
+            if (material.shader == null || material.shader.name != "Unlit/panUV" || !material.HasProperty(PanTint))
+                return false;
+            tint = material.GetColor(PanTint);
+            return true;
+        }
+
         public override bool GetShaderScroll(Material material, out Vector4 uvST)
         {
             uvST = default;
