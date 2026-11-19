@@ -30,6 +30,22 @@ namespace UnityRemix.Games.Atlyss
         // sky is a turquoise tint with the clouds' texture faint in it.
         private static readonly int PanTint = Shader.PropertyToID("_colorTint");
 
+        // panUV's FORWARD pass does not blend (no Blend state): its texels draw opaque, those of
+        // alpha under one half discarded, though the shader sits in the transparent queue.
+        // Imported as a blended sheet, the fog took the sky dome for open sky and left it clear.
+        public override void OverrideMaterial(Material material, ref RemixMaterialManager.AlphaMode alphaMode, ref float alphaCutoff, ref Color albedoColor)
+        {
+            if (material.shader == null || material.shader.name != "Unlit/panUV")
+                return;
+            alphaMode = RemixMaterialManager.AlphaMode.Cutout;
+            alphaCutoff = 0.5f;
+        }
+
+        // The areas' sky domes (_material_sky_*, panUV on a sphere in the 3D skybox).
+        public override bool IsSkyDome(Material material) =>
+            material.shader != null && material.shader.name == "Unlit/panUV" &&
+            material.name.StartsWith("_material_sky", StringComparison.Ordinal);
+
         public override bool GetOverlayTint(Material material, out Color tint)
         {
             tint = default;
