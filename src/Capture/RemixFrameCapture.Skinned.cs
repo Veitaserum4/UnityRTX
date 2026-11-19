@@ -158,7 +158,7 @@ namespace UnityRemix
                 // A second skin of the same mesh on the same skeleton, drawn later in the queue
                 // (armour painted over a character's body as a cutout copy of it): Unity draws it
                 // over the first at equal depth; path-traced the two coincide and the body shows
-                // through. It is drawn as a decal over the surface beneath. One frame behind.
+                // through. It is lifted off the skin under it (LiftedVertices). One frame behind.
                 {
                     var root = skinned.rootBone != null ? skinned.rootBone : tr.parent;
                     long passKey = ((long)sharedMesh.GetInstanceID() << 32) ^ (uint)(root != null ? root.GetInstanceID() : 0);
@@ -174,7 +174,7 @@ namespace UnityRemix
                         if (loggedSkinPasses.Add(passKey ^ queue))
                             logger.LogInfo($"[Skinned] '{go.name}' draws mesh '{sharedMesh.name}' like {last.count - 1} other skin(s) on its skeleton: " +
                                            $"material '{info.primarySharedMaterial?.name}' queue {queue} (lowest {last.lowestQueue}): " +
-                                           (queue > last.lowestQueue ? "a decal over them" : "drawn as itself"));
+                                           (queue > last.lowestQueue ? "lifted over them" : "drawn as itself"));
                     }
                 }
                 // Held by the camera (arms, weapons) or on a view-model layer: drawn as view models.
@@ -440,8 +440,6 @@ namespace UnityRemix
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_VIEW_MODEL;
                     if (playerBodySkinnedIds.Contains(entry.meshId))
                         submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_THIRD_PERSON_PLAYER_BODY;
-                    if (overlaySkinnedIds.Contains(entry.meshId))
-                        submitted.categoryFlags |= (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_DYNAMIC;
                     state.skinned.Add(submitted);
                 }
             }

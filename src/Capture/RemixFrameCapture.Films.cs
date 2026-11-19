@@ -25,12 +25,17 @@ namespace UnityRemix
             // without it would reuse the whole submesh's mesh (drawn over the coated part). The
             // coated sets grow with the coverage, so equal counts are equal triangle sets.
             meshHash = (meshHash ^ (ulong)(uint)triangles.Length) * 1099511628211UL;
+            // A later skin of the same mesh and skeleton (overlaySkinnedIds): lifted off the one
+            // under it, its own mesh.
+            bool lifted = overlaySkinnedIds.Contains(key);
+            if (lifted)
+                meshHash = (meshHash ^ 0x4C1F7EDUL) * 1099511628211UL;
             persistentSkinnedData[key] = new SkinnedMeshData
             {
                 meshId = key,
                 remixMeshHash = meshHash,
                 materialId = materialId,
-                vertices = skinData.bindVertices,
+                vertices = lifted ? LiftedVertices(skinData) : skinData.bindVertices,
                 normals = skinData.bindNormals,
                 uvs = skinData.uvs,
                 colors = skinData.colors,
@@ -40,6 +45,28 @@ namespace UnityRemix
                 skinningData = skinData
             };
             reusableValidSkinnedIds.Add(key);
+        }
+
+        // A copy of a mesh drawn over itself (ATLYSS's armour: a second skin of the body's mesh, a
+        // cutout drawn later at equal depth, which Unity's LEQUAL lets win): its bind-pose
+        // vertices moved out along their normals by OverlayLift, so it lies just above the skin
+        // under it in every ray and raster test. Coincident, half its pixels showed the body.
+        private const float OverlayLift = 0.0015f;
+        private readonly Dictionary<CachedSkinningData, Vector3[]> liftedVertices = new Dictionary<CachedSkinningData, Vector3[]>();
+
+        private Vector3[] LiftedVertices(CachedSkinningData skinData)
+        {
+            if (liftedVertices.TryGetValue(skinData, out var lifted))
+                return lifted;
+            var source = skinData.bindVertices;
+            var normals = skinData.bindNormals;
+            lifted = new Vector3[source.Length];
+            for (int v = 0; v < source.Length; v++)
+                lifted[v] = normals != null && v < normals.Length ? source[v] + normals[v].normalized * OverlayLift : source[v];
+            if (liftedVertices.Count > 256)
+                liftedVertices.Clear();
+            liftedVertices[skinData] = lifted;
+            return lifted;
         }
 
         // The submesh's triangles the film coats (their vertices' coverage values, each moved by a
