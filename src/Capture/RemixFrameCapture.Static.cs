@@ -887,7 +887,8 @@ namespace UnityRemix
                     uvST = uvST,
                     // The geometry is the mesh's own: uploaded once, scrolled by the draw (uvST).
                     bakeFrame = 1,
-                    glowFade = materialManager.GlowFade(matId, mat)
+                    glowFade = materialManager.GlowFade(matId, mat),
+                    cameraOnly = mat != null && (RemixMaterialManager.IsPanoramicSky(mat) || Games.GameProfiles.IsSkyDome(mat))
                 });
             }
         }

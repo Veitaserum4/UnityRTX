@@ -141,6 +141,11 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // A material the game draws as its sky around the world (a dome or sphere): only camera
+        // rays meet it, as with a panoramic sky (RemixMeshConverter.IsCameraOnly), so it shows
+        // and takes the fog without shadowing the world or blocking the sun and sky.
+        public virtual bool IsSkyDome(Material material) => false;
+
         // A material whose shader blends a colour over its texture in overlay mode (per channel:
         // 2 x texel x colour below a colour of one half, 1 - 2 (1 - colour)(1 - texel) above):
         // that colour, baked into the albedo. Not a multiply tint.

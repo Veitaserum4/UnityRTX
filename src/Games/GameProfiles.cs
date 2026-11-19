@@ -307,6 +307,14 @@ namespace UnityRemix.Games
             return aberration;
         }
 
+        public static bool IsSkyDome(Material material)
+        {
+            bool sky = false;
+            if (material != null)
+                Run(nameof(IsSkyDome), p => sky = p.IsSkyDome(material));
+            return sky;
+        }
+
         public static Color? GetOverlayTint(Material material)
         {
             bool found = false;

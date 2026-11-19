@@ -557,7 +557,7 @@ namespace UnityRemix
         // Main thread: whether only camera rays should meet a mesh drawn with these materials.
         public static bool IsCameraOnly(List<Material> materials) =>
             materials != null && materials.Count > 0 &&
-            materials.TrueForAll(RemixMaterialManager.IsPanoramicSky);
+            materials.TrueForAll(m => RemixMaterialManager.IsPanoramicSky(m) || Games.GameProfiles.IsSkyDome(m));
 
         public static void MapPanoramicSkies(ref Vector3[] vertices, ref Vector3[] normals, ref Vector2[] uvs, ref Color32[] colors,
                                               List<uint[]> submeshIndices, List<Material> submeshMaterials)

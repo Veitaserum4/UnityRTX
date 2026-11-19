@@ -1052,6 +1052,8 @@ namespace UnityRemix
 
                             if (meshHandle == IntPtr.Zero)
                                 continue;
+                            if (skinned.cameraOnly)
+                                meshConverter.RegisterCameraOnly(meshHandle, $"scrolling 0x{skinned.remixMeshHash:X16}");
 
                             int uploaded = skinned.vertexMap != null ? skinned.vertexMap.Length
                                 : skinned.usedVertexCount > 0 ? skinned.usedVertexCount : skinned.vertices.Length;

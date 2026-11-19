@@ -830,6 +830,8 @@ namespace UnityRemix
             public uint categoryFlags;
             // Multiplicative paint (with a decal category): drawn blending DST_COLOR * ZERO.
             public bool multiplyPaint;
+            // Only camera rays meet it (RemixMeshConverter.IsCameraOnly: a scrolling sky dome).
+            public bool cameraOnly;
             public float glowFade;  // an additive glow's live strength over its captured one (0: unset, 1)
             public Vector4 uvST;
             public int bakeFrame;
