@@ -89,10 +89,12 @@ namespace UnityRemix
         {
             srcAlpha = true;
             string s = mat.shader != null ? mat.shader.name : "";
-            if (s.IndexOf("Multiply", StringComparison.OrdinalIgnoreCase) >= 0)
-                return s.IndexOf("Double", StringComparison.OrdinalIgnoreCase) >= 0 ? ParticleBlendKind.MultiplyDouble : ParticleBlendKind.Multiply;
+            // Before Multiply: "Alpha Blended Premultiply" contains it, and as a multiply its
+            // particles (Unity's Default-Particle) were drawn black.
             if (s.IndexOf("Premultipl", StringComparison.OrdinalIgnoreCase) >= 0)
                 return ParticleBlendKind.Premultiplied;
+            if (s.IndexOf("Multiply", StringComparison.OrdinalIgnoreCase) >= 0)
+                return s.IndexOf("Double", StringComparison.OrdinalIgnoreCase) >= 0 ? ParticleBlendKind.MultiplyDouble : ParticleBlendKind.Multiply;
             if (s.IndexOf("Additive", StringComparison.OrdinalIgnoreCase) >= 0)
                 return ParticleBlendKind.Additive;
             // Shaders whose blend is set by _SrcBlend / _DstBlend (others, the psx ones among
