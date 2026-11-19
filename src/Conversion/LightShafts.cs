@@ -30,6 +30,8 @@ namespace UnityRemix
         }
 
         private static readonly Dictionary<int, Fit> fits = new Dictionary<int, Fit>();
+        private static readonly Dictionary<int, (Vector3[] positions, int[][] indices)> gpuMeshes =
+            new Dictionary<int, (Vector3[], int[][])>();
         private static readonly Dictionary<int, bool> replaced = new Dictionary<int, bool>();
         private static readonly List<Renderer> shafts = new List<Renderer>();
         private static ManualLogSource log;
@@ -91,6 +93,7 @@ namespace UnityRemix
             shafts.Clear();
             replaced.Clear();
             fits.Clear();
+            gpuMeshes.Clear();
         }
 
         /// <summary>This frame's shafts, into the frame state (main thread).</summary>
@@ -188,21 +191,50 @@ namespace UnityRemix
             if (fits.TryGetValue(id, out var cached))
                 return cached;
             Fit fit = null;
-            if (mesh.isReadable && (subMesh < 0 || subMesh < mesh.subMeshCount))
+            Vector3[] vertices = null;
+            Color32[] colors = null;
+            int[][] gpuIndices = null;
+            if (subMesh >= mesh.subMeshCount)
+                vertices = null;
+            else if (mesh.isReadable)
             {
-                var vertices = mesh.vertices;
-                var colors = mesh.colors32;
+                vertices = mesh.vertices;
+                colors = mesh.colors32;
                 if (colors != null && colors.Length != vertices.Length)
                     colors = null;
-                if (subMesh >= 0)
+            }
+            else
+            {
+                // Not readable (a static batch's combined mesh): positions and indices read back
+                // from the GPU, once per mesh for all its slices. No vertex colours this way.
+                int meshId = mesh.GetInstanceID();
+                if (!gpuMeshes.TryGetValue(meshId, out var read))
+                {
+                    read = NativeMeshReader.ReadMeshFromGPU(mesh, out var positions, out _, out _, out var subIndices)
+                        ? (positions, subIndices) : (null, null);
+                    gpuMeshes[meshId] = read;
+                }
+                vertices = read.positions;
+                gpuIndices = read.indices;
+                if (vertices != null && subMesh < 0)
+                    subMesh = -2; // the whole mesh, from its index lists
+            }
+            if (vertices != null)
+            {
+                if (subMesh >= 0 || subMesh == -2)
                 {
                     // Only the slice's vertices (the batch is the whole level's).
-                    var indices = mesh.GetIndices(subMesh);
+                    IEnumerable<int> indices = subMesh == -2
+                        ? (IEnumerable<int>)System.Linq.Enumerable.SelectMany(gpuIndices ?? new int[0][], x => x)
+                        : gpuIndices != null ? (subMesh < gpuIndices.Length ? gpuIndices[subMesh] : new int[0])
+                        : mesh.GetIndices(subMesh);
                     var used = new HashSet<int>(indices);
                     var sliceVertices = new List<Vector3>(used.Count);
                     var sliceColors = colors != null ? new List<Color32>(used.Count) : null;
                     foreach (int i in used)
                     {
+                        if (i < 0 || i >= vertices.Length)
+                            continue;
                         sliceVertices.Add(vertices[i]);
                         sliceColors?.Add(colors[i]);
                     }
@@ -211,7 +243,7 @@ namespace UnityRemix
                 }
                 fit = FitShaft(vertices, colors);
                 if (fit != null)
-                    fit.source = $"mesh '{mesh.name}'{(subMesh >= 0 ? $" submesh {subMesh}" : "")}, {vertices.Length} vertices";
+                    fit.source = $"mesh '{mesh.name}'{(subMesh >= 0 ? $" submesh {subMesh}" : "")}{(gpuIndices != null ? " (read from the GPU)" : "")}, {vertices.Length} vertices";
             }
             fits[id] = fit;
             return fit;
