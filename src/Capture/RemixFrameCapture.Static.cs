@@ -112,6 +112,9 @@ namespace UnityRemix
             {
                 if (renderer == null || !renderer.enabled || SceneMeshScanner.IsRenderingOff(renderer))
                     continue;
+                // Drawn as a volume instead (LightShafts).
+                if (LightShafts.Active && LightShafts.IsShaft(renderer))
+                    continue;
 
                 var info = GetOrCreateStaticInfo(renderer);
                 if (info.isPartOfStaticBatch && !scrollingRendererIds.Contains(info.rendererId))

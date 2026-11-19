@@ -334,6 +334,33 @@ namespace UnityRemix
                 }
             }
 
+            Section("Light shafts");
+            if (LightShafts.Enabled == null)
+                Note("Light shafts not initialized.");
+            else if (RemixAPI.DrawVolumeShaftsEXTFunc == null)
+                Note("This remix.dll cannot draw light shafts as volumes (remixapi_DrawVolumeShaftsEXT).");
+            else
+            {
+                bool shafts = LightShafts.Enabled.Value;
+                if (RemixImGui.Checkbox("Light shafts as volumes", ref shafts))
+                    LightShafts.Enabled.Value = shafts;
+                Tooltip("The game's fake light shafts (additive cones and boxes under windows and lamps) as glowing air: " +
+                        "brighter seen through more of them, cut softly by walls. Off: the game's sheets.");
+                if (shafts)
+                {
+                    RemixImGui.Indent();
+                    float strength = LightShafts.Brightness.Value;
+                    if (RemixImGui.SliderFloat("Strength##shafts", ref strength, 0f, 10f))
+                        LightShafts.Brightness.Value = strength;
+                    Tooltip("How brightly the shafts glow; 1 matches the game's sheet seen side-on.");
+                    float softness = LightShafts.Softness.Value;
+                    if (RemixImGui.SliderFloat("Edge softness##shafts", ref softness, 0f, 1f))
+                        LightShafts.Softness.Value = softness;
+                    Tooltip("The part of a shaft's half width over which it fades out at its sides.");
+                    RemixImGui.Unindent();
+                }
+            }
+
             Section("Water & glass");
             var water = _plugin.WaterManager;
             if (water == null)

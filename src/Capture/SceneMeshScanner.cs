@@ -46,6 +46,8 @@ namespace UnityRemix
             // (UpdateVisibility), redone when it goes inactive and then every 16th frame.
             WasInactive = 1 << 5,
             AncestorDisabled = 1 << 6,
+            // A light shaft (LightShafts.IsShaft): not drawn while it is drawn as a volume.
+            LightShaft = 1 << 7,
         }
 
         private struct ScannedRendererRef
@@ -654,7 +656,8 @@ namespace UnityRemix
                         }
 
                         // 2. Disabled renderer component (e.g. invisible brushes, disabled lights/props)
-                        if (!renderer.enabled || IsRenderingOff(renderer))
+                        if (!renderer.enabled || IsRenderingOff(renderer) ||
+                            ((instance.Flags & InstanceFlags.LightShaft) != 0 && LightShafts.Active))
                         {
                             culledDisabled++;
                             continue;
@@ -937,9 +940,10 @@ namespace UnityRemix
 
         private static InstanceFlags DetermineInstanceFlags(MeshFilter filter, Renderer renderer, bool isCombinedMesh)
         {
+            var shaft = LightShafts.IsShaft(renderer) ? InstanceFlags.LightShaft : InstanceFlags.None;
             if (isCombinedMesh)
-                return InstanceFlags.IsCombinedMesh;
-            return Games.GameProfiles.FollowsActiveState(filter, renderer) ? InstanceFlags.FollowsActiveState : InstanceFlags.None;
+                return InstanceFlags.IsCombinedMesh | shaft;
+            return (Games.GameProfiles.FollowsActiveState(filter, renderer) ? InstanceFlags.FollowsActiveState : InstanceFlags.None) | shaft;
         }
 
         private static bool IsDynamicOrIgnored(MeshFilter filter, Renderer renderer, bool isCombinedMesh)

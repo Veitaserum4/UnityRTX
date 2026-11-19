@@ -26,6 +26,7 @@ namespace UnityRemix
         {
             public Vector3 origin, axis, u, v;
             public float nearU, nearV, farU, farV, nearBright, farBright;
+            public string source;
         }
 
         private static readonly Dictionary<int, Fit> fits = new Dictionary<int, Fit>();
@@ -38,21 +39,24 @@ namespace UnityRemix
             log = logger;
             Enabled = config.Bind("Rendering", "LightShaftVolumes", true,
                 "Draw the fake light shafts a game's profile names (additive cones and boxes under windows and lamps) " +
-                "as glowing air: brighter seen through more of them, cut softly by walls. Takes effect on the next level load.");
-            Brightness = config.Bind("Rendering", "LightShaftBrightness", 1f,
-                "Light shaft volumes' brightness, 1 matching the game's sheet seen side-on.");
+                "as glowing air: brighter seen through more of them, cut softly by walls. Off: the game's sheets.");
+            Brightness = config.Bind("Rendering", "LightShaftBrightness", 2f,
+                "Light shaft volumes' strength, 1 matching the game's sheet seen side-on.");
             Softness = config.Bind("Rendering", "LightShaftSoftness", 0.5f,
                 "The part of a light shaft's half width over which it fades out at its sides (0 to 1).");
         }
 
+        /// <summary>Shafts are drawn as volumes (and their meshes not path-traced): on, and OpenRemix can.</summary>
+        public static bool Active => Enabled != null && Enabled.Value && RemixAPI.DrawVolumeShaftsEXTFunc != null;
+
         /// <summary>
-        /// Whether the renderer is a light shaft drawn as a volume (not path-traced as a mesh). Asked
-        /// as renderers are met; a shaft is then drawn each frame by Capture.
+        /// Whether the renderer is a light shaft OpenRemix can draw as a volume (while Active, its mesh
+        /// is not path-traced). Decided once per renderer, as renderers are met; a shaft is then drawn
+        /// each frame by Capture.
         /// </summary>
-        public static bool Replaces(Renderer renderer)
+        public static bool IsShaft(Renderer renderer)
         {
-            if (renderer == null || Enabled == null || !Enabled.Value || RemixAPI.DrawVolumeShaftsEXTFunc == null ||
-                !(renderer is MeshRenderer))
+            if (renderer == null || RemixAPI.DrawVolumeShaftsEXTFunc == null || !(renderer is MeshRenderer))
                 return false;
             int id = renderer.GetInstanceID();
             if (replaced.TryGetValue(id, out bool known))
@@ -61,11 +65,7 @@ namespace UnityRemix
             try
             {
                 if (Games.GameProfiles.IsLightShaft(renderer))
-                {
-                    var filter = renderer.GetComponent<MeshFilter>();
-                    yes = filter != null && GetFit(filter.sharedMesh) != null &&
-                          RemixMaterialManager.TryGetAdditiveGlow(renderer.sharedMaterial, out _);
-                }
+                    yes = GetFit(renderer, out _) != null && RemixMaterialManager.TryGetAdditiveGlow(renderer.sharedMaterial, out _);
             }
             catch (Exception e)
             {
@@ -76,7 +76,12 @@ namespace UnityRemix
             {
                 shafts.Add(renderer);
                 if (VerboseLog.On)
-                    log?.LogInfo($"[LightShafts] '{renderer.name}' ({renderer.sharedMaterial.name}) drawn as a volume");
+                {
+                    var fit = GetFit(renderer, out bool world);
+                    log?.LogInfo($"[LightShafts] '{renderer.name}' ({renderer.sharedMaterial.name}) drawn as a volume: " +
+                                 $"{fit.source}{(world ? " (world space)" : "")}, length {fit.axis.magnitude:F2}, near {fit.nearU:F2}x{fit.nearV:F2}, " +
+                                 $"far {fit.farU:F2}x{fit.farV:F2}, brightness {fit.nearBright:F2} to {fit.farBright:F2}");
+                }
             }
             return yes;
         }
@@ -92,6 +97,8 @@ namespace UnityRemix
         public static void Capture(RemixFrameCapture.FrameState state)
         {
             state.shafts.Clear();
+            if (!Active)
+                return;
             for (int i = shafts.Count - 1; i >= 0; i--)
             {
                 var r = shafts[i];
@@ -102,13 +109,28 @@ namespace UnityRemix
                 }
                 if (!r.enabled || !r.gameObject.activeInHierarchy || UnityCompat.IsForceRenderingOff(r))
                     continue;
-                var filter = r.GetComponent<MeshFilter>();
-                var fit = filter != null ? GetFit(filter.sharedMesh) : null;
+                var fit = GetFit(r, out bool world);
                 if (fit == null || !RemixMaterialManager.TryGetAdditiveGlow(r.sharedMaterial, out Color glow))
                     continue;
-                state.shafts.Add(ToRemix(fit, r.transform.localToWorldMatrix, glow, r.sharedMaterial));
+                state.shafts.Add(ToRemix(fit, world ? Matrix4x4.identity : r.transform.localToWorldMatrix, glow, r.sharedMaterial));
+            }
+            if (VerboseLog.On && state.frameCount - lastReport >= 600)
+            {
+                lastReport = state.frameCount;
+                string first = "";
+                if (state.shafts.Count > 0)
+                {
+                    var s = state.shafts[0];
+                    first = $"; first: origin ({s.origin.x:F1},{s.origin.y:F1},{s.origin.z:F1}) axis ({s.axis.x:F1},{s.axis.y:F1},{s.axis.z:F1}) " +
+                            $"half u ({s.halfU.x:F2},{s.halfU.y:F2},{s.halfU.z:F2}) v ({s.halfV.x:F2},{s.halfV.y:F2},{s.halfV.z:F2}) " +
+                            $"far scale {s.farScaleU:F2}/{s.farScaleV:F2} radiance ({s.radiance.x:F4},{s.radiance.y:F4},{s.radiance.z:F4}) fade {s.farFade:F2}";
+                }
+                log?.LogInfo($"[LightShafts] {shafts.Count} known, {state.shafts.Count} drawn this frame, last submit {lastResult}{first}");
             }
         }
+
+        private static int lastReport = -100000;
+        private static volatile string lastResult = "none";
 
         private static RemixAPI.remixapi_VolumeShaftEXT ToRemix(Fit fit, Matrix4x4 m, Color glow, Material material)
         {
@@ -144,19 +166,52 @@ namespace UnityRemix
         // Unity Y-up to Remix Z-up, as lights are.
         private static RemixAPI.remixapi_Float3D ToRemix(Vector3 p) => new RemixAPI.remixapi_Float3D(p.x, p.z, p.y);
 
-        private static Fit GetFit(Mesh mesh)
+        // The renderer's own geometry: the mesh the game rewrote for its batching
+        // (GameProfile.GetOriginalGeometry), else, in a static batch, its slice of the combined mesh
+        // (world space: `world`), else its mesh. Fitted once per mesh and slice.
+        private static Fit GetFit(Renderer renderer, out bool world)
         {
+            world = false;
+            var filter = renderer.GetComponent<MeshFilter>();
+            var mesh = filter != null ? filter.sharedMesh : null;
+            int subMesh = -1;
+            if (Games.GameProfiles.GetOriginalGeometry(renderer, out var original, out _))
+                mesh = original;
+            else if (renderer.isPartOfStaticBatch && renderer is MeshRenderer meshRenderer)
+            {
+                subMesh = meshRenderer.subMeshStartIndex;
+                world = true;
+            }
             if (mesh == null)
                 return null;
-            int id = mesh.GetInstanceID();
+            int id = mesh.GetInstanceID() * 397 ^ subMesh;
             if (fits.TryGetValue(id, out var cached))
                 return cached;
             Fit fit = null;
-            if (mesh.isReadable)
+            if (mesh.isReadable && (subMesh < 0 || subMesh < mesh.subMeshCount))
             {
                 var vertices = mesh.vertices;
                 var colors = mesh.colors32;
-                fit = FitShaft(vertices, colors != null && colors.Length == vertices.Length ? colors : null);
+                if (colors != null && colors.Length != vertices.Length)
+                    colors = null;
+                if (subMesh >= 0)
+                {
+                    // Only the slice's vertices (the batch is the whole level's).
+                    var indices = mesh.GetIndices(subMesh);
+                    var used = new HashSet<int>(indices);
+                    var sliceVertices = new List<Vector3>(used.Count);
+                    var sliceColors = colors != null ? new List<Color32>(used.Count) : null;
+                    foreach (int i in used)
+                    {
+                        sliceVertices.Add(vertices[i]);
+                        sliceColors?.Add(colors[i]);
+                    }
+                    vertices = sliceVertices.ToArray();
+                    colors = sliceColors?.ToArray();
+                }
+                fit = FitShaft(vertices, colors);
+                if (fit != null)
+                    fit.source = $"mesh '{mesh.name}'{(subMesh >= 0 ? $" submesh {subMesh}" : "")}, {vertices.Length} vertices";
             }
             fits[id] = fit;
             return fit;
@@ -250,7 +305,7 @@ namespace UnityRemix
                 buffer = new RemixAPI.remixapi_VolumeShaftEXT[Mathf.NextPowerOfTwo(count)];
             frameShafts.CopyTo(buffer);
             var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-            try { draw(handle.AddrOfPinnedObject(), (uint)count); }
+            try { lastResult = $"{count}: {draw(handle.AddrOfPinnedObject(), (uint)count)}"; }
             finally { handle.Free(); }
         }
     }
