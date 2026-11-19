@@ -162,8 +162,15 @@ namespace UnityRemix
                         skinPassesNext[passKey] = (Math.Min(seen.lowestQueue, queue), seen.count + 1);
                     else
                         skinPassesNext[passKey] = (queue, 1);
-                    if (skinPassesLast.TryGetValue(passKey, out var last) && last.count > 1 && queue > last.lowestQueue)
-                        overlaySkinnedIds.Add(skinnedId);
+                    if (skinPassesLast.TryGetValue(passKey, out var last) && last.count > 1)
+                    {
+                        if (queue > last.lowestQueue)
+                            overlaySkinnedIds.Add(skinnedId);
+                        if (loggedSkinPasses.Add(passKey ^ queue))
+                            logger.LogInfo($"[Skinned] '{go.name}' draws mesh '{sharedMesh.name}' like {last.count - 1} other skin(s) on its skeleton: " +
+                                           $"material '{info.primarySharedMaterial?.name}' queue {queue} (lowest {last.lowestQueue}): " +
+                                           (queue > last.lowestQueue ? "a decal over them" : "drawn as itself"));
+                    }
                 }
                 // Held by the camera (arms, weapons) or on a view-model layer: drawn as view models.
                 bool viewModel = IsViewModel(tr, go.layer, mainCamTransform, "skinned mesh");

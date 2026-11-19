@@ -250,6 +250,20 @@ namespace UnityRemix
                 logger.LogInfo(sky != null
                     ? $"[Sky] 3D skybox camera '{sky.name}' (mask 0x{GameCameraMasks.Get(sky):X8}, world 0x{GameCameraMasks.Get(worldCamera):X8}): sky layers {(names.Count > 0 ? string.Join(", ", names) : "none")}"
                     : "[Sky] no 3D skybox camera");
+                // Once per change: what the sky holds.
+                if (skyLayers != 0)
+                {
+                    int listed = 0;
+                    foreach (var r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+                    {
+                        if ((skyLayers & (1 << r.gameObject.layer)) == 0 || listed++ >= 40)
+                            continue;
+                        var m = r.sharedMaterial;
+                        logger.LogInfo($"[Sky]   '{r.name}' ({r.GetType().Name}, mesh '{r.GetComponent<MeshFilter>()?.sharedMesh?.name}'), material '{m?.name}' " +
+                                       $"shader '{m?.shader?.name}' queue {m?.renderQueue}, keywords [{(m != null ? string.Join(" ", m.shaderKeywords) : "")}], " +
+                                       $"scale {r.transform.lossyScale}, bounds {r.bounds.center} +- {r.bounds.extents}");
+                    }
+                }
             }
             if (sky == null)
                 return;
@@ -934,7 +948,8 @@ namespace UnityRemix
         private readonly Dictionary<int, CachedStaticRendererInfo> cachedStaticInfo = new Dictionary<int, CachedStaticRendererInfo>(1024);
         private readonly Dictionary<int, CachedSkinnedRendererInfo> cachedSkinnedInfo = new Dictionary<int, CachedSkinnedRendererInfo>(128);
         private readonly HashSet<int> reusableValidSkinnedIds = new HashSet<int>();
-        private readonly HashSet<int> overlaySkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: a later skin of the same mesh and skeleton
+        private readonly HashSet<int> overlaySkinnedIds = new HashSet<int>();
+        private readonly HashSet<long> loggedSkinPasses = new HashSet<long>(); // CaptureSkinnedMeshes: a later skin of the same mesh and skeleton
         private Dictionary<long, (int lowestQueue, int count)> skinPassesLast = new Dictionary<long, (int, int)>(),
                                                                skinPassesNext = new Dictionary<long, (int, int)>();
         private readonly HashSet<int> viewModelSkinnedIds = new HashSet<int>(); // CaptureSkinnedMeshes: under the camera
