@@ -338,6 +338,10 @@ namespace UnityRemix
             if (shader != null && !string.IsNullOrEmpty(shader.name))
             {
                 string sName = shader.name;
+                // Unity's sprite mask shader writes the stencil only (ColorMask 0): particle
+                // systems given its material (Sprites-Mask) draw nothing visible.
+                if (sName == "Sprites/Mask")
+                    return true;
                 // Fog effects (screen fog quads, fog spheres and walls) shade from scene depth, which a
                 // Remix surface cannot; drawn as surfaces they become white walls hiding the sky.
                 if (sName.IndexOf("Invisible", StringComparison.OrdinalIgnoreCase) >= 0 ||
