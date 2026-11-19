@@ -1349,6 +1349,27 @@ namespace UnityRemix
             return false;
         }
 
+        private static bool trailWorldBakeMissing;
+
+        // ParticleSystemBakeMeshOptions is Unity 2022.1's.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static void BakeTrailsWorld(ParticleSystemRenderer pr, Mesh mesh, Camera cam) =>
+            pr.BakeTrailsMesh(mesh, cam, ParticleSystemBakeMeshOptions.BakeRotationAndScale | ParticleSystemBakeMeshOptions.BakePosition);
+
+        private static bool BakeTrailsInWorld(ParticleSystemRenderer pr, Mesh mesh, Camera cam)
+        {
+            if (trailWorldBakeMissing || cam == null)
+                return false;
+            try
+            {
+                BakeTrailsWorld(pr, mesh, cam);
+                return true;
+            }
+            catch (MissingMethodException) { trailWorldBakeMissing = true; }
+            catch (TypeLoadException) { trailWorldBakeMissing = true; }
+            return false;
+        }
+
         private void BakeParticleTrails(
             ParticleSystemRenderer pr, 
             ParticleSystem ps, 
@@ -1365,14 +1386,17 @@ namespace UnityRemix
             try
             {
                 _reusableParticleTrailMesh.Clear();
-                // useTransform=false keeps vertices in the ParticleSystem's local space so we
-                // can apply the full TRS via localToWorld below. This correctly handles both
-                // world-space and local-space simulated particles (e.g. blood gibs attached to
-                // a moving transform). With useTransform=true Unity only applies R+S without
-                // the translation, which misplaces local-space particles.
+                // In world space where Unity can bake it so (2022.1): a world-space trail on a
+                // rotated, scaled transform (a weapon's, on a bone) is not that transform's local
+                // geometry. Before, useTransform=false gives the system's local space, placed by
+                // its transform below.
+                bool trailInWorld = BakeTrailsInWorld(pr, _reusableParticleTrailMesh, cam);
+                if (!trailInWorld)
+                {
 #pragma warning disable CS0618
-                pr.BakeTrailsMesh(_reusableParticleTrailMesh, cam, false);
+                    pr.BakeTrailsMesh(_reusableParticleTrailMesh, cam, false);
 #pragma warning restore CS0618
+                }
 
                 var trailMesh = _reusableParticleTrailMesh;
                 int vertexCount = trailMesh.vertexCount;
@@ -1423,11 +1447,7 @@ namespace UnityRemix
                                        $"normals {UnityCompat.MeshHasAttribute(trailMesh, UnityCompat.AttributeNormal)}, colors {UnityCompat.MeshHasAttribute(trailMesh, UnityCompat.AttributeColor)} | Remix {trailDescription}");
                     }
 
-                    // Use the full local-to-world matrix so position is correctly applied.
-                    // For world-space simulated particles the transform is usually identity/origin
-                    // and this is still correct. For local-space (e.g. attached-gib) particles
-                    // this is essential so the trails follow the gib in world space.
-                    Matrix4x4 trailLocalToWorld = pr.transform.localToWorldMatrix;
+                    Matrix4x4 trailLocalToWorld = trailInWorld ? Matrix4x4.identity : pr.transform.localToWorldMatrix;
 
                     // Read into reused buffers (a trail mesh is often tens of thousands of
                     // vertices a frame). Trails rarely carry normals: face the camera, as the
@@ -1475,7 +1495,8 @@ namespace UnityRemix
                     }
                     else
                     {
-                        Vector3 facing = cam != null ? pr.transform.InverseTransformDirection(-cam.transform.forward) : Vector3.up;
+                        Vector3 facing = cam == null ? Vector3.up
+                            : trailInWorld ? -cam.transform.forward : pr.transform.InverseTransformDirection(-cam.transform.forward);
                         facing = facing.sqrMagnitude > 1e-12f ? facing.normalized : Vector3.up;
                         for (int v = 0; v < vertexCount; v++)
                             normals[v] = facing;

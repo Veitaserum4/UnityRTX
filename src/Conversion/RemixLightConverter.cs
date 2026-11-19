@@ -34,6 +34,8 @@ namespace UnityRemix
         private readonly ManualLogSource logger;
         private readonly ConfigEntry<bool> configEnableLights;
         private readonly ConfigEntry<float> configLightIntensityMultiplier;
+        // Directional (distant) lights' multiplier, in place of the other lights'.
+        private readonly ConfigEntry<float> configDistantIntensityMultiplier;
         private readonly ConfigEntry<int> configDebugLogInterval;
         private readonly object apiLock;
         
@@ -47,6 +49,7 @@ namespace UnityRemix
         private readonly Dictionary<int, IntPtr> lightCache = new Dictionary<int, IntPtr>();
         private readonly Dictionary<int, UnityLightData> lastSubmittedLightData = new Dictionary<int, UnityLightData>();
         private float lastSubmittedIntensityMultiplier = -1f;
+        private float lastSubmittedDistantMultiplier = -1f;
 
         // Static lights: a level light unchanged for LightSettleFrames is recreated with
         // isDynamic = 0, so Forward+ can bake it and the path tracer keeps it in its static
@@ -123,6 +126,7 @@ namespace UnityRemix
             ManualLogSource logger,
             ConfigEntry<bool> enableLights,
             ConfigEntry<float> intensityMultiplier,
+            ConfigEntry<float> distantIntensityMultiplier,
             ConfigEntry<int> debugLogInterval,
             RemixAPI.remixapi_Interface remixInterface,
             object apiLock)
@@ -130,6 +134,7 @@ namespace UnityRemix
             this.logger = logger;
             this.configEnableLights = enableLights;
             this.configLightIntensityMultiplier = intensityMultiplier;
+            this.configDistantIntensityMultiplier = distantIntensityMultiplier;
             this.configDebugLogInterval = debugLogInterval;
             this.apiLock = apiLock;
             
@@ -339,6 +344,7 @@ namespace UnityRemix
                 lastSubmittedLightData.Clear();
                 lightStates.Clear();
                 lastSubmittedIntensityMultiplier = -1f;
+                lastSubmittedDistantMultiplier = -1f;
             }
 
             lock (lightDataLock)
@@ -403,8 +409,11 @@ namespace UnityRemix
                 return;
 
             float currentMultiplier = configLightIntensityMultiplier.Value;
-            bool multiplierChanged = Mathf.Abs(currentMultiplier - lastSubmittedIntensityMultiplier) > 0.0001f;
+            float currentDistant = configDistantIntensityMultiplier.Value;
+            bool multiplierChanged = Mathf.Abs(currentMultiplier - lastSubmittedIntensityMultiplier) > 0.0001f ||
+                                     Mathf.Abs(currentDistant - lastSubmittedDistantMultiplier) > 0.0001f;
             lastSubmittedIntensityMultiplier = currentMultiplier;
+            lastSubmittedDistantMultiplier = currentDistant;
 
             lock (cacheLock)
             {
@@ -584,7 +593,8 @@ namespace UnityRemix
                 // Remix radiance is linear; a Unity light's colour is sRGB-encoded (Unity linearizes
                 // it to light). Passed as is, coloured lights wash out (orange (1, 0.5, 0) is
                 // (1, 0.21, 0) linear). Intensity stays a linear scale: white lights are unchanged.
-                Color lightColor = light.color.linear * light.intensity * configLightIntensityMultiplier.Value;
+                float multiplier = light.type == LightType.Directional ? configDistantIntensityMultiplier.Value : configLightIntensityMultiplier.Value;
+                Color lightColor = light.color.linear * light.intensity * multiplier;
                 // A point or spot light's falloff as Unity's: 1 / (1 + 25 d^2 / range^2), which away
                 // from the light is range^2 / (25 d^2); a sphere of radius R and radiance L gives
                 // pi R^2 L / d^2, so L = range^2 / (25 pi R^2). The range itself is its reach

@@ -39,6 +39,7 @@ namespace UnityRemix
         private ConfigEntry<int> configDebugLogInterval;
         private ConfigEntry<bool> configEnableLights;
         private ConfigEntry<float> configLightIntensityMultiplier;
+        private ConfigEntry<float> configDistantLightIntensityMultiplier;
         private ConfigEntry<int> configTargetFPS;
         private ConfigEntry<string> configNativeBackend;
         private ConfigEntry<bool> configOpenRemixAsyncPresent;
@@ -313,6 +314,9 @@ namespace UnityRemix
                 new ConfigDescription("Global multiplier for all light intensities.",
                     new AcceptableValueRange<float>(0.01f, 100f)));
             RemixMaterialManager.LightIntensityMultiplier = configLightIntensityMultiplier;
+            configDistantLightIntensityMultiplier = Config.Bind("Lighting", "DistantIntensityMultiplier", 1f,
+                new ConfigDescription("Multiplier for directional (distant) light intensities, such as the sun and moon, in place of IntensityMultiplier.",
+                    new AcceptableValueRange<float>(0.01f, 100f)));
             
             // Performance Settings
             configTargetFPS = Config.Bind("Performance", "TargetFPS", 0,
@@ -572,6 +576,7 @@ namespace UnityRemix
                 LogSource,
                 configEnableLights,
                 configLightIntensityMultiplier,
+                configDistantLightIntensityMultiplier,
                 configDebugLogInterval,
                 remixInterface,
                 remixApiLock
@@ -1172,6 +1177,7 @@ namespace UnityRemix
                 case "MaxRenderDistance": return configMaxRenderDistance.Value;
                 case "ParticleMaxDistance": return configParticleMaxDistance.Value;
                 case "IntensityMultiplier": return configLightIntensityMultiplier.Value;
+                case "DistantIntensityMultiplier": return configDistantLightIntensityMultiplier.Value;
                 default: return 0f;
             }
         }
@@ -1255,6 +1261,7 @@ namespace UnityRemix
                 case "MaxRenderDistance": configMaxRenderDistance.Value = value; break;
                 case "ParticleMaxDistance": configParticleMaxDistance.Value = value; break;
                 case "IntensityMultiplier": configLightIntensityMultiplier.Value = value; break;
+                case "DistantIntensityMultiplier": configDistantLightIntensityMultiplier.Value = value; break;
             }
         }
 

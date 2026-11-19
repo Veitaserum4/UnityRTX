@@ -29,6 +29,7 @@ namespace UnityRemix
         private bool _enableSkybox;
         private int _skyboxFiltering;
         private float _lightIntensityMultiplier;
+        private float _distantLightIntensityMultiplier;
         private int _targetFPS;
         private bool _enableGameGeometry;
         private bool _enableDistanceCulling;
@@ -273,7 +274,10 @@ namespace UnityRemix
             Toggle("Game lights", "EnableLights", ref _enableLights, "Converts the game's Unity lights.");
             if (RemixImGui.SliderFloat("Intensity multiplier", ref _lightIntensityMultiplier, 0.01f, 100f))
                 _plugin.SetConfig("IntensityMultiplier", _lightIntensityMultiplier);
-            Tooltip("Scales every converted light.");
+            Tooltip("Scales every converted light but the distant ones.");
+            if (RemixImGui.SliderFloat("Distant light multiplier", ref _distantLightIntensityMultiplier, 0.01f, 100f))
+                _plugin.SetConfig("DistantIntensityMultiplier", _distantLightIntensityMultiplier);
+            Tooltip("Scales the game's directional lights (sun, moon) in place of the intensity multiplier.");
 
             Section("Sky");
             Toggle("Skybox (scene reload)", "EnableSkybox", ref _enableSkybox,
@@ -764,6 +768,7 @@ namespace UnityRemix
             _persistDisabledRenderers = _plugin.GetConfigBool("PersistDisabledRenderers");
             _enableLights = _plugin.GetConfigBool("EnableLights");
             _lightIntensityMultiplier = _plugin.GetConfigFloat("IntensityMultiplier");
+            _distantLightIntensityMultiplier = _plugin.GetConfigFloat("DistantIntensityMultiplier");
             _targetFPS = _plugin.GetConfigInt("TargetFPS");
             _captureStaticMeshes = _plugin.GetConfigBool("CaptureStaticMeshes");
             _captureSkinnedMeshes = _plugin.GetConfigBool("CaptureSkinnedMeshes");
