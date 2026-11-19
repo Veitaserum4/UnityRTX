@@ -18,6 +18,11 @@ namespace UnityRemix
         /// <summary>
         /// Capture static meshes from scene
         /// </summary>
+        private static float QuantizeChannel(float v) => Mathf.Round(v * 32f) / 32f;
+
+        private static Color Quantize(Color c) =>
+            new Color(QuantizeChannel(c.r), QuantizeChannel(c.g), QuantizeChannel(c.b), QuantizeChannel(c.a));
+
         public void CaptureStaticMeshes(FrameState state, int frameCount)
         {
             if (invalidateRequested)
@@ -245,6 +250,9 @@ namespace UnityRemix
                         col = sharedStaticMpb.GetColor(PropBaseColor);
                     if (col.a > 0f || col.r > 0f || col.g > 0f || col.b > 0f)
                     {
+                        // To 1/32 steps: a colour animated through the block (a fade) makes a
+                        // material per step, not one per frame.
+                        col = Quantize(col);
                         mpbColor = col;
                         Color32 c32 = col;
                         int colInt = (c32.a << 24) | (c32.r << 16) | (c32.g << 8) | c32.b;
@@ -253,6 +261,7 @@ namespace UnityRemix
                     Color emis = sharedStaticMpb.GetColor(PropEmissiveColor);
                     if (emis.a > 0f || emis.r > 0f || emis.g > 0f || emis.b > 0f)
                     {
+                        emis = Quantize(emis);
                         mpbEmissive = emis;
                         Color32 e32 = emis;
                         int emisInt = (e32.a << 24) | (e32.r << 16) | (e32.g << 8) | e32.b;

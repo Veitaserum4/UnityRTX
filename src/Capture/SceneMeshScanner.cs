@@ -60,6 +60,10 @@ namespace UnityRemix
             // copy stale, and the frame capture draws the renderer instead (Swapped).
             public MeshFilter Filter;
             public int MeshId, MaterialId;
+            // And the colour its property block gave it (animation drives material colours
+            // through the block: an attack effect's fade): one that changes is drawn by the
+            // frame capture too, which reads the block each frame.
+            public int BlockColour;
             public bool Swapped;
         }
 
@@ -79,7 +83,7 @@ namespace UnityRemix
             public GameObject SourceGameObject;
             public Transform SourceTransform;
             public MeshFilter SourceFilter;
-            public int SourceMeshId, SourceMaterialId;
+            public int SourceMeshId, SourceMaterialId, SourceBlockColour;
             public InstanceFlags Flags;
             // World up in the mesh's space: which faces take a top-colored material's top variant.
             public Vector3 ObjectUp;
@@ -297,6 +301,29 @@ namespace UnityRemix
         /// <summary>True if the renderer has materials and all of them are invisible.</summary>
         // Enabled, but drawn by Unity only into shadow maps or not at all: checked per frame
         // (both can change at runtime), next to renderer.enabled.
+        private static MaterialPropertyBlock colourBlock;
+        private static readonly int BlockColorProp = Shader.PropertyToID("_Color");
+        private static readonly int BlockBaseColorProp = Shader.PropertyToID("_BaseColor");
+        private static readonly int BlockEmissionProp = Shader.PropertyToID("_EmissionColor");
+
+        // The colours a renderer's property block sets (0: none).
+        private static int BlockColourKey(Renderer renderer)
+        {
+            if (renderer == null || !renderer.HasPropertyBlock())
+                return 0;
+            if (colourBlock == null)
+                colourBlock = new MaterialPropertyBlock();
+            renderer.GetPropertyBlock(colourBlock);
+            if (colourBlock.isEmpty)
+                return 0;
+            int key = unchecked((ColourBits(colourBlock.GetColor(BlockColorProp)) * 31 +
+                                 ColourBits(colourBlock.GetColor(BlockBaseColorProp))) * 31 +
+                                ColourBits(colourBlock.GetColor(BlockEmissionProp)));
+            return key == 0 ? 1 : key;
+        }
+
+        private static int ColourBits(Color32 c) => (c.a << 24) | (c.r << 16) | (c.g << 8) | c.b;
+
         public static bool IsRenderingOff(Renderer renderer) =>
             UnityCompat.IsForceRenderingOff(renderer) || renderer.shadowCastingMode == UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
 
@@ -692,7 +719,8 @@ namespace UnityRemix
                             var nowMesh = refObj.Filter.sharedMesh;
                             var nowMaterial = renderer.sharedMaterial;
                             if ((nowMesh != null ? nowMesh.GetInstanceID() : 0) != refObj.MeshId ||
-                                (nowMaterial != null ? nowMaterial.GetInstanceID() : 0) != refObj.MaterialId)
+                                (nowMaterial != null ? nowMaterial.GetInstanceID() : 0) != refObj.MaterialId ||
+                                BlockColourKey(renderer) != refObj.BlockColour)
                             {
                                 refObj.Swapped = true;
                                 instanceRenderers[i] = refObj;
@@ -1403,6 +1431,7 @@ int queued = 0;
                         SourceFilter = isCombinedMesh ? null : filter,
                         SourceMeshId = filter.sharedMesh != null ? filter.sharedMesh.GetInstanceID() : 0,
                         SourceMaterialId = renderer.sharedMaterial != null ? renderer.sharedMaterial.GetInstanceID() : 0,
+                        SourceBlockColour = BlockColourKey(renderer),
                         Flags = DetermineInstanceFlags(filter, renderer, isCombinedMesh),
                         ObjectUp = objectUp,
                         ObjectScale = objectScale,
@@ -1501,6 +1530,7 @@ int queued = 0;
                     Filter = entry.SourceFilter,
                     MeshId = entry.SourceMeshId,
                     MaterialId = entry.SourceMaterialId,
+                    BlockColour = entry.SourceBlockColour,
                 });
             }
 
