@@ -210,6 +210,7 @@ namespace UnityRemix
             return best ?? mainCam;
         }
         private Camera lastSkyCamera;
+        private Camera lastCapturedSkyCamera;
 
         public void OnSceneLoaded(UnityEngine.SceneManagement.Scene scene)
         {
@@ -260,6 +261,9 @@ namespace UnityRemix
             Color curBg = skyCam.backgroundColor;
 
             bool matChanged = (currentSkyMat != lastCapturedSkyMat);
+            // Another camera's sky (ATLYSS's character select backdrop, then an area's sky camera):
+            // its colour may sit within a recapture step of the last, which kept the old sky.
+            bool cameraChanged = skyCam != lastCapturedSkyCamera;
             bool flagsChanged = (curFlags != lastCapturedClearFlags);
             // A colour fading (a day/night cycle) recaptures in steps, not every frame.
             bool bgChanged = currentSkyMat == null && ColorDistance(curBg, lastCapturedBgColor) > BgRecaptureStep;
@@ -268,8 +272,9 @@ namespace UnityRemix
             bool sunMoved = lastCaptureProcedural && sunDirection != Vector3.zero && capturedSunDirection != Vector3.zero &&
                             Vector3.Angle(sunDirection, capturedSunDirection) > SunRecaptureAngle;
 
-            if (needsCapture || matChanged || flagsChanged || bgChanged || sunMoved)
+            if (needsCapture || matChanged || cameraChanged || flagsChanged || bgChanged || sunMoved)
             {
+                lastCapturedSkyCamera = skyCam;
                 if (sunMoved)
                     logger?.LogInfo($"[RemixSkyboxManager] Sun turned {Vector3.Angle(sunDirection, capturedSunDirection):F1} deg since the last capture, recapturing the sky.");
                 capturedSunDirection = sunDirection;
