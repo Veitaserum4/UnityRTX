@@ -14,7 +14,7 @@ namespace UnityRemix
     /// Manages discovery, heightmap geometry extraction, splatmap texture baking,
     /// and streaming of UnityEngine.Terrain objects into RTX Remix / OpenRemix.
     /// </summary>
-    public class RemixTerrainManager
+    public partial class RemixTerrainManager
     {
         private readonly ManualLogSource logger;
         private readonly RemixMeshConverter meshConverter;
@@ -36,6 +36,9 @@ namespace UnityRemix
             public float BoundsRadius;
             public Matrix4x4 LocalToWorld;
             public int Layer;
+            // Detail objects (grass, meshes scattered on the terrain): shown within the
+            // terrain's detailObjectDistance, as Unity draws them.
+            public bool IsDetail;
         }
 
         public struct TerrainInstanceData
@@ -47,6 +50,7 @@ namespace UnityRemix
             public float BoundsRadius;
             public int RendererInstanceId;
             public int TerrainId;
+            public bool IsDetail;
         }
 
         // Streaming queue: Main thread pushes extracted chunk data, Render thread drains batches
@@ -369,6 +373,17 @@ namespace UnityRemix
 
                     totalChunks++;
                 }
+            }
+
+            int heightmapChunks = chunksToQueue.Count;
+            try
+            {
+                ProcessTerrainDetails(terrain, tData, terrainId, localToWorld, layer, chunksToQueue);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"[RemixTerrain] Exception building detail objects of '{terrain.name}': {ex}");
+                chunksToQueue.RemoveRange(heightmapChunks, chunksToQueue.Count - heightmapChunks);
             }
 
             lock (streamLock)
@@ -709,6 +724,8 @@ namespace UnityRemix
                         continue;
                     if (terrainShown.TryGetValue(instance.TerrainId, out bool shown) && !shown)
                         continue;
+                    if (instance.IsDetail && !DetailShown(instance, cameraPosition))
+                        continue;
 
                     if (useDistanceCulling)
                     {
@@ -787,7 +804,8 @@ namespace UnityRemix
                     BoundsCenter = data.BoundsCenter,
                     BoundsRadius = data.BoundsRadius,
                     RendererInstanceId = (int)(data.ChunkMeshHash & 0x7FFFFFFF),
-                    TerrainId = data.TerrainId
+                    TerrainId = data.TerrainId,
+                    IsDetail = data.IsDetail
                 });
             }
 
