@@ -432,7 +432,7 @@ namespace UnityRemix
 
                 // An additive system drawn by the raster pass lights nothing: a light of its own.
                 if (look.IsAdditive && ParticleLights != null && ParticleLights.Value &&
-                    meshConverter.RasterParticles != null && meshConverter.RasterParticles.Value)
+                    meshConverter.RasterParticles != null && meshConverter.RasterParticles.Value && CastsParticleLight(pr))
                     AddParticleLight(pr, ps, look, actualAlive, camPos);
 
                 // Capture trails if enabled on this particle system
@@ -1368,6 +1368,16 @@ namespace UnityRemix
         private int MaxParticleLights => MaxParticleLightCount != null ? Math.Max(1, MaxParticleLightCount.Value) : 32;
         private readonly List<UnityLightData> particleLights = new List<UnityLightData>();
         private readonly List<float> particleLightScores = new List<float>();
+        // GameProfile.CastsParticleLight, once per renderer.
+        private readonly Dictionary<int, bool> castsParticleLight = new Dictionary<int, bool>();
+
+        private bool CastsParticleLight(ParticleSystemRenderer pr)
+        {
+            int id = pr.GetInstanceID();
+            if (!castsParticleLight.TryGetValue(id, out bool casts))
+                castsParticleLight[id] = casts = Games.GameProfiles.CastsParticleLight(pr);
+            return casts;
+        }
         private static readonly ulong ParticleLightHash = HashUtils.HashStringFNV("UnityRTX.ParticleLight");
 
         // A point light for an additive particle system: at its particles' centre, weighted by what

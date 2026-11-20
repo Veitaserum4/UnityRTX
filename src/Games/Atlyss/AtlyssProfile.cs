@@ -85,6 +85,25 @@ namespace UnityRemix.Games.Atlyss
             return texture != null && texture.name == "Swoosh01";
         }
 
+        // Faint additive haze that is no light source: dust kicked up by moving (footsteps,
+        // landing, dashing, sweeping) and water ripples (in puddles, and the rain's under its
+        // _weatherEffect_*). Its torches and braziers share the dust's material
+        // (_particleMaterial_waterCloud): told apart by the system's name or an ancestor's.
+        private static readonly string[] UnlitParticleNames =
+            { "footstep", "_effect_land", "_effect_dash", "broomsweep", "ripple", "weathereffect" };
+
+        public override bool CastsParticleLight(ParticleSystemRenderer renderer)
+        {
+            for (var t = renderer.transform; t != null; t = t.parent)
+            {
+                string name = t.name;
+                foreach (var unlit in UnlitParticleNames)
+                    if (name.IndexOf(unlit, StringComparison.OrdinalIgnoreCase) >= 0)
+                        return false;
+            }
+            return true;
+        }
+
         // The minimap's icons (SpriteRenderers on Minimap, drawn by _camera_overworldMinimap into
         // the map): never in the world.
         private int minimapLayer = -2;

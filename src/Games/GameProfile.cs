@@ -101,6 +101,11 @@ namespace UnityRemix.Games
         // material additive. Asked once per renderer, when it is first met.
         public virtual bool IsLightShaft(Renderer renderer) => false;
 
+        // An additive particle system that gets particle lights (Lighting.ParticleLights): false for
+        // faint haze the game draws additively but that is no light source (dust kicked up,
+        // ripples). Asked once per renderer.
+        public virtual bool CastsParticleLight(ParticleSystemRenderer renderer) => true;
+
         // Adds the game's own per-frame meshes (geometry Unity's renderers don't show).
         public virtual void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) { }
 

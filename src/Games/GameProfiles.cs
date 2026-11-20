@@ -94,6 +94,13 @@ namespace UnityRemix.Games
             return hidden;
         }
 
+        public static bool CastsParticleLight(ParticleSystemRenderer renderer)
+        {
+            bool casts = true;
+            Run(nameof(CastsParticleLight), p => casts = p.CastsParticleLight(renderer));
+            return casts;
+        }
+
         public static bool IsLightShaft(Renderer renderer)
         {
             bool shaft = false;
