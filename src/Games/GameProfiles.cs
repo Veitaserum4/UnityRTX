@@ -94,6 +94,13 @@ namespace UnityRemix.Games
             return hidden;
         }
 
+        public static int GhostVertexChannel(SkinnedMeshRenderer renderer)
+        {
+            int channel = -1;
+            Run(nameof(GhostVertexChannel), p => { int c = p.GhostVertexChannel(renderer); if (c >= 0) channel = c; });
+            return channel;
+        }
+
         public static float RainIntensity()
         {
             float rain = 0f;

@@ -49,6 +49,7 @@ namespace UnityRemix
             viewModelSkinnedIds.Clear();
             playerBodySkinnedIds.Clear();
             overlaySkinnedIds.Clear();
+            ghostSkinnedChannels.Clear();
             // Last frame's skins by mesh and skeleton; this frame's gathered for the next.
             var swapOverlay = skinPassesLast;
             skinPassesLast = skinPassesNext;
@@ -183,6 +184,9 @@ namespace UnityRemix
                     viewModelSkinnedIds.Add(skinnedId);
                 if (playerBody)
                     playerBodySkinnedIds.Add(skinnedId);
+                int ghost = GhostChannel(skinned);
+                if (ghost >= 0)
+                    ghostSkinnedChannels[skinnedId] = ghost;
                 // Also register per-submesh sub-keys so they survive the stale-pruning pass and
                 // carry the view-model and player-body flags. Entries exist per submesh, which
                 // can outnumber the materials (V1's body weapons: one material, four submeshes).
@@ -200,6 +204,8 @@ namespace UnityRemix
                             playerBodySkinnedIds.Add(subKey);
                         if (overlaySkinnedIds.Contains(skinnedId))
                             overlaySkinnedIds.Add(subKey);
+                        if (ghostSkinnedChannels.TryGetValue(skinnedId, out int subGhost))
+                            ghostSkinnedChannels[subKey] = subGhost;
                     }
                 }
                 

@@ -110,6 +110,12 @@ namespace UnityRemix.Games
         // with it (Materials.RainWetness). Main thread, each frame: keep it cheap.
         public virtual float RainIntensity() => 0f;
 
+        // A skinned renderer whose shader hides part of it by a vertex colour channel (0 r, 1 g,
+        // 2 b, 3 a; PEAK's first-person body, dithered away where red is low): its triangles whose
+        // vertices' channel averages below one half are left out. -1: none. Asked once per
+        // renderer, again when the renderer cache refreshes.
+        public virtual int GhostVertexChannel(SkinnedMeshRenderer renderer) => -1;
+
         // Adds the game's own per-frame meshes (geometry Unity's renderers don't show).
         public virtual void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) { }
 

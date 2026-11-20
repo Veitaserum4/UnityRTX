@@ -152,6 +152,13 @@ namespace UnityRemix
             for (int l = 0; l < topLayers.Count; l++) { var layer = topLayers[l]; layer.color = Lin(layer.color); topLayers[l] = layer; }
             Color baseColor = Lin(material.GetColor("_BaseColor"));
             Color tint = material.HasProperty("_Tint") ? Lin(material.GetColor("_Tint")) : Color.white;
+            // A character's skin (PEAK's W/Character, _USESKINTONE_ON): the player's chosen colour
+            // (_SkinColor, set per character) in place of the tint, a placeholder red.
+            if (HasKeyword(material, "_USESKINTONE_ON") && material.HasProperty("_SkinColor"))
+            {
+                Color skin = material.GetColor("_SkinColor");
+                tint = Lin(new Color(skin.r, skin.g, skin.b, 1f));
+            }
             Color topColor = top ? Lin(material.GetColor("_TopColor")) : Color.white;
             float topAmount = top && material.HasProperty("_TopColorAmount") ? Mathf.Clamp01(material.GetFloat("_TopColorAmount")) : 1f;
             Texture shape = material.HasProperty("_Shape") ? material.GetTexture("_Shape") : null;

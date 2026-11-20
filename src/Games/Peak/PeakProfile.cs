@@ -81,6 +81,23 @@ namespace UnityRemix.Games.Peak
             return body;
         }
 
+        // The local character's body (HideTheBody.body), ghosted in part: W/Character keeps a
+        // texel where its vertex red reaches a dither value, so the arms and legs (red) stay
+        // and the torso goes.
+        public override int GhostVertexChannel(SkinnedMeshRenderer renderer)
+        {
+            if (!bodyLookedUp)
+                IsPlayerBody(renderer);
+            if (hideTheBodyType == null || characterType == null || isLocalProperty == null)
+                return -1;
+            var character = renderer.GetComponentInParent(characterType);
+            if (character == null || !(bool)isLocalProperty.GetValue(character))
+                return -1;
+            var hide = character.GetComponentInChildren(hideTheBodyType, true);
+            var bodyField = hide != null ? AccessTools.Field(hideTheBodyType, "body") : null;
+            return bodyField != null && ReferenceEquals(bodyField.GetValue(hide), renderer) ? 0 : -1;
+        }
+
         private bool GhostedWhole(Component hide, Renderer renderer)
         {
             if (ReferenceEquals(hideHeadField.GetValue(hide), renderer) ||

@@ -30,6 +30,14 @@ namespace UnityRemix
             bool lifted = overlaySkinnedIds.Contains(key);
             if (lifted)
                 meshHash = (meshHash ^ 0x4C1F7EDUL) * 1099511628211UL;
+            // Part hidden by a vertex colour (GameProfile.GhostVertexChannel): those triangles out.
+            if (ghostSkinnedChannels.TryGetValue(key, out int ghostChannel) && skinData.colors != null)
+            {
+                triangles = GhostKept(triangles, skinData.colors, ghostChannel);
+                if (triangles.Length == 0)
+                    return;
+                meshHash = (meshHash ^ (0x6057UL + (ulong)ghostChannel)) * 1099511628211UL;
+            }
             persistentSkinnedData[key] = new SkinnedMeshData
             {
                 meshId = key,
@@ -45,6 +53,52 @@ namespace UnityRemix
                 skinningData = skinData
             };
             reusableValidSkinnedIds.Add(key);
+        }
+
+        // Renderers part-hidden by a vertex colour channel this frame (sub-keys included), and
+        // GameProfile.GhostVertexChannel's answer per renderer.
+        private readonly Dictionary<int, int> ghostSkinnedChannels = new Dictionary<int, int>();
+        private readonly Dictionary<int, int> ghostChannelAnswers = new Dictionary<int, int>();
+        private readonly Dictionary<int[], int[]> ghostKeptTriangles = new Dictionary<int[], int[]>();
+
+        private int GhostChannel(SkinnedMeshRenderer renderer)
+        {
+            int id = renderer.GetInstanceID();
+            if (!ghostChannelAnswers.TryGetValue(id, out int channel))
+                ghostChannelAnswers[id] = channel = Games.GameProfiles.GhostVertexChannel(renderer);
+            return channel;
+        }
+
+        // The triangles whose vertices' channel averages one half or more, cached per triangle array.
+        private int[] GhostKept(int[] triangles, Color32[] colors, int channel)
+        {
+            if (ghostKeptTriangles.TryGetValue(triangles, out var kept))
+                return kept;
+            var list = new List<int>(triangles.Length);
+            for (int t = 0; t + 2 < triangles.Length; t += 3)
+            {
+                int sum = 0;
+                for (int k = 0; k < 3; k++)
+                {
+                    int v = triangles[t + k];
+                    if (v < colors.Length)
+                    {
+                        var c = colors[v];
+                        sum += channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : c.a;
+                    }
+                }
+                if (sum >= 3 * 128)
+                {
+                    list.Add(triangles[t]);
+                    list.Add(triangles[t + 1]);
+                    list.Add(triangles[t + 2]);
+                }
+            }
+            kept = list.ToArray();
+            if (ghostKeptTriangles.Count > 64)
+                ghostKeptTriangles.Clear();
+            ghostKeptTriangles[triangles] = kept;
+            return kept;
         }
 
         // A copy of a mesh drawn over itself (armour as a second skin of the body's mesh, a

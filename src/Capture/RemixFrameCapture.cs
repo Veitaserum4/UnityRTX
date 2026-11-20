@@ -1196,6 +1196,7 @@ namespace UnityRemix
             scrollingRendererIds.Clear();
             // Asked again: a game may know its player's body only after it has spawned.
             playerBodyRenderers.Clear();
+            ghostChannelAnswers.Clear();
             cachedScrollingRenderers.Clear();
             RemixScrollingTextureDetector.ClearCache();
             skinnedIdOwners.Clear();
@@ -1240,6 +1241,7 @@ namespace UnityRemix
             scrollingRendererIds.Clear();
             // Asked again: a game may know its player's body only after it has spawned.
             playerBodyRenderers.Clear();
+            ghostChannelAnswers.Clear();
             cachedScrollingRenderers.Clear();
             // The scroll detection cache is kept (cleared on scene load): re-detecting every
             // renderer here made each refresh a spike. Property-block scrolling is still seen
