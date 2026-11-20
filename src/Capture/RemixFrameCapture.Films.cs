@@ -35,8 +35,8 @@ namespace UnityRemix
             // and shadows whole, as the game's own reflection and shadow casters show it).
             if (ghostSkinnedChannels.TryGetValue(key, out int ghostChannel) && skinData.colors != null)
             {
-                var kept = GhostKept(triangles, skinData.colors, ghostChannel);
-                if (kept.Length > 0)
+                var cut = GhostCut(skinData, triangles, ghostChannel);
+                if (cut != null)
                 {
                     int keptKey = (int)((uint)key ^ 0x6057C0DEu);
                     persistentSkinnedData[keptKey] = new SkinnedMeshData
@@ -44,14 +44,14 @@ namespace UnityRemix
                         meshId = keptKey,
                         remixMeshHash = (meshHash ^ (0x6057UL + (ulong)ghostChannel)) * 1099511628211UL,
                         materialId = materialId,
-                        vertices = skinData.bindVertices,
-                        normals = skinData.bindNormals,
-                        uvs = skinData.uvs,
-                        colors = skinData.colors,
-                        triangles = kept,
+                        vertices = cut.bindVertices,
+                        normals = cut.bindNormals,
+                        uvs = cut.uvs,
+                        colors = cut.colors,
+                        triangles = cut.triangles,
                         localToWorld = localToWorld,
                         boneTransforms = boneMatrices,
-                        skinningData = skinData,
+                        skinningData = cut,
                         cameraOnly = true
                     };
                     reusableValidSkinnedIds.Add(keptKey);
@@ -79,7 +79,6 @@ namespace UnityRemix
         // GameProfile.GhostVertexChannel's answer per renderer.
         private readonly Dictionary<int, int> ghostSkinnedChannels = new Dictionary<int, int>();
         private readonly Dictionary<int, int> ghostChannelAnswers = new Dictionary<int, int>();
-        private readonly Dictionary<int[], int[]> ghostKeptTriangles = new Dictionary<int[], int[]>();
 
         private int GhostChannel(SkinnedMeshRenderer renderer)
         {
@@ -89,36 +88,120 @@ namespace UnityRemix
             return channel;
         }
 
-        // The triangles whose vertices' channel averages below one half, cached per triangle array.
-        private int[] GhostKept(int[] triangles, Color32[] colors, int channel)
+        // The part of a mesh where the channel is below one half, cut along where it crosses one
+        // half: each triangle clipped against that line (its vertices keep their indices; a
+        // crossed edge gets a vertex, shared by the triangles on it, its attributes and bone
+        // weights interpolated), so the edge follows the mesh's own boundary. Its own skinning
+        // data (a mesh of its own); cached per triangle array.
+        private readonly Dictionary<int[], CachedSkinningData> ghostCuts = new Dictionary<int[], CachedSkinningData>();
+
+        private CachedSkinningData GhostCut(CachedSkinningData skin, int[] triangles, int channel)
         {
-            if (ghostKeptTriangles.TryGetValue(triangles, out var kept))
-                return kept;
-            var list = new List<int>(triangles.Length);
-            for (int t = 0; t + 2 < triangles.Length; t += 3)
+            if (ghostCuts.TryGetValue(triangles, out var cached))
+                return cached;
+            var colors = skin.colors;
+            int n = skin.bindVertices.Length, bpv = Mathf.Max(1, skin.bonesPerVertex);
+            float Value(int v)
             {
-                int sum = 0;
-                for (int k = 0; k < 3; k++)
+                if (v >= colors.Length) return 0f;
+                var c = colors[v];
+                return (channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : c.a) / 255f;
+            }
+            var pos = new List<Vector3>(skin.bindVertices);
+            var nrm = skin.bindNormals != null && skin.bindNormals.Length == n ? new List<Vector3>(skin.bindNormals) : null;
+            var uv = skin.uvs != null && skin.uvs.Length == n ? new List<Vector2>(skin.uvs) : null;
+            var col = new List<Color32>(colors);
+            bool hasWeights = skin.blendWeights != null && skin.blendIndices != null &&
+                              skin.blendWeights.Length >= n * bpv && skin.blendIndices.Length >= n * bpv;
+            var weights = hasWeights ? new List<float>(skin.blendWeights) : null;
+            var indices = hasWeights ? new List<uint>(skin.blendIndices) : null;
+            var edgeVertex = new Dictionary<long, int>();
+            var bones = new Dictionary<uint, float>();
+            var strongest = new List<KeyValuePair<uint, float>>();
+
+            int Split(int a, int b)
+            {
+                long edge = a < b ? ((long)a << 32) | (uint)b : ((long)b << 32) | (uint)a;
+                if (edgeVertex.TryGetValue(edge, out int made))
+                    return made;
+                float va = Value(a), vb = Value(b);
+                float t = Mathf.Abs(vb - va) > 1e-6f ? Mathf.Clamp01((0.5f - va) / (vb - va)) : 0.5f;
+                int v = pos.Count;
+                pos.Add(Vector3.Lerp(pos[a], pos[b], t));
+                nrm?.Add(Vector3.Lerp(nrm[a], nrm[b], t).normalized);
+                uv?.Add(Vector2.Lerp(uv[a], uv[b], t));
+                col.Add(Color32.Lerp(col[a], col[b], t));
+                if (hasWeights)
                 {
-                    int v = triangles[t + k];
-                    if (v < colors.Length)
+                    // Both ends' bones, weighted, the strongest bpv of them renormalised.
+                    bones.Clear();
+                    for (int k = 0; k < bpv; k++)
                     {
-                        var c = colors[v];
-                        sum += channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : c.a;
+                        uint ia = skin.blendIndices[a * bpv + k], ib = skin.blendIndices[b * bpv + k];
+                        bones.TryGetValue(ia, out float wa);
+                        bones[ia] = wa + skin.blendWeights[a * bpv + k] * (1f - t);
+                        bones.TryGetValue(ib, out float wb);
+                        bones[ib] = wb + skin.blendWeights[b * bpv + k] * t;
+                    }
+                    strongest.Clear();
+                    strongest.AddRange(bones);
+                    strongest.Sort((x, y) => y.Value.CompareTo(x.Value));
+                    float total = 0f;
+                    for (int k = 0; k < bpv && k < strongest.Count; k++) total += strongest[k].Value;
+                    for (int k = 0; k < bpv; k++)
+                    {
+                        bool has = k < strongest.Count && total > 0f;
+                        indices.Add(has ? strongest[k].Key : 0u);
+                        weights.Add(has ? strongest[k].Value / total : 0f);
                     }
                 }
-                if (sum < 3 * 128)
+                edgeVertex[edge] = v;
+                return v;
+            }
+
+            var tris = new List<int>(triangles.Length);
+            var poly = new List<int>(4);
+            for (int t = 0; t + 2 < triangles.Length; t += 3)
+            {
+                poly.Clear();
+                for (int k = 0; k < 3; k++)
                 {
-                    list.Add(triangles[t]);
-                    list.Add(triangles[t + 1]);
-                    list.Add(triangles[t + 2]);
+                    int a = triangles[t + k], b = triangles[t + (k + 1) % 3];
+                    bool inA = Value(a) < 0.5f, inB = Value(b) < 0.5f;
+                    if (inA)
+                        poly.Add(a);
+                    if (inA != inB)
+                        poly.Add(Split(a, b));
+                }
+                for (int k = 1; k + 1 < poly.Count; k++)
+                {
+                    tris.Add(poly[0]);
+                    tris.Add(poly[k]);
+                    tris.Add(poly[k + 1]);
                 }
             }
-            kept = list.ToArray();
-            if (ghostKeptTriangles.Count > 64)
-                ghostKeptTriangles.Clear();
-            ghostKeptTriangles[triangles] = kept;
-            return kept;
+            CachedSkinningData result = null;
+            if (tris.Count > 0)
+            {
+                result = new CachedSkinningData
+                {
+                    bindVertices = pos.ToArray(),
+                    bindNormals = nrm?.ToArray(),
+                    uvs = uv?.ToArray(),
+                    colors = col.ToArray(),
+                    triangles = tris.ToArray(),
+                    blendWeights = weights?.ToArray() ?? skin.blendWeights,
+                    blendIndices = indices?.ToArray() ?? skin.blendIndices,
+                    bonesPerVertex = skin.bonesPerVertex,
+                    boneCount = skin.boneCount,
+                    bindPoses = skin.bindPoses
+                };
+                result.submeshTriangles = new[] { result.triangles };
+            }
+            if (ghostCuts.Count > 64)
+                ghostCuts.Clear();
+            ghostCuts[triangles] = result;
+            return result;
         }
 
         // A copy of a mesh drawn over itself (armour as a second skin of the body's mesh, a
