@@ -659,7 +659,7 @@ namespace UnityRemix
                         pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r) * 255f);
                         pixelData[i * 4 + 1] = (byte)(Mathf.Clamp01(g) * 255f);
                         pixelData[i * 4 + 2] = (byte)(Mathf.Clamp01(b) * 255f);
-                        pixelData[i * 4 + 3] = colorMask.baseInMaskAlpha ? (byte)255 : basePixels[i].a;
+                        pixelData[i * 4 + 3] = colorMask.coverageInMaskRed ? m.r : colorMask.baseInMaskAlpha ? (byte)255 : basePixels[i].a;
                         if (metalData != null)
                         {
                             float metal = 1f - (1f - mr * c1.a) * (1f - mg * c2.a) * (1f - mb * c3.a);

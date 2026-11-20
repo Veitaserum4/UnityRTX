@@ -124,6 +124,9 @@ namespace UnityRemix
             public Color color1, color2, color3;
             public float weight;
             public bool baseInMaskAlpha;
+            // The texel's coverage (alpha) is the mask's red, not the base's alpha (a sticker
+            // whose shape is its mask: PEAK's eyes).
+            public bool coverageInMaskRed;
             public bool metalFromColorAlpha;
             public float metalRoughness;
 
@@ -138,7 +141,7 @@ namespace UnityRemix
                         h = h * 397 ^ ((q.r << 24) | (q.g << 16) | (q.b << 8) | q.a);
                     }
                     h = h * 397 ^ Mathf.RoundToInt(weight * 1000f);
-                    h = h * 397 ^ (baseInMaskAlpha ? 1 : 0) ^ (metalFromColorAlpha ? 2 : 0);
+                    h = h * 397 ^ (baseInMaskAlpha ? 1 : 0) ^ (metalFromColorAlpha ? 2 : 0) ^ (coverageInMaskRed ? 4 : 0);
                     return h * 397 ^ Mathf.RoundToInt(metalRoughness * 1000f);
                 }
             }

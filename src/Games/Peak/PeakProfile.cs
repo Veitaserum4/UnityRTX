@@ -112,6 +112,34 @@ namespace UnityRemix.Games.Peak
             return face != null && renderer.transform.IsChildOf(face);
         }
 
+        // The eyes (GD/Face Cards with _IsEyes): their texture is a mask, red the eye's shape
+        // and green its iris, which the shader draws in fixed colours (a navy ring, a cream
+        // iris) and cuts out where red is absent. Baked as a colour mask on a white base, its
+        // coverage the red.
+        private static readonly Color EyeRing = new Color(0.05f, 0.05f, 0.23f), EyeIris = new Color(0.98f, 0.95f, 0.80f);
+
+        public override bool GetColorMask(Material material, MaterialPropertyBlock block, out RemixMaterialManager.ColorMask colorMask)
+        {
+            colorMask = default;
+            if (material.shader == null || material.shader.name != "GD/Face Cards" || !material.HasProperty("_IsEyes") ||
+                material.GetFloat("_IsEyes") < 0.5f)
+                return false;
+            var mask = material.GetTexture("_MainTex") as Texture2D;
+            if (mask == null)
+                return false;
+            colorMask = new RemixMaterialManager.ColorMask
+            {
+                mask = mask,
+                color1 = EyeRing,
+                color2 = EyeIris,
+                color3 = Color.white,
+                weight = 1f,
+                baseInMaskAlpha = true,
+                coverageInMaskRed = true
+            };
+            return true;
+        }
+
         private static Vector3 Axis(int i) => i == 0 ? Vector3.right : i == 1 ? Vector3.up : Vector3.forward;
 
         public override bool IsHiddenRenderer(Renderer renderer)
