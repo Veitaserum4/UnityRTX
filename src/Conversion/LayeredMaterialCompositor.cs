@@ -167,6 +167,20 @@ namespace UnityRemix
             Texture baseTexture = material.HasProperty("_BaseTexture") ? material.GetTexture("_BaseTexture") : null;
             float baseAmount = material.HasProperty("_BaseTexAmount") ? Mathf.Clamp01(material.GetFloat("_BaseTexAmount")) : 1f;
             Color[] basePixels = baseTexture != null ? ParticleMaterialSnapshot.Read(baseTexture, size) : null;
+            // A main texture that multiplies the colour at its own tiling (PEAK's W/Character,
+            // which has _MainTexMovement: layers x skin or tint x _MainTex x vertex colour); in a
+            // box-projected composite, its mean.
+            Texture mainTexture = material.HasProperty("_MainTexMovement") && material.HasProperty("_MainTex") ? material.GetTexture("_MainTex") : null;
+            Color[] mainPixels = mainTexture != null ? ParticleMaterialSnapshot.Read(mainTexture, size) : null;
+            Vector2 mainScale = mainTexture != null ? material.GetTextureScale("_MainTex") : Vector2.one;
+            Vector2 mainOffset = mainTexture != null ? material.GetTextureOffset("_MainTex") : Vector2.zero;
+            Color mainMean = Color.white;
+            if (mainPixels != null)
+            {
+                Color sum = Color.clear;
+                foreach (var px in mainPixels) sum += px;
+                mainMean = sum / mainPixels.Length;
+            }
             // Projected: the composite is laid out in box-projected UVs (ProjectionScale), where the
             // triplanar layers show their pattern; otherwise in mesh UVs, where the UV layers do.
             float projection = ProjectionScale(material);
@@ -187,6 +201,17 @@ namespace UnityRemix
                     if (basePixels != null)
                         c *= Color.Lerp(Color.white, basePixels[i], baseAmount);
                     c = ApplyLayers(c, layers, masks, means, x, y, size, reference) * tint;
+                    if (mainPixels != null)
+                    {
+                        if (projection > 0f)
+                            c *= mainMean;
+                        else
+                        {
+                            float mu = ((x + 0.5f) / size) * mainScale.x + mainOffset.x, mv = ((y + 0.5f) / size) * mainScale.y + mainOffset.y;
+                            int mx = (int)((mu - Mathf.Floor(mu)) * size), my = (int)((mv - Mathf.Floor(mv)) * size);
+                            c *= mainPixels[Mathf.Clamp(my, 0, size - 1) * size + Mathf.Clamp(mx, 0, size - 1)];
+                        }
+                    }
                     // the top color is not tinted (PEAK's sand over blue-tinted rock stays sand)
                     if (top)
                         c = Color.Lerp(c, ApplyLayers(topColor, topLayers, topMasks, topMeans, x, y, size, reference), topAmount);
