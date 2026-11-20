@@ -35,6 +35,8 @@ namespace UnityRemix.Games.Peak
             return mirrorTransformField != null;
         }
 
+        private static Vector3 Axis(int i) => i == 0 ? Vector3.right : i == 1 ? Vector3.up : Vector3.forward;
+
         public override bool IsHiddenRenderer(Renderer renderer)
         {
             if (!LookUp())
@@ -66,17 +68,28 @@ namespace UnityRemix.Games.Peak
                 var filter = quad != null ? quad.GetComponent<MeshFilter>() : null;
                 if (quad == null || !quad.gameObject.activeInHierarchy || filter == null || filter.sharedMesh == null)
                     continue;
-                // The quad's opening: its mesh's extent in its XY plane, scaled.
+                // The opening: the mesh's two widest axes, scaled (its thinnest is the normal; the
+                // quad may be a plane in any of them), its height the one nearer world up.
                 var bounds = filter.sharedMesh.bounds;
                 var scale = quad.lossyScale;
-                float width = Mathf.Abs(bounds.size.x * scale.x), height = Mathf.Abs(bounds.size.y * scale.y);
+                var size = new Vector3(Mathf.Abs(bounds.size.x * scale.x), Mathf.Abs(bounds.size.y * scale.y), Mathf.Abs(bounds.size.z * scale.z));
+                int normalAxis = size.x <= size.y && size.x <= size.z ? 0 : size.y <= size.z ? 1 : 2;
+                int a = (normalAxis + 1) % 3, b = (normalAxis + 2) % 3;
+                Vector3 dirA = quad.TransformDirection(Axis(a)).normalized, dirB = quad.TransformDirection(Axis(b)).normalized;
+                if (Mathf.Abs(Vector3.Dot(dirA, Vector3.up)) > Mathf.Abs(Vector3.Dot(dirB, Vector3.up)))
+                {
+                    (a, b) = (b, a);
+                    (dirA, dirB) = (dirB, dirA);
+                }
+                float width = size[a], height = size[b];
                 if (width <= 0f || height <= 0f)
                     continue;
                 // A portal's opening faces +Z: the side the camera is on.
-                var rotation = quad.rotation;
-                if (Vector3.Dot(eye - quad.position, quad.forward) < 0f)
-                    rotation *= Quaternion.Euler(0f, 180f, 0f);
-                var frame0 = Matrix4x4.TRS(quad.TransformPoint(bounds.center), rotation, Vector3.one);
+                Vector3 normal = quad.TransformDirection(Axis(normalAxis)).normalized;
+                Vector3 centre = quad.TransformPoint(bounds.center);
+                if (Vector3.Dot(eye - centre, normal) < 0f)
+                    normal = -normal;
+                var frame0 = Matrix4x4.TRS(centre, Quaternion.LookRotation(normal, dirB), Vector3.one);
                 portals.Add(new PortalPair
                 {
                     id = mirror.GetInstanceID(),
