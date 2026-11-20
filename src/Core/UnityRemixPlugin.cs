@@ -310,7 +310,7 @@ namespace UnityRemix
             configEnableLights = Config.Bind("Lighting", "EnableLights", true,
                 "Convert Unity lights to RTX Remix lights.");
             
-            RemixFrameCapture.ParticleLights = Config.Bind("Lighting", "ParticleLights", true,
+            RemixFrameCapture.ParticleLights = Config.Bind("Lighting", "ParticleLights", false,
                 "With raster particles, give each additive particle system (flames, glows) a point light, so it lights the scene as its glow suggests.");
             RemixFrameCapture.ParticleLightIntensity = Config.Bind("Lighting", "ParticleLightIntensity", 1f,
                 new ConfigDescription("Multiplier for the particle lights' intensity.", new AcceptableValueRange<float>(0f, 20f)));
