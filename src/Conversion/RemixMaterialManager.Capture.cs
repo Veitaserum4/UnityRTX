@@ -1007,6 +1007,7 @@ namespace UnityRemix
             // A particle-like blended material on a mesh (an additive glow, a particle shader's
             // sphere): its coverage needs a blended instance, as particles have (opacity 1,
             // RemixMeshConverter.DrawMeshInstance), else it stands opaque.
+            matData.additive = additiveGlow || (isParticleOrTrailRenderer && ParticleLook.KindOf(material) == ParticleBlendKind.Additive);
             matData.blendedInstance = !isParticleOrTrailRenderer && matData.suppressLightGeneration &&
                                       matData.alphaMode == AlphaMode.Blend && !matData.emissionAsShown &&
                                       !shaderName.Contains("TextMeshPro") && matData.rayPortalIndex < 0;

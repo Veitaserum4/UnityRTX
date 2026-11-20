@@ -231,6 +231,7 @@ namespace UnityRemix
             public float glowCoverage;  // its texels' coverage scale, the glow's brightness up to 1 (0: not an additive glow)
             public float glowStrength;  // the captured glow's brightest channel (GlowFade's reference)
             public bool blendedInstance; // drawn with remixapi_InstanceInfoBlendEXT (a particle-like effect on a mesh)
+            public bool additive;        // Unity adds it (additive particles, glows): its coverage times its colour
             public bool lightsScene; // its emission lights the scene, glow or not (GameProfile.SceneLightScale)
             public float viewChromaticAberration; // remixapi_MaterialInfoViewEffectsEXT (a view portal's screen)
             public bool paintFinish; // remixapi_MaterialInfoPaintFinishEXT: multiplicative paint with its own roughness
@@ -405,6 +406,11 @@ namespace UnityRemix
             if (!TryGetAdditiveGlow(material, out Color glow))
                 return 1e-4f;
             return Mathf.Clamp(Mathf.Max(glow.r, Mathf.Max(glow.g, glow.b)) / data.glowStrength, 1e-4f, 1f);
+        }
+
+        public bool IsAdditive(int materialId)
+        {
+            return materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.additive;
         }
 
         public bool NeedsBlendedInstance(int materialId)

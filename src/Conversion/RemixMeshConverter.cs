@@ -498,7 +498,14 @@ namespace UnityRemix
             if (handle == IntPtr.Zero) return;
             if (materialManager.NeedsBlendedInstance(materialId)) blendedMeshes[handle] = 0;
             else blendedMeshes.TryRemove(handle, out _);
+            if (materialManager.IsAdditive(materialId)) additiveMeshes[handle] = 0;
+            else additiveMeshes.TryRemove(handle, out _);
         }
+
+        // Meshes of additive materials (RemixMaterialManager.IsAdditive): raster particles of
+        // theirs add their colour, as Unity's do, rather than blending it over (overlapping
+        // flames build up to white).
+        private readonly ConcurrentDictionary<IntPtr, byte> additiveMeshes = new ConcurrentDictionary<IntPtr, byte>();
 
         // The blend particles' instances carry: alpha over, the texel times the vertex colour.
         private static RemixAPI.remixapi_InstanceInfoBlendEXT ParticleBlend(IntPtr next) => new RemixAPI.remixapi_InstanceInfoBlendEXT
@@ -1382,6 +1389,11 @@ namespace UnityRemix
                 // stained-glass dark transmission borders), and modulate texture alpha by vertex alpha (Diffuse)
                 // so ColorOverLifetime fade-outs fade alpha rather than turning into black silhouettes.
                 blendExt = ParticleBlend(IntPtr.Zero);
+                // A raster particle of an additive material: SrcAlpha, One (its texel's coverage
+                // times its colour added), as Unity draws it. The path tracer composes layers by
+                // coverage and keeps alpha over.
+                if (isParticleInstance && RasterParticles != null && RasterParticles.Value && additiveMeshes.ContainsKey(meshHandle))
+                    blendExt.dstColorBlendFactor = 1; // VkBlendFactor::eOne
                 // A fading additive glow (an explosion's _Color alpha): its coverage times the fade.
                 if (!isParticleInstance && glowFade < 0.999f)
                 {
@@ -1780,6 +1792,7 @@ namespace UnityRemix
                 {
                     destroyMeshFunc(oldest.handle);
                     blendedMeshes.TryRemove(oldest.handle, out _);
+                    additiveMeshes.TryRemove(oldest.handle, out _);
                 }
                 catch { }
             }
