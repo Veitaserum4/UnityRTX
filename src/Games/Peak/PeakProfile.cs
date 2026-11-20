@@ -108,10 +108,10 @@ namespace UnityRemix.Games.Peak
             string C(string p) => m.HasProperty(p) ? m.GetColor(p).ToString() : "-";
             string colours = "";
             var mesh = renderer is SkinnedMeshRenderer s ? s.sharedMesh : renderer.GetComponent<MeshFilter>()?.sharedMesh;
-            if (mesh != null && mesh.isReadable)
+            if (mesh != null)
             {
-                var c = mesh.colors32;
-                if (c.Length > 0)
+                var c = mesh.isReadable ? mesh.colors32 : SkinnedMeshGpuReader.TryReadColors(mesh);
+                if (c != null && c.Length > 0)
                 {
                     long r = 0, g = 0, b = 0;
                     foreach (var v in c) { r += v.r; g += v.g; b += v.b; }

@@ -821,9 +821,13 @@ namespace UnityRemix
                     }
                 }
             }
+            // The captured materials too: a material keyed past its Unity id (a colour mask, a
+            // film) carries its own transform.
             for (int s = 0; !anyNonIdentityST && data.SubmeshMaterialIds != null && s < data.SubmeshMaterialIds.Count; s++)
             {
-                if (materialManager.TryGetProjection(data.SubmeshMaterialIds[s], out _))
+                var st = materialManager.GetMainTexST(data.SubmeshMaterialIds[s]);
+                if (materialManager.TryGetProjection(data.SubmeshMaterialIds[s], out _) ||
+                    st.x != 1f || st.y != 1f || st.z != 0f || st.w != 0f)
                     anyNonIdentityST = true;
             }
 
