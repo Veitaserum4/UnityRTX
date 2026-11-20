@@ -445,6 +445,20 @@ namespace UnityRemix
                 Note("Material manager not initialized.");
             else
             {
+                if (matMgr.ConfigRainWetness != null)
+                {
+                    bool wet = matMgr.ConfigRainWetness.Value;
+                    if (RemixImGui.Checkbox("Rain wetness", ref wet))
+                        matMgr.ConfigRainWetness.Value = wet;
+                    Tooltip("While it rains where you are (games whose profile reports it), surfaces darken and turn glossy.");
+                    if (wet && matMgr.ConfigWetnessStrength != null)
+                    {
+                        float strength = matMgr.ConfigWetnessStrength.Value;
+                        if (RemixImGui.SliderFloat("Wetness strength", ref strength, 0f, 1f))
+                            matMgr.ConfigWetnessStrength.Value = strength;
+                        Tooltip("How wet rain makes surfaces.");
+                    }
+                }
                 bool autoPbr = (matMgr.ConfigAutoPBR != null && matMgr.ConfigAutoPBR.Value) ||
                                (matMgr.ConfigAutoNormalMaps != null && matMgr.ConfigAutoNormalMaps.Value);
                 if (RemixImGui.Checkbox("Infer roughness, metalness and normal maps", ref autoPbr))

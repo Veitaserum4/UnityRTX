@@ -164,6 +164,15 @@ namespace UnityRemix
                     float albedoR = IsFinite(matData.albedoColor.r) ? Mathf.Max(0f, matData.albedoColor.r) : 1f;
                     float albedoG = IsFinite(matData.albedoColor.g) ? Mathf.Max(0f, matData.albedoColor.g) : 1f;
                     float albedoB = IsFinite(matData.albedoColor.b) ? Mathf.Max(0f, matData.albedoColor.b) : 1f;
+                    // Rain's wetness (RemixMaterialManager.Wetness), on what is sent only: the
+                    // captured data, and so the material's hash, stay as they are.
+                    float wet = WetnessOf(matData);
+                    if (wet > 0f)
+                    {
+                        float dark = WetAlbedoScale(wet, clampedMetallic);
+                        albedoR *= dark; albedoG *= dark; albedoB *= dark;
+                        clampedRoughness = Mathf.Clamp(WetRoughness(clampedRoughness, wet), 0.04f, 1f);
+                    }
 
                     // Build the OpaqueEXT using the blittable Raw struct for safe pNext chaining
                     opaqueExt = new RemixAPI.remixapi_MaterialInfoOpaqueEXT_Raw
@@ -293,6 +302,12 @@ namespace UnityRemix
                     }
                     if (roughnessPath != null || metallicPath != null)
                     {
+                        if (wet > 0f && roughnessPath != null)
+                        {
+                            float k = WetRoughnessScale(wet);
+                            roughnessChannel.bias *= k;
+                            roughnessChannel.scale *= k;
+                        }
                         var remapExt = new RemixAPI.remixapi_MaterialPbrRemapEXT
                         {
                             sType = (int)RemixAPI.remixapi_StructType.REMIXAPI_STRUCT_TYPE_MATERIAL_PBR_REMAP_EXT,

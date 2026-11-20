@@ -106,6 +106,10 @@ namespace UnityRemix.Games
         // ripples). Asked once per renderer.
         public virtual bool CastsParticleLight(ParticleSystemRenderer renderer) => true;
 
+        // How hard it rains where the player is, 0 to 1 (0: dry, or indoors): surfaces get wet
+        // with it (Materials.RainWetness). Main thread, each frame: keep it cheap.
+        public virtual float RainIntensity() => 0f;
+
         // Adds the game's own per-frame meshes (geometry Unity's renderers don't show).
         public virtual void CaptureFrame(RemixMaterialManager materials, RemixFrameCapture.FrameState state, int frameCount) { }
 

@@ -783,6 +783,7 @@ namespace UnityRemix
             lastUpdateUnityFrame = curUnityFrame;
 
             ApplyAutoPbrSettingChange();
+            materialManager?.UpdateWetness(Time.unscaledDeltaTime);
 
             // Engine frame throttling and DeltaTime slow-motion prevention
             if (initialSingleWindowEnabled)

@@ -94,6 +94,13 @@ namespace UnityRemix.Games
             return hidden;
         }
 
+        public static float RainIntensity()
+        {
+            float rain = 0f;
+            Run(nameof(RainIntensity), p => rain = Math.Max(rain, p.RainIntensity()));
+            return rain;
+        }
+
         public static bool CastsParticleLight(ParticleSystemRenderer renderer)
         {
             bool casts = true;

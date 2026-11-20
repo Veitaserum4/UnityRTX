@@ -104,6 +104,42 @@ namespace UnityRemix.Games.Atlyss
             return true;
         }
 
+        // Rain: the map instance the player is in (Player._mainPlayer._playerMapInstance) has its
+        // weather on (_isWeatherEnabled), and is not an interior (its visuals' _isInteriorInstance),
+        // where the game stops the rain.
+        private FieldInfo mainPlayerField, playerMapField, weatherField, visualsField, interiorField;
+        private bool rainLookedUp;
+
+        public override float RainIntensity()
+        {
+            if (!rainLookedUp)
+            {
+                rainLookedUp = true;
+                var playerType = AccessTools.TypeByName("Player");
+                var mapType = AccessTools.TypeByName("MapInstance");
+                var visualsType = AccessTools.TypeByName("MapInstanceVisuals");
+                mainPlayerField = playerType != null ? AccessTools.Field(playerType, "_mainPlayer") : null;
+                playerMapField = playerType != null ? AccessTools.Field(playerType, "_playerMapInstance") : null;
+                weatherField = mapType != null ? AccessTools.Field(mapType, "_isWeatherEnabled") : null;
+                visualsField = mapType != null ? AccessTools.Field(mapType, "_runTimeVisuals") : null;
+                interiorField = visualsType != null ? AccessTools.Field(visualsType, "_isInteriorInstance") : null;
+                if (mainPlayerField == null || playerMapField == null || weatherField == null)
+                    Logger.LogInfo("[ATLYSS] Player/MapInstance weather fields not found: no rain wetness");
+            }
+            if (mainPlayerField == null || playerMapField == null || weatherField == null)
+                return 0f;
+            var player = mainPlayerField.GetValue(null) as UnityEngine.Object;
+            if (player == null)
+                return 0f;
+            var map = playerMapField.GetValue(player) as UnityEngine.Object;
+            if (map == null || !(bool)weatherField.GetValue(map))
+                return 0f;
+            var visuals = visualsField != null ? visualsField.GetValue(map) : null;
+            if (visuals != null && interiorField != null && (bool)interiorField.GetValue(visuals))
+                return 0f;
+            return 1f;
+        }
+
         // The minimap's icons (SpriteRenderers on Minimap, drawn by _camera_overworldMinimap into
         // the map): never in the world.
         private int minimapLayer = -2;

@@ -367,6 +367,7 @@ namespace UnityRemix
                     "roughness up to +/-0.18 and metals' metalness down to 0.15 less at 1.");
                 ConfigAutoPbrRoughnessBias = config.Bind("Materials", "AutoPbrRoughnessBias", 0f,
                     "Added to every roughness AutoPBR infers (-1 to 1): above 0 rougher, below 0 glossier.");
+                BindWetness(config);
                 ConfigAutoPbrMetallicBias = config.Bind("Materials", "AutoPbrMetallicBias", 0f,
                     "Added to every metalness AutoPBR infers (-1 to 1): above 0 more metallic, below 0 less.");
             }
