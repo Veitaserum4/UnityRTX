@@ -102,6 +102,7 @@ namespace UnityRemix
         private TextureCategoryManager textureCategoryManager;
         private SceneMeshScanner sceneMeshScanner;
         private RemixTerrainManager terrainManager;
+        private RemixSkyControl skyControl;
         private RemixSettingsUI settingsUI;
         private RemixDebugHUD debugHUD;
         private LookAtDiagnostics lookAt;
@@ -686,6 +687,7 @@ namespace UnityRemix
                 configEnableTerrain
             );
             renderThread.SetTerrainManager(terrainManager);
+            skyControl = new RemixSkyControl(LogSource, remixApiLock);
             
             fogManager = new RemixFogManager(LogSource, Config);
             waterManager = new RemixWaterManager(LogSource, Config);
@@ -784,6 +786,7 @@ namespace UnityRemix
 
             ApplyAutoPbrSettingChange();
             materialManager?.UpdateWetness(Time.unscaledDeltaTime);
+            skyControl?.Update();
 
             // Engine frame throttling and DeltaTime slow-motion prevention
             if (initialSingleWindowEnabled)

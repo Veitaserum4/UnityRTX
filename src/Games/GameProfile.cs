@@ -110,6 +110,26 @@ namespace UnityRemix.Games
         // with it (Materials.RainWetness). Main thread, each frame: keep it cheap.
         public virtual float RainIntensity() => 0f;
 
+        // The game's time of day (hours, 0 to 24, 12 noon) and the length of its day in real
+        // minutes (0: the clock stands), for OpenRemix's sky (RemixSkyControl). Main thread,
+        // each frame: keep it cheap. False: the profile's own time.
+        public virtual bool GetSkyTime(out float hours, out float dayLengthMinutes)
+        {
+            hours = 0f;
+            dayLengthMinutes = 0f;
+            return false;
+        }
+
+        // The game's weather as a NUMOS preset (Clear, Fair, PartlyCloudy, Cloudy, Overcast, Haze,
+        // Fog, Storm, Drizzle, Altostratus) and its precipitation, 0 to 1. Main thread, each
+        // frame. False: the profile's own weather.
+        public virtual bool GetSkyWeather(out string preset, out float precipitation)
+        {
+            preset = null;
+            precipitation = 0f;
+            return false;
+        }
+
         // A skinned renderer whose shader hides part of it by a vertex colour channel (0 r, 1 g,
         // 2 b, 3 a; PEAK's first-person body, dithered away where red is high): its triangles whose
         // vertices' channel averages above one half are left out. -1: none. Asked once per

@@ -184,6 +184,63 @@ namespace UnityRemix.Games.Peak
             scaleOffset = new Vector4(1f / sx, 1f / sy, 0.5f - 0.5f / sx, 0.5f - 0.5f / sy);
         }
 
+        // The sky: DayNightManager.instance's timeOfDay (hours) and dayLengthInMinutes, and its
+        // storm factors (StormVisual: rainstormWindFactor, snowstormWindFactor, 0 to 1).
+        private Type dayNightType;
+        private FieldInfo dayNightInstance, timeOfDayField, dayLengthField, rainStormField, snowStormField;
+        private bool skyLookedUp;
+
+        private object DayNight()
+        {
+            if (!skyLookedUp)
+            {
+                skyLookedUp = true;
+                dayNightType = AccessTools.TypeByName("DayNightManager");
+                if (dayNightType != null)
+                {
+                    dayNightInstance = AccessTools.Field(dayNightType, "instance");
+                    timeOfDayField = AccessTools.Field(dayNightType, "timeOfDay");
+                    dayLengthField = AccessTools.Field(dayNightType, "dayLengthInMinutes");
+                    rainStormField = AccessTools.Field(dayNightType, "rainstormWindFactor");
+                    snowStormField = AccessTools.Field(dayNightType, "snowstormWindFactor");
+                }
+                if (dayNightInstance == null || timeOfDayField == null)
+                    Logger.LogInfo("[PEAK] DayNightManager not found: the sky keeps its own time");
+            }
+            if (dayNightInstance == null || timeOfDayField == null)
+                return null;
+            var instance = dayNightInstance.GetValue(null) as UnityEngine.Object;
+            return instance != null ? instance : null;
+        }
+
+        public override bool GetSkyTime(out float hours, out float dayLengthMinutes)
+        {
+            hours = dayLengthMinutes = 0f;
+            var dayNight = DayNight();
+            if (dayNight == null)
+                return false;
+            hours = (float)timeOfDayField.GetValue(dayNight);
+            dayLengthMinutes = dayLengthField != null ? (float)dayLengthField.GetValue(dayNight) : 0f;
+            return true;
+        }
+
+        // Calm: a fair sky. A storm (rain or snow, the stronger): Storm, its precipitation the
+        // storm's strength; a light one Drizzle.
+        public override bool GetSkyWeather(out string preset, out float precipitation)
+        {
+            preset = null;
+            precipitation = 0f;
+            var dayNight = DayNight();
+            if (dayNight == null)
+                return false;
+            float rain = rainStormField != null ? (float)rainStormField.GetValue(dayNight) : 0f;
+            float snow = snowStormField != null ? (float)snowStormField.GetValue(dayNight) : 0f;
+            float storm = Mathf.Clamp01(Mathf.Max(rain, snow));
+            preset = storm > 0.5f ? "Storm" : storm > 0.1f ? "Drizzle" : "Fair";
+            precipitation = storm > 0.1f ? storm : 0f;
+            return true;
+        }
+
         private static Vector3 Axis(int i) => i == 0 ? Vector3.right : i == 1 ? Vector3.up : Vector3.forward;
 
         public override bool IsHiddenRenderer(Renderer renderer)

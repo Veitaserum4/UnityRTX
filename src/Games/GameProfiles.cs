@@ -101,6 +101,27 @@ namespace UnityRemix.Games
             return channel;
         }
 
+        public static bool GetSkyTime(out float hours, out float dayLengthMinutes)
+        {
+            bool found = false;
+            float h = 0f, d = 0f;
+            Run(nameof(GetSkyTime), p => { if (!found) found = p.GetSkyTime(out h, out d); });
+            hours = h;
+            dayLengthMinutes = d;
+            return found;
+        }
+
+        public static bool GetSkyWeather(out string preset, out float precipitation)
+        {
+            bool found = false;
+            string w = null;
+            float r = 0f;
+            Run(nameof(GetSkyWeather), p => { if (!found) found = p.GetSkyWeather(out w, out r); });
+            preset = w;
+            precipitation = r;
+            return found && !string.IsNullOrEmpty(w);
+        }
+
         public static float RainIntensity()
         {
             float rain = 0f;
