@@ -60,10 +60,13 @@ namespace UnityRemix
             // copy stale, and the frame capture draws the renderer instead (Swapped).
             public MeshFilter Filter;
             public int MeshId, MaterialId;
-            // And the colour its property block gave it (animation drives material colours
-            // through the block: an attack effect's fade): one that changes is drawn by the
-            // frame capture too, which reads the block each frame.
+            // And the colour its property block gives it, as last checked (animation drives
+            // material colours through the block: an attack effect's fade): one that changes
+            // between two checks is drawn by the frame capture too, which reads the block each
+            // frame. A block the game sets once after the scan (a level's constant colours) only
+            // records it (BlockSeen): the scan's copy is drawn as before.
             public int BlockColour;
+            public bool BlockSeen;
             public bool Swapped;
         }
 
@@ -718,9 +721,17 @@ namespace UnityRemix
                         {
                             var nowMesh = refObj.Filter.sharedMesh;
                             var nowMaterial = renderer.sharedMaterial;
+                            int nowBlock = BlockColourKey(renderer);
+                            bool blockChanged = refObj.BlockSeen && nowBlock != refObj.BlockColour;
+                            if (!refObj.BlockSeen || nowBlock != refObj.BlockColour)
+                            {
+                                refObj.BlockColour = nowBlock;
+                                refObj.BlockSeen = true;
+                                instanceRenderers[i] = refObj;
+                            }
                             if ((nowMesh != null ? nowMesh.GetInstanceID() : 0) != refObj.MeshId ||
                                 (nowMaterial != null ? nowMaterial.GetInstanceID() : 0) != refObj.MaterialId ||
-                                BlockColourKey(renderer) != refObj.BlockColour)
+                                blockChanged)
                             {
                                 refObj.Swapped = true;
                                 instanceRenderers[i] = refObj;
