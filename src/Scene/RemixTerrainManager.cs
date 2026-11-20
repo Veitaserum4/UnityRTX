@@ -71,7 +71,7 @@ namespace UnityRemix
         private readonly List<Texture2D> createdTextures = new List<Texture2D>();
 
         // Each processed terrain, its baked textures and chunk meshes. A game that loads areas
-        // additively (ATLYSS's zones) destroys a terrain without a Single scene load: its chunks
+        // additively (zone by zone) destroys a terrain without a Single scene load: its chunks
         // leave with it. A disabled terrain's chunks are hidden until it is enabled again.
         private readonly Dictionary<int, Terrain> processedTerrains = new Dictionary<int, Terrain>();
         private readonly Dictionary<int, List<Texture2D>> terrainTextures = new Dictionary<int, List<Texture2D>>();

@@ -239,7 +239,7 @@ namespace UnityRemix
             Material currentSkyMat = RenderSettings.skybox;
 
             // A camera that only clears depth draws over cameras before it: the sky is the
-            // clear of the camera drawn just before (ATLYSS: each area's sky camera, coloured
+            // clear of the camera drawn just before (an area's own sky camera, coloured
             // by its day/night cycle, under the main camera).
             Camera skyCam = SkyCamera(mainCam);
 
@@ -261,7 +261,7 @@ namespace UnityRemix
             Color curBg = skyCam.backgroundColor;
 
             bool matChanged = (currentSkyMat != lastCapturedSkyMat);
-            // Another camera's sky (ATLYSS's character select backdrop, then an area's sky camera):
+            // Another camera's sky (a menu's backdrop camera, then an area's sky camera):
             // its colour may sit within a recapture step of the last, which kept the old sky.
             bool cameraChanged = skyCam != lastCapturedSkyCamera;
             bool flagsChanged = (curFlags != lastCapturedClearFlags);

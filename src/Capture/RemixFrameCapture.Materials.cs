@@ -183,7 +183,7 @@ namespace UnityRemix
                             matId = HashCombine(matId, tex.GetInstanceID());
                         }
 
-                        // Capture albedo/diffuse color overrides (ATLYSS character skin/hair/eye colors)
+                        // Capture albedo/diffuse color overrides (character customization: skin/hair/eye colors)
                         foreach (var cp in SkinnedMpbColorProps)
                         {
                             var c = mpb.GetColor(cp);

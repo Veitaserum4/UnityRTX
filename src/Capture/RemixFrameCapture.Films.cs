@@ -47,7 +47,7 @@ namespace UnityRemix
             reusableValidSkinnedIds.Add(key);
         }
 
-        // A copy of a mesh drawn over itself (ATLYSS's armour: a second skin of the body's mesh, a
+        // A copy of a mesh drawn over itself (armour as a second skin of the body's mesh, a
         // cutout drawn later at equal depth, which Unity's LEQUAL lets win): its bind-pose
         // vertices moved out along their normals by OverlayLift (5 mm), so it lies just above the skin
         // under it in every ray and raster test. Coincident, half its pixels showed the body.
