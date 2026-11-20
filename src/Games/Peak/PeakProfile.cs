@@ -35,6 +35,56 @@ namespace UnityRemix.Games.Peak
             return mirrorTransformField != null;
         }
 
+        // The local player's head in first person: HideTheBody ghosts (_VertexGhost 1) the local
+        // character's head, face, hats, sash, medal and costumes whole, and its body in part (the
+        // arms and legs stay). The whole ones are the player body: in reflections and shadows,
+        // not in the camera's view. The body stays as it is.
+        private Type hideTheBodyType, characterType;
+        private FieldInfo hideHeadField, hideFaceField, hideSashField, hideMedalField, hideCostumesField, hideRefsField, refsHatsField;
+        private PropertyInfo isLocalProperty;
+        private bool bodyLookedUp;
+
+        public override bool IsPlayerBody(Renderer renderer)
+        {
+            if (!bodyLookedUp)
+            {
+                bodyLookedUp = true;
+                hideTheBodyType = AccessTools.TypeByName("HideTheBody");
+                characterType = AccessTools.TypeByName("Character");
+                if (hideTheBodyType != null)
+                {
+                    hideHeadField = AccessTools.Field(hideTheBodyType, "headRend");
+                    hideFaceField = AccessTools.Field(hideTheBodyType, "face");
+                    hideSashField = AccessTools.Field(hideTheBodyType, "sash");
+                    hideMedalField = AccessTools.Field(hideTheBodyType, "medal");
+                    hideCostumesField = AccessTools.Field(hideTheBodyType, "costumes");
+                    hideRefsField = AccessTools.Field(hideTheBodyType, "refs");
+                }
+                var refsType = AccessTools.TypeByName("CustomizationRefs");
+                refsHatsField = refsType != null ? AccessTools.Field(refsType, "playerHats") : null;
+                isLocalProperty = characterType != null ? AccessTools.Property(characterType, "IsLocal") : null;
+                if (hideTheBodyType == null || characterType == null || isLocalProperty == null || hideHeadField == null)
+                    Logger.LogInfo("[PEAK] HideTheBody/Character not found: the player's head stays in view");
+            }
+            if (hideTheBodyType == null || characterType == null || isLocalProperty == null || hideHeadField == null)
+                return false;
+            var hide = renderer.GetComponentInParent(hideTheBodyType);
+            var character = hide != null ? hide.GetComponentInParent(characterType) : null;
+            if (character == null || !(bool)isLocalProperty.GetValue(character))
+                return false;
+            if (ReferenceEquals(hideHeadField.GetValue(hide), renderer) ||
+                ReferenceEquals(hideSashField?.GetValue(hide), renderer) ||
+                ReferenceEquals(hideMedalField?.GetValue(hide), renderer))
+                return true;
+            if (hideCostumesField?.GetValue(hide) is Renderer[] costumes && Array.IndexOf(costumes, renderer) >= 0)
+                return true;
+            var refs = hideRefsField?.GetValue(hide);
+            if (refs != null && refsHatsField?.GetValue(refs) is Renderer[] hats && Array.IndexOf(hats, renderer) >= 0)
+                return true;
+            var face = hideFaceField?.GetValue(hide) as Transform;
+            return face != null && renderer.transform.IsChildOf(face);
+        }
+
         private static Vector3 Axis(int i) => i == 0 ? Vector3.right : i == 1 ? Vector3.up : Vector3.forward;
 
         public override bool IsHiddenRenderer(Renderer renderer)
