@@ -314,6 +314,11 @@ namespace UnityRemix
                 "With raster particles, give each additive particle system (flames, glows) a point light, so it lights the scene as its glow suggests.");
             RemixFrameCapture.ParticleLightIntensity = Config.Bind("Lighting", "ParticleLightIntensity", 1f,
                 new ConfigDescription("Multiplier for the particle lights' intensity.", new AcceptableValueRange<float>(0f, 20f)));
+            RemixFrameCapture.ParticleLightPerParticle = Config.Bind("Lighting", "ParticleLightPerParticle", true,
+                "A light for each additive particle (the strongest MaxParticleLights of them), rather than one for each particle system.");
+            RemixFrameCapture.MaxParticleLightCount = Config.Bind("Lighting", "MaxParticleLights", 128,
+                new ConfigDescription("Most particle lights drawn a frame (the strongest by intensity over squared distance).",
+                    new AcceptableValueRange<int>(1, 1024)));
 
             configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 1f,
                 new ConfigDescription("Global multiplier for all light intensities.",
@@ -1159,6 +1164,7 @@ namespace UnityRemix
                 case "EnableParticleDistanceCulling": return configEnableParticleDistanceCulling.Value;
                 case "RasterParticles": return configRasterParticles.Value;
                 case "ParticleLights": return RemixFrameCapture.ParticleLights.Value;
+                case "ParticleLightPerParticle": return RemixFrameCapture.ParticleLightPerParticle.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
                 case "CaptureTextures": return configCaptureTextures.Value;
                 case "CaptureMaterials": return configCaptureMaterials.Value;
@@ -1217,6 +1223,7 @@ namespace UnityRemix
                 case "TargetFPS": return configTargetFPS.Value;
                 case "EngineFPSLimit": return configEngineFPSLimit.Value;
                 case "StaticMeshFrameSkip": return configStaticMeshFrameSkip.Value;
+                case "MaxParticleLights": return RemixFrameCapture.MaxParticleLightCount.Value;
                 case "SkyboxFiltering": return configSkyboxFiltering != null ? (int)configSkyboxFiltering.Value : 0;
                 default: return 0;
             }
@@ -1242,6 +1249,7 @@ namespace UnityRemix
                 case "EnableParticleDistanceCulling": configEnableParticleDistanceCulling.Value = value; break;
                 case "RasterParticles": configRasterParticles.Value = value; break;
                 case "ParticleLights": RemixFrameCapture.ParticleLights.Value = value; break;
+                case "ParticleLightPerParticle": RemixFrameCapture.ParticleLightPerParticle.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;
                 case "CaptureTextures": configCaptureTextures.Value = value; break;
                 case "CaptureMaterials": configCaptureMaterials.Value = value; break;
@@ -1281,6 +1289,7 @@ namespace UnityRemix
                 case "TargetFPS": configTargetFPS.Value = value; break;
                 case "EngineFPSLimit": configEngineFPSLimit.Value = value; break;
                 case "StaticMeshFrameSkip": configStaticMeshFrameSkip.Value = value; break;
+                case "MaxParticleLights": RemixFrameCapture.MaxParticleLightCount.Value = value; break;
                 case "SkyboxFiltering":
                     if (configSkyboxFiltering != null)
                     {

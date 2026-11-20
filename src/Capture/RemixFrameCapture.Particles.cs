@@ -1362,8 +1362,10 @@ namespace UnityRemix
         // Lighting.ParticleLights / ParticleLightIntensity (UnityRemixPlugin).
         public static BepInEx.Configuration.ConfigEntry<bool> ParticleLights;
         public static BepInEx.Configuration.ConfigEntry<float> ParticleLightIntensity;
+        public static BepInEx.Configuration.ConfigEntry<bool> ParticleLightPerParticle;
+        public static BepInEx.Configuration.ConfigEntry<int> MaxParticleLightCount;
 
-        private const int MaxParticleLights = 32;
+        private int MaxParticleLights => MaxParticleLightCount != null ? Math.Max(1, MaxParticleLightCount.Value) : 32;
         private readonly List<UnityLightData> particleLights = new List<UnityLightData>();
         private readonly List<float> particleLightScores = new List<float>();
         private static readonly ulong ParticleLightHash = HashUtils.HashStringFNV("UnityRTX.ParticleLight");
@@ -1381,6 +1383,12 @@ namespace UnityRemix
                 toWorld = ps.transform.localToWorldMatrix;
             else if (main.simulationSpace == ParticleSystemSimulationSpace.Custom && main.customSimulationSpace != null)
                 toWorld = main.customSimulationSpace.localToWorldMatrix;
+
+            if (ParticleLightPerParticle != null && ParticleLightPerParticle.Value)
+            {
+                AddPerParticleLights(pr, ps, look, alive, camPos, toWorld);
+                return;
+            }
 
             int step = Math.Max(1, alive / 64);
             Vector3 centre = Vector3.zero;
@@ -1429,10 +1437,51 @@ namespace UnityRemix
             particleLightScores.Add(intensity / Mathf.Max(1f, (centre - camPos).sqrMagnitude));
         }
 
+        // A light for each particle (up to 256 a system, evenly picked): at it, in its colour, as
+        // strong as what it adds and reaching a few times its size. Each is keyed by the system
+        // and the particle's random seed, so it stays the same light while the particle lives.
+        private void AddPerParticleLights(ParticleSystemRenderer pr, ParticleSystem ps, ParticleLook look, int alive, Vector3 camPos, Matrix4x4 toWorld)
+        {
+            int step = Math.Max(1, alive / 256);
+            float scale = toWorld.lossyScale.x;
+            float strength = ParticleLightIntensity.Value * look.alphaScale * step * 0.5f;
+            int id = pr.GetInstanceID();
+            string name = null;
+            for (int i = 0; i < alive; i += step)
+            {
+                Color32 c = _particleBuffer[i].GetCurrentColor(ps);
+                float w = c.a / 255f * Mathf.Max(c.r, Mathf.Max(c.g, c.b)) / 255f;
+                float intensity = Mathf.Min(strength * w, 4f);
+                if (intensity < 0.01f)
+                    continue;
+                Vector3 position = toWorld.MultiplyPoint3x4(_particleBuffer[i].position);
+                float size = _particleBuffer[i].GetCurrentSize(ps) * scale;
+                uint seed = _particleBuffer[i].randomSeed;
+                if (name == null)
+                    name = pr.name;
+                particleLights.Add(new UnityLightData
+                {
+                    instanceId = unchecked((id * -31 ^ 0x2C1B3C6D) * 397 ^ (int)seed),
+                    hash = ParticleLightHash ^ unchecked(((ulong)(uint)id << 32 | seed) * 1099511628211UL),
+                    type = LightType.Point,
+                    color = look.EmissionColor(c),
+                    intensity = intensity,
+                    range = Mathf.Clamp(size * 4f, 0.5f, 20f),
+                    position = position,
+                    forward = Vector3.forward,
+                    spotAngle = 0f,
+                    name = name,
+                    bakeable = false
+                });
+                particleLightScores.Add(intensity / Mathf.Max(1f, (position - camPos).sqrMagnitude));
+            }
+        }
+
         // The strongest (by intensity over squared distance) MaxParticleLights, to the light converter.
         private void PublishParticleLights()
         {
-            if (particleLights.Count > MaxParticleLights)
+            int maxLights = MaxParticleLights;
+            if (particleLights.Count > maxLights)
             {
                 var order = new int[particleLights.Count];
                 var keys = new float[particleLights.Count];
@@ -1442,8 +1491,8 @@ namespace UnityRemix
                     keys[i] = -particleLightScores[i];
                 }
                 Array.Sort(keys, order);
-                var kept = new List<UnityLightData>(MaxParticleLights);
-                for (int i = 0; i < MaxParticleLights; i++)
+                var kept = new List<UnityLightData>(maxLights);
+                for (int i = 0; i < maxLights; i++)
                     kept.Add(particleLights[order[i]]);
                 particleLights.Clear();
                 particleLights.AddRange(kept);

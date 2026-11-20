@@ -32,6 +32,8 @@ namespace UnityRemix
         private float _distantLightIntensityMultiplier;
         private bool _particleLights;
         private float _particleLightIntensity;
+        private bool _particleLightPerParticle;
+        private int _maxParticleLights;
         private int _targetFPS;
         private bool _enableGameGeometry;
         private bool _enableDistanceCulling;
@@ -287,6 +289,11 @@ namespace UnityRemix
                 if (RemixImGui.SliderFloat("Particle light intensity", ref _particleLightIntensity, 0f, 20f))
                     _plugin.SetConfig("ParticleLightIntensity", _particleLightIntensity);
                 Tooltip("Scales the particle lights.");
+                Toggle("Light per particle", "ParticleLightPerParticle", ref _particleLightPerParticle,
+                    "A light for each particle (the strongest and nearest, up to the most below) rather than one for each system.");
+                if (RemixImGui.SliderInt("Most particle lights", ref _maxParticleLights, 1, 1024))
+                    _plugin.SetConfig("MaxParticleLights", _maxParticleLights);
+                Tooltip("Most particle lights drawn a frame: the strongest by intensity over squared distance.");
             }
 
             Section("Sky");
@@ -781,6 +788,8 @@ namespace UnityRemix
             _distantLightIntensityMultiplier = _plugin.GetConfigFloat("DistantIntensityMultiplier");
             _particleLights = _plugin.GetConfigBool("ParticleLights");
             _particleLightIntensity = _plugin.GetConfigFloat("ParticleLightIntensity");
+            _particleLightPerParticle = _plugin.GetConfigBool("ParticleLightPerParticle");
+            _maxParticleLights = _plugin.GetConfigInt("MaxParticleLights");
             _targetFPS = _plugin.GetConfigInt("TargetFPS");
             _captureStaticMeshes = _plugin.GetConfigBool("CaptureStaticMeshes");
             _captureSkinnedMeshes = _plugin.GetConfigBool("CaptureSkinnedMeshes");
