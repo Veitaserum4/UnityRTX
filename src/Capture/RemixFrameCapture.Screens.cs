@@ -253,7 +253,7 @@ namespace UnityRemix
                 {
                     matId = StaticGeometryDedupe.GetCanonicalMaterialId(mat);
                     var colorMask = ResolveColorMask(r, mat, ref matId, out var film);
-                    materialManager.CaptureMaterialTextures(mat, matId, renderer: r, colorMask: colorMask, film: film);
+                    materialManager.CaptureMaterialTextures(mat, matId, renderer: r, colorMask: colorMask, film: film, coat: resolvedCoat);
                 }
                 if (loggedPreviewRenderers.Add(rid))
                     logger.LogInfo($"[WorldScreen] live image model '{r.name}' ({r.GetType().Name}): {n} verts, {data.submeshes.Length} submeshes, material '{mat.name}' shader '{(mat.shader != null ? mat.shader.name : "-")}'");

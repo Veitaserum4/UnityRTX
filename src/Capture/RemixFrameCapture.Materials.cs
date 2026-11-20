@@ -23,6 +23,7 @@ namespace UnityRemix
         {
             film = null;
             bareMatId = matId;
+            resolvedCoat = null;
             if (renderer == null || material == null)
                 return null;
             if (colorMaskBlock == null)
@@ -36,6 +37,11 @@ namespace UnityRemix
                 matId = HashCombine(matId, colorMask.Hash());
                 mask = colorMask;
             }
+            if (Games.GameProfiles.GetCoat(material, colorMaskBlock, out var coat))
+            {
+                resolvedCoat = coat;
+                matId = HashCombine(matId, coat.Hash());
+            }
             bareMatId = matId;
             if (Games.GameProfiles.GetIridescence(material, colorMaskBlock, out var f))
             {
@@ -48,6 +54,9 @@ namespace UnityRemix
         private RemixMaterialManager.ColorMask? ResolveColorMask(Renderer renderer, Material material, ref int matId,
             out RemixMaterialManager.Iridescence? film) =>
             ResolveColorMask(renderer, material, ref matId, out film, out _);
+
+        // What the last ResolveColorMask found: the game's coat over the material (GameProfile.GetCoat).
+        private RemixMaterialManager.Coat? resolvedCoat;
 
         // What the last ResolveMaterial found: a partial film, and the material it leaves bare.
         private RemixMaterialManager.Iridescence? resolvedPartialFilm;
@@ -264,10 +273,11 @@ namespace UnityRemix
                 }
 
                 var colorMask = ResolveColorMask(skinned, bestMaterial, ref matId, out var film, out int bareMatId);
-                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask, film: film);
+                var coat = resolvedCoat;
+                materialManager.CaptureMaterialTextures(bestMaterial, matId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask, film: film, coat: coat);
                 if (film.HasValue && film.Value.partial)
                 {
-                    materialManager.CaptureMaterialTextures(bestMaterial, bareMatId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask);
+                    materialManager.CaptureMaterialTextures(bestMaterial, bareMatId, mpbEmissiveColor, mpbEmissiveIntensity, mpbMainTex, mpbColor, colorMask: colorMask, coat: coat);
                     resolvedPartialFilm = film;
                     resolvedBareMatId = bareMatId;
                 }

@@ -139,6 +139,15 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // A coat the game draws over a renderer's material (sand over an enemy), from the material
+        // and its property block: baked into the albedo (RemixMaterialManager.Coat). Main thread,
+        // per renderer per frame: keep it cheap.
+        public virtual bool GetCoat(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Coat coat)
+        {
+            coat = default;
+            return false;
+        }
+
         // The game's view portal this frame (worldCamera: the player's view), when it shows one.
         public virtual bool GetRayPortalView(Camera worldCamera, out RayPortalView view)
         {

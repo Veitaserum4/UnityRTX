@@ -689,7 +689,7 @@ namespace UnityRemix
                                 catch { }
                                 var colorMask = ResolveColorMask(renderer, materials[m], ref matId, out var film);
                                 submeshMaterialIds.Add(matId);
-                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer, colorMask: colorMask, film: film);
+                                materialManager.CaptureMaterialTextures(materials[m], matId, mpbEmissive, null, mpbMainTex as Texture2D, mpbColor, renderer, colorMask: colorMask, film: film, coat: resolvedCoat);
                             }
                             else
                             {

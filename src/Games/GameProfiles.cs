@@ -149,6 +149,15 @@ namespace UnityRemix.Games
             return found;
         }
 
+        public static bool GetCoat(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Coat coat)
+        {
+            bool found = false;
+            var result = default(RemixMaterialManager.Coat);
+            Run(nameof(GetCoat), p => found = p.GetCoat(material, block, out result));
+            coat = result;
+            return found && result.texture != null;
+        }
+
         public static bool GetIridescence(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Iridescence film)
         {
             bool found = false;

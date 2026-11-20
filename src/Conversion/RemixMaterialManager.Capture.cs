@@ -138,7 +138,7 @@ namespace UnityRemix
             shaderName == "UI/Default" || shaderName.StartsWith("Unlit/Transparent", StringComparison.Ordinal);
 
         public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null, Iridescence? film = null,
-                                            bool particleLike = false)
+                                            bool particleLike = false, Coat? coat = null)
         {
             if (material == null)
                 return;
@@ -477,7 +477,7 @@ namespace UnityRemix
                 else if (colorMask.HasValue && colorMask.Value.mask != null)
                 {
                     var cm = colorMask.Value;
-                    var (maskedHandle, maskedHash, metalHandle) = UploadMaskTintedAlbedoTexture(tex, cm, matData.roughness);
+                    var (maskedHandle, maskedHash, metalHandle) = UploadMaskTintedAlbedoTexture(tex, cm, matData.roughness, coat);
                     matData.albedoHandle = maskedHandle;
                     matData.albedoTextureHash = maskedHash;
                     if (isTinted)
@@ -499,11 +499,11 @@ namespace UnityRemix
                         matData.pbrRoughBias = 0f; matData.pbrRoughScale = 1f;
                     }
                 }
-                else if (remap.HasValue || hsbc.HasValue || overlayTint.HasValue)
+                else if (remap.HasValue || hsbc.HasValue || overlayTint.HasValue || (coat.HasValue && coat.Value.texture != null))
                 {
                     // An overlay colour replaces the multiply tint (the shader has no other).
                     var (tintedHandle, tintedHash) = UploadTintedAlbedoTexture(tex, overlayTint.HasValue ? Color.white : effectiveTint,
-                                                                               remap, hsbc, overlayTint);
+                                                                               remap, hsbc, overlayTint, coat);
                     matData.albedoHandle = tintedHandle;
                     matData.albedoTextureHash = tintedHash;
                     matData.albedoColor = new Color(1f, 1f, 1f, matData.albedoColor.a);

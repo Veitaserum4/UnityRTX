@@ -919,6 +919,31 @@ namespace UnityRemix.Games.Ultrakill
         // tenths of the amount (one mesh per tenth); a full film where a mesh can't be split.
         private static readonly int OiledAmount = Shader.PropertyToID("_OiledAmount");
 
+        // Sandified enemies (EnemySimplifier: _Sanded 1 in the block): ULTRAKILL/Master's ENEMY
+        // pass projects the global _SandTex onto them from the dominant world axis, at a quarter
+        // scale with a slow scroll, and blends it by a rim term m (0 face-on, 1 at the edges):
+        // lerp(albedo, sand, 0.25 + 0.75 sqrt m) + 0.75 sqrt m x sand. Baked as a coat at the rim
+        // term's middle (sqrt m = 0.5): 62.5% sand over the albedo, plus 0.375 x sand, tiled
+        // twice over the enemy's UVs (about the shader's quarter scale on a body).
+        private static readonly int Sanded = Shader.PropertyToID("_Sanded");
+        private static readonly int SandTex = Shader.PropertyToID("_SandTex");
+
+        public override bool GetCoat(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Coat coat)
+        {
+            coat = default;
+            if (block == null || block.isEmpty || block.GetFloat(Sanded) != 1f || !material.IsKeywordEnabled("ENEMY") ||
+                material.shader == null || material.shader.name != "ULTRAKILL/Master")
+                return false;
+            coat = new RemixMaterialManager.Coat
+            {
+                texture = Shader.GetGlobalTexture(SandTex) as Texture2D,
+                cover = 0.625f,
+                add = 0.375f,
+                tiling = 2f
+            };
+            return coat.texture != null;
+        }
+
         public override bool GetIridescence(Material material, MaterialPropertyBlock block, out RemixMaterialManager.Iridescence film)
         {
             film = default;

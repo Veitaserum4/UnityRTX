@@ -144,6 +144,26 @@ namespace UnityRemix
             }
         }
 
+        // A coat a game draws over a material (sand over an enemy; GameProfile.GetCoat), baked into
+        // its albedo: the coat's texture, tiled `tiling` times over the mesh's UVs, covering
+        // `cover` of the base and adding `add` times itself (lerp(base, coat, cover) + add x coat).
+        public struct Coat
+        {
+            public Texture2D texture;
+            public float cover, add, tiling;
+
+            public int Hash()
+            {
+                unchecked
+                {
+                    int h = texture != null ? texture.GetInstanceID() : 0;
+                    h = h * 397 ^ Mathf.RoundToInt(cover * 1000f);
+                    h = h * 397 ^ Mathf.RoundToInt(add * 1000f);
+                    return h * 397 ^ Mathf.RoundToInt(tiling * 1000f) ^ 0x0C0A7;
+                }
+            }
+        }
+
         // A thin film over a material (a game's coating, such as oil; GameProfile.GetIridescence):
         // OpenRemix's remixapi_MaterialIridescenceEXT, its interference colouring the reflection.
         // The coated surface's albedo is scaled by albedoScale and its roughness is roughness.

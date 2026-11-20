@@ -559,11 +559,15 @@ namespace UnityRemix
         /// (the material's roughness where no metal, metalRoughness where full metal); its
         /// handle zero when no texel is metal.
         /// </summary>
-        private (IntPtr handle, ulong hash, IntPtr metalHandle) UploadMaskTintedAlbedoTexture(Texture2D tex, ColorMask colorMask, float baseRoughness = 0.7f)
+        private (IntPtr handle, ulong hash, IntPtr metalHandle) UploadMaskTintedAlbedoTexture(Texture2D tex, ColorMask colorMask, float baseRoughness = 0.7f,
+                                                                                            Coat? coat = null)
         {
             if (colorMask.mask == null || createTextureFunc == null || (tex == null && !colorMask.baseInMaskAlpha))
                 return (IntPtr.Zero, 0, IntPtr.Zero);
+            bool hasCoat = coat.HasValue && coat.Value.texture != null;
             long cacheKey = unchecked((long)0x4200000000000000L ^ ((long)(tex != null ? tex.GetInstanceID() : 0) << 28) ^ (uint)colorMask.Hash());
+            if (hasCoat)
+                cacheKey = unchecked(cacheKey * 1099511628211L ^ (uint)coat.Value.Hash());
             long metalKey = cacheKey ^ 0x0100000000000000L;
             lock (pendingTextureLock)
             {
@@ -590,6 +594,8 @@ namespace UnityRemix
                 var mask = ReadPixels32(maskTex, linear: true);
                 int mw = maskTex.width, mh = maskTex.height;
                 Color32[] basePixels = colorMask.baseInMaskAlpha ? null : ReadPixels32(tex, linear: true);
+                // The coat read as the base is (and brought to the working space with it below).
+                Color32[] coatPixels = hasCoat ? ReadPixels32(coat.Value.texture, linear: true) : null;
                 int w = colorMask.baseInMaskAlpha ? mw : tex.width, h = colorMask.baseInMaskAlpha ? mh : tex.height;
                 Color c1 = colorMask.color1, c2 = colorMask.color2, c3 = colorMask.color3;
                 if (linearSpace)
@@ -630,6 +636,21 @@ namespace UnityRemix
                         r = Mathf.Lerp(r, br * c1.r, k * mr); g = Mathf.Lerp(g, bg * c1.g, k * mr); b = Mathf.Lerp(b, bb * c1.b, k * mr);
                         r = Mathf.Lerp(r, br * c2.r, k * mg); g = Mathf.Lerp(g, bg * c2.g, k * mg); b = Mathf.Lerp(b, bb * c2.b, k * mg);
                         r = Mathf.Lerp(r, br * c3.r, k * mb); g = Mathf.Lerp(g, bg * c3.g, k * mb); b = Mathf.Lerp(b, bb * c3.b, k * mb);
+                        if (hasCoat)
+                        {
+                            float cr = r, cg = g, cb = b;
+                            if (!linearSpace)
+                            {
+                                // The coat in the gamma space the base was brought to.
+                                cr = Mathf.GammaToLinearSpace(cr); cg = Mathf.GammaToLinearSpace(cg); cb = Mathf.GammaToLinearSpace(cb);
+                            }
+                            ApplyCoat(coat.Value, coatPixels, x, y, w, h, ref cr, ref cg, ref cb);
+                            if (!linearSpace)
+                            {
+                                cr = Mathf.LinearToGammaSpace(Mathf.Clamp01(cr)); cg = Mathf.LinearToGammaSpace(Mathf.Clamp01(cg)); cb = Mathf.LinearToGammaSpace(Mathf.Clamp01(cb));
+                            }
+                            r = cr; g = cg; b = cb;
+                        }
                         // Stored as sRGB bytes (albedo textures are read as sRGB).
                         if (linearSpace)
                         {
@@ -705,14 +726,29 @@ namespace UnityRemix
         private static float Overlay(float texel, float colour) =>
             colour > 0.5f ? 1f - (2f - 2f * colour) * (1f - texel) : 2f * texel * colour;
 
+        // A coat's texel over a base texel at (x, y) of a w x h texture (Coat), in the space the
+        // coat's pixels were read in.
+        private static void ApplyCoat(in Coat coat, Color32[] coatPixels, int x, int y, int w, int h, ref float r, ref float g, ref float b)
+        {
+            int cw = coat.texture.width, ch = coat.texture.height;
+            float u = (x + 0.5f) / w * coat.tiling, v = (y + 0.5f) / h * coat.tiling;
+            int sx = ((int)(u * cw) % cw + cw) % cw, sy = ((int)(v * ch) % ch + ch) % ch;
+            var s = coatPixels[sy * cw + sx];
+            float sr = s.r / 255f, sg = s.g / 255f, sb = s.b / 255f;
+            r = Mathf.Lerp(r, sr, coat.cover) + sr * coat.add;
+            g = Mathf.Lerp(g, sg, coat.cover) + sg * coat.add;
+            b = Mathf.Lerp(b, sb, coat.cover) + sb * coat.add;
+        }
+
         private (IntPtr handle, ulong hash) UploadTintedAlbedoTexture(Texture2D tex, Color albedoColor, Vector2? remap, Vector4? hsbc = null,
-                                                                       Color? overlay = null)
+                                                                       Color? overlay = null, Coat? coat = null)
         {
             if (tex == null || createTextureFunc == null)
                 return (IntPtr.Zero, 0);
 
             // If color is white, no remap, and no hsbc, fast path to standard upload
-            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue && !hsbc.HasValue && !overlay.HasValue)
+            if (albedoColor.r >= 0.98f && albedoColor.g >= 0.98f && albedoColor.b >= 0.98f && !remap.HasValue && !hsbc.HasValue && !overlay.HasValue &&
+                !(coat.HasValue && coat.Value.texture != null))
             {
                 var handle = UploadUnityTexture(tex);
                 int texId = tex.GetInstanceID();
@@ -743,6 +779,9 @@ namespace UnityRemix
                 Color32 o = overlay.Value;
                 cacheKey = unchecked(cacheKey * 1099511628211L ^ ((o.r << 16) | (o.g << 8) | o.b) ^ 0x0F000000L);
             }
+            bool hasCoat = coat.HasValue && coat.Value.texture != null;
+            if (hasCoat)
+                cacheKey = unchecked(cacheKey * 1099511628211L ^ (uint)coat.Value.Hash());
 
             lock (pendingTextureLock)
             {
@@ -805,6 +844,8 @@ namespace UnityRemix
                 float rMin = remap.HasValue ? remap.Value.x : 0f;
                 float rMax = remap.HasValue ? remap.Value.y : 1f;
 
+                // The coat as stored (sRGB bytes, as the base's here).
+                Color32[] coatPixels = hasCoat ? ReadPixels32(coat.Value.texture, linear: false) : null;
                 byte[] pixelData = new byte[pixels.Length * 4];
                 for (int i = 0; i < pixels.Length; i++)
                 {
@@ -865,6 +906,9 @@ namespace UnityRemix
                         g = Overlay(g, overlay.Value.g);
                         b = Overlay(b, overlay.Value.b);
                     }
+
+                    if (hasCoat)
+                        ApplyCoat(coat.Value, coatPixels, i % tex.width, i / tex.width, tex.width, tex.height, ref r, ref g, ref b);
 
                     pixelData[i * 4 + 0] = (byte)(Mathf.Clamp01(r) * 255f);
                     pixelData[i * 4 + 1] = (byte)(Mathf.Clamp01(g) * 255f);
