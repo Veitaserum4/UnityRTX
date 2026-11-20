@@ -729,9 +729,18 @@ namespace UnityRemix
                                 refObj.BlockSeen = true;
                                 instanceRenderers[i] = refObj;
                             }
-                            if ((nowMesh != null ? nowMesh.GetInstanceID() : 0) != refObj.MeshId ||
-                                (nowMaterial != null ? nowMaterial.GetInstanceID() : 0) != refObj.MaterialId ||
-                                blockChanged)
+                            int nowMeshId = nowMesh != null ? nowMesh.GetInstanceID() : 0;
+                            int nowMaterialId = nowMaterial != null ? nowMaterial.GetInstanceID() : 0;
+                            if ((nowMeshId != refObj.MeshId || nowMaterialId != refObj.MaterialId) &&
+                                Games.GameProfiles.GetOriginalGeometry(renderer, out _, out _))
+                            {
+                                // The game rewrote it for its own batching (GameProfile.GetOriginalGeometry):
+                                // the scan draws the original, as it read it; the new ids are noted.
+                                refObj.MeshId = nowMeshId;
+                                refObj.MaterialId = nowMaterialId;
+                                instanceRenderers[i] = refObj;
+                            }
+                            if (nowMeshId != refObj.MeshId || nowMaterialId != refObj.MaterialId || blockChanged)
                             {
                                 refObj.Swapped = true;
                                 instanceRenderers[i] = refObj;
