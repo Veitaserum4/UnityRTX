@@ -86,6 +86,14 @@ namespace UnityRemix
                 matId = HashCombine(matId, ColourBits(colour.Value));
             if (emission.HasValue)
                 matId = HashCombine(matId, ColourBits(emission.Value) ^ 0x5EED);
+            // Passed on only where they differ from the material's own (a block's): a runtime copy's
+            // colours are the material's, captured from it for this step. Passed as overrides,
+            // they also read as an emissive display override (a sea of _UseAlbedoAsEmissive
+            // glowed white).
+            if (colour.HasValue && mat.HasProperty(PropBlockColor) && Quantize(mat.GetColor(PropBlockColor)) == colour.Value)
+                colour = null;
+            if (emission.HasValue && mat.HasProperty(PropBlockEmission) && Quantize(mat.GetColor(PropBlockEmission)) == emission.Value)
+                emission = null;
             materialManager.CaptureMaterialTextures(mat, matId, emission, null, null, colour, renderer);
             return matId;
         }
