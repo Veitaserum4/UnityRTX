@@ -77,6 +77,107 @@ namespace UnityRemix
             return (q.a << 24) | (q.r << 16) | (q.g << 8) | q.b;
         }
 
+        // A material with the renderer's live colours (ReadLiveColours), in 1/32 steps: a
+        // material per step. Its id.
+        private int CaptureLiveMaterial(Material mat, Renderer renderer, Color? colour, Color? emission)
+        {
+            int matId = mat.GetInstanceID();
+            if (colour.HasValue)
+                matId = HashCombine(matId, ColourBits(colour.Value));
+            if (emission.HasValue)
+                matId = HashCombine(matId, ColourBits(emission.Value) ^ 0x5EED);
+            materialManager.CaptureMaterialTextures(mat, matId, emission, null, null, colour, renderer);
+            return matId;
+        }
+
+        // Meshes made at runtime (negative instance ids) whose vertices changed since last seen:
+        // the game rewrites them (a trail it builds each frame), so the uploaded copy goes stale.
+        // Their last vertex count and bounds; the renderers found rewritten.
+        private readonly Dictionary<int, KeyValuePair<int, Bounds>> lastRuntimeMeshShapes = new Dictionary<int, KeyValuePair<int, Bounds>>();
+        private readonly HashSet<int> rewrittenMeshRenderers = new HashSet<int>();
+
+        private bool MeshIsRewritten(int rendererId, Mesh mesh, GameObject go)
+        {
+            if (rewrittenMeshRenderers.Contains(rendererId))
+                return true;
+            if (mesh.GetInstanceID() >= 0 || !mesh.isReadable)
+                return false;
+            var shape = new KeyValuePair<int, Bounds>(mesh.vertexCount, mesh.bounds);
+            if (lastRuntimeMeshShapes.TryGetValue(rendererId, out var last) && (last.Key != shape.Key || last.Value != shape.Value))
+            {
+                lastRuntimeMeshShapes.Remove(rendererId);
+                rewrittenMeshRenderers.Add(rendererId);
+                if (VerboseLog.On)
+                    logger.LogInfo($"[Rewritten] '{go.name}' mesh '{mesh.name}' changes at runtime: read each frame");
+                return true;
+            }
+            lastRuntimeMeshShapes[rendererId] = shape;
+            return false;
+        }
+
+        private readonly List<Vector3> rewrittenVertices = new List<Vector3>();
+        private readonly List<Vector3> rewrittenNormals = new List<Vector3>();
+        private readonly List<Vector2> rewrittenUvs = new List<Vector2>();
+        private readonly List<Color32> rewrittenColors = new List<Color32>();
+        private readonly List<int> rewrittenTriangles = new List<int>();
+
+        // A rewritten mesh as it is this frame, uploaded again (bakeFrame), with its live colours.
+        private void CaptureRewrittenMesh(MeshRenderer renderer, Mesh mesh, FrameState state, int frameCount)
+        {
+            int n = mesh.vertexCount;
+            if (n < 3)
+                return;
+            mesh.GetVertices(rewrittenVertices);
+            mesh.GetNormals(rewrittenNormals);
+            mesh.GetUVs(0, rewrittenUvs);
+            mesh.GetColors(rewrittenColors);
+            var vertices = rewrittenVertices.ToArray();
+            var uvs = rewrittenUvs.Count == n ? rewrittenUvs.ToArray() : new Vector2[n];
+            var colors = rewrittenColors.Count == n ? rewrittenColors.ToArray() : null;
+            var triangles = new int[mesh.subMeshCount][];
+            for (int s = 0; s < triangles.Length; s++)
+            {
+                if (mesh.GetTopology(s) != MeshTopology.Triangles)
+                    continue;
+                mesh.GetTriangles(rewrittenTriangles, s);
+                if (rewrittenTriangles.Count >= 3)
+                    triangles[s] = rewrittenTriangles.ToArray();
+            }
+            var normals = rewrittenNormals.Count == n ? rewrittenNormals.ToArray() : NativeMeshReader.ComputeFaceNormals(vertices, triangles);
+
+            var materials = renderer.sharedMaterials;
+            int rendererId = renderer.GetInstanceID();
+            var firstMaterial = renderer.sharedMaterial;
+            ReadLiveColours(renderer, IsRuntimeMaterial(firstMaterial) ? firstMaterial : null, out Color? colour, out Color? emission);
+            Matrix4x4 localToWorld = SkyPlaced(renderer.gameObject.layer, renderer.transform.localToWorldMatrix);
+            for (int s = 0; s < triangles.Length; s++)
+            {
+                var tris = triangles[s];
+                Material mat = (materials != null && s < materials.Length) ? materials[s] : null;
+                if (tris == null || mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat))
+                    continue;
+                int matId = CaptureLiveMaterial(mat, renderer, colour, emission);
+                state.skinned.Add(new SkinnedMeshData
+                {
+                    source = DynamicSource.Rewritten,
+                    meshId = rendererId ^ (s * 10007),
+                    remixMeshHash = 0x52575254UL << 32 | ((uint)rendererId ^ ((uint)s * 0x9E3779B9U) ^ ((uint)matId * 0x85EBCA6BU)),
+                    materialId = matId,
+                    vertices = vertices,
+                    normals = normals,
+                    uvs = uvs,
+                    colors = colors,
+                    triangles = tris,
+                    localToWorld = localToWorld,
+                    boneTransforms = null,
+                    skinningData = null,
+                    uvST = materialManager.GetMainTexST(matId),
+                    bakeFrame = frameCount,
+                    glowFade = materialManager.GlowFade(matId, mat)
+                });
+            }
+        }
+
         private static float QuantizeChannel(float v) => Mathf.Round(v * 32f) / 32f;
 
         private static Color Quantize(Color c) =>
@@ -252,6 +353,17 @@ namespace UnityRemix
                         persistentStaticInstances.Remove(rendererInstanceId);
                     }
                     CaptureScrollingMesh(renderer, mesh, state, frameCount);
+                    continue;
+                }
+
+                // A mesh the game rewrites (a weapon trail built each frame): read each frame.
+                if (MeshIsRewritten(rendererInstanceId, mesh, go))
+                {
+                    lock (persistentStaticLock)
+                    {
+                        persistentStaticInstances.Remove(rendererInstanceId);
+                    }
+                    CaptureRewrittenMesh(renderer, mesh, state, frameCount);
                     continue;
                 }
 
@@ -944,18 +1056,7 @@ namespace UnityRemix
                 Material mat = (materials != null && s < materials.Length) ? materials[s] : null;
                 int matId = mat != null ? mat.GetInstanceID() : 0;
                 if (mat != null)
-                {
-                    // The block's colours (animated ones among them), in 1/32 steps: a material
-                    // per step.
-                    if (blockColour.HasValue || blockEmission.HasValue)
-                    {
-                        if (blockColour.HasValue)
-                            matId = HashCombine(matId, ColourBits(blockColour.Value));
-                        if (blockEmission.HasValue)
-                            matId = HashCombine(matId, ColourBits(blockEmission.Value) ^ 0x5EED);
-                    }
-                    materialManager.CaptureMaterialTextures(mat, matId, blockEmission, null, null, blockColour, renderer);
-                }
+                    matId = CaptureLiveMaterial(mat, renderer, blockColour, blockEmission);
 
                 uint catFlags = 0;
                 if (mat != null)

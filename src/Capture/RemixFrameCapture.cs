@@ -809,7 +809,7 @@ namespace UnityRemix
         
         // What produced a per-frame mesh, for the render thread's upload statistics.
         // Game: a GameProfile's own meshes (Games/).
-        public enum DynamicSource : byte { Skinned, Scrolling, WorldUI, Billboard, MeshInstanced, MeshBaked, ParticleTrail, Trail, Sprite, Game, Count }
+        public enum DynamicSource : byte { Skinned, Scrolling, WorldUI, Billboard, MeshInstanced, MeshBaked, ParticleTrail, Trail, Sprite, Game, Rewritten, Count }
 
         public struct SkinnedMeshData
         {
