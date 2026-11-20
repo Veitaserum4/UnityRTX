@@ -42,6 +42,15 @@ foreach ($reference in $references) {
     else { Write-Host "  missing (optional for this game?): $reference" -ForegroundColor Yellow }
 }
 
+# Games whose runtime has netstandard 2.1 (Unity 2021.2+) take the netstandard2.1 build;
+# older ones (no netstandard.dll, or 2.0's, as DUSK's Unity 2018) take net472.
+$netstandard = Join-Path $managed "netstandard.dll"
+$framework = "net472"
+if (Test-Path $netstandard) {
+    $nsVersion = [Reflection.AssemblyName]::GetAssemblyName($netstandard).Version
+    if ($nsVersion -ge [Version]"2.1.0.0") { $framework = "netstandard2.1" }
+}
+
 Step "Plugin"
 $hash = "unknown"
 try { $hash = (git -C $root rev-parse --short HEAD).Trim() } catch {}
@@ -55,7 +64,9 @@ namespace UnityRemix
     }
 }
 "@
-dotnet build (Join-Path $src "UnityRTX.csproj") --configuration Release
+# Only the game's framework: the other may not compile against its assemblies (Unity 6's
+# need netstandard 2.1, which net472 cannot reference).
+dotnet build (Join-Path $src "UnityRTX.csproj") --configuration Release --framework $framework
 if ($LASTEXITCODE) { throw "dotnet build failed" }
 
 $nativeDll = Join-Path $root "native\_build\hostpass11\UnityRTXHostPass.dll"
@@ -80,14 +91,6 @@ if (-not $Deploy) {
 $dest = Join-Path $GamePath "BepInEx\plugins\UnityRTX"
 Step "Deploy to $dest"
 New-Item -ItemType Directory -Force $dest | Out-Null
-# Games whose runtime has netstandard 2.1 (Unity 2021.2+) take the netstandard2.1 build;
-# older ones (no netstandard.dll, or 2.0's, as DUSK's Unity 2018) take net472.
-$netstandard = Join-Path $managed "netstandard.dll"
-$framework = "net472"
-if (Test-Path $netstandard) {
-    $nsVersion = [Reflection.AssemblyName]::GetAssemblyName($netstandard).Version
-    if ($nsVersion -ge [Version]"2.1.0.0") { $framework = "netstandard2.1" }
-}
 $bin = Join-Path $src "bin\Release\$framework"
 Copy-Item (Join-Path $bin "UnityRemix.dll"), (Join-Path $bin "UnityRemix.pdb") $dest -Force
 Write-Host "  UnityRemix.dll ($framework)"
