@@ -257,7 +257,7 @@ namespace UnityRemix
                 if (mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat))
                 {
                     if (mat != null && ps.trails.enabled)
-                        BakeParticleTrails(pr, ps, mainCam, ps.main.startColor.color, 0f, state);
+                        BakeParticleTrails(pr, ps, mainCam, ps.main.startColor.color, 0f, state, actualAlive);
                     continue;
                 }
 
@@ -432,7 +432,7 @@ namespace UnityRemix
                 var trails = ps.trails;
                 if (trails.enabled)
                 {
-                    BakeParticleTrails(pr, ps, mainCam, pCol, emIntensity, state);
+                    BakeParticleTrails(pr, ps, mainCam, pCol, emIntensity, state, actualAlive);
                 }
             }
 
@@ -1351,6 +1351,88 @@ namespace UnityRemix
 
         private static bool trailWorldBakeMissing;
 
+        // Reused by BuildRibbonTriangles.
+        private Vector3[] ribbonParticles = new Vector3[0];
+        private int[] ribbonPairOf = new int[0];
+        private int[] ribbonOrder = new int[0];
+        private float[] ribbonAgeKeys = new float[0];
+
+        // Unity bakes ribbon trails (TrailModule mode Ribbon) as their vertices only, two a
+        // particle, with no triangles: rebuilt as Unity draws them. The particles are ordered by
+        // age, every Nth of them in ribbon N (ribbonCount), each joined to the next. A vertex pair
+        // is matched to its particle by its midpoint (the particle's position, in world space as
+        // the bake). False when the pairs do not match the particles one to one.
+        private bool BuildRibbonTriangles(ParticleSystem ps, int alive, List<Vector3> vertices, int vertexCount, List<int> triangles)
+        {
+            var trails = ps.trails;
+            if (trails.mode != ParticleSystemTrailMode.Ribbon || alive < 2 || alive > 1024 ||
+                vertexCount != 2 * alive || vertices.Count < vertexCount || _particleBuffer.Length < alive)
+                return false;
+            var main = ps.main;
+            Matrix4x4 toWorld = Matrix4x4.identity;
+            if (main.simulationSpace == ParticleSystemSimulationSpace.Local)
+                toWorld = ps.transform.localToWorldMatrix;
+            else if (main.simulationSpace == ParticleSystemSimulationSpace.Custom && main.customSimulationSpace != null)
+                toWorld = main.customSimulationSpace.localToWorldMatrix;
+
+            if (ribbonParticles.Length < alive)
+            {
+                int size = Mathf.NextPowerOfTwo(alive);
+                ribbonParticles = new Vector3[size];
+                ribbonPairOf = new int[size];
+                ribbonOrder = new int[size];
+                ribbonAgeKeys = new float[size];
+            }
+            for (int j = 0; j < alive; j++)
+            {
+                ribbonParticles[j] = toWorld.MultiplyPoint3x4(_particleBuffer[j].position);
+                ribbonPairOf[j] = -1;
+                ribbonOrder[j] = j;
+                // Oldest first.
+                ribbonAgeKeys[j] = -(_particleBuffer[j].startLifetime - _particleBuffer[j].remainingLifetime);
+            }
+            for (int k = 0; k < alive; k++)
+            {
+                Vector3 a = vertices[2 * k], b = vertices[2 * k + 1];
+                Vector3 mid = (a + b) * 0.5f;
+                float tolerance = Mathf.Max(0.05f, (a - b).magnitude);
+                int best = -1;
+                float bestDistance = float.MaxValue;
+                for (int j = 0; j < alive; j++)
+                {
+                    float d = (ribbonParticles[j] - mid).sqrMagnitude;
+                    if (d < bestDistance)
+                    {
+                        bestDistance = d;
+                        best = j;
+                    }
+                }
+                if (best < 0 || bestDistance > tolerance * tolerance || ribbonPairOf[best] >= 0)
+                    return false;
+                ribbonPairOf[best] = k;
+            }
+            Array.Sort(ribbonAgeKeys, ribbonOrder, 0, alive);
+
+            int ribbons = Math.Max(1, trails.ribbonCount);
+            triangles.Clear();
+            for (int r = 0; r < ribbons; r++)
+            {
+                int previous = -1;
+                for (int i = r; i < alive; i += ribbons)
+                {
+                    int pair = ribbonPairOf[ribbonOrder[i]];
+                    if (previous >= 0)
+                    {
+                        int a0 = 2 * previous, a1 = a0 + 1, b0 = 2 * pair, b1 = b0 + 1;
+                        triangles.Add(a0); triangles.Add(a1); triangles.Add(b1);
+                        triangles.Add(a0); triangles.Add(b1); triangles.Add(b0);
+                    }
+                    previous = pair;
+                }
+            }
+            return triangles.Count >= 3;
+        }
+
         // ParticleSystemBakeMeshOptions is Unity 2022.1's.
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static void BakeTrailsWorld(ParticleSystemRenderer pr, Mesh mesh, Camera cam) =>
@@ -1376,7 +1458,8 @@ namespace UnityRemix
             Camera cam, 
             Color trailColor, 
             float emIntensity, 
-            FrameState state)
+            FrameState state,
+            int aliveCount)
         {
             if (_reusableParticleTrailMesh == null)
             {
@@ -1464,6 +1547,8 @@ namespace UnityRemix
                         bakeTriangles.AddRange(trailMesh.triangles);
                     }
                     int indexCount = bakeTriangles.Count;
+                    if (indexCount < 3 && trailInWorld && BuildRibbonTriangles(ps, aliveCount, bakeVertices, vertexCount, bakeTriangles))
+                        indexCount = bakeTriangles.Count;
                     if (indexCount < 3)
                         return;
                     var buffers = TakeParticleBuffers(trailHash, state.frameCount, vertexCount, indexCount);
