@@ -130,6 +130,10 @@ namespace UnityRemix.Games
         // samples it, where that is not the material's own (_ST) tiling.
         public virtual void OverrideTextureTransform(Material material, ref Vector4 scaleOffset) { }
 
+        // The albedo texture is clamped at its edges where the game's shader samples it so (a
+        // sticker scaled within its card: outside it, the edge's clear texels), not repeated.
+        public virtual bool ClampsTexture(Material material) => false;
+
         // A material the game recolours with player-chosen colours through a mask texture
         // (block: the renderer's property block, empty when it has none): the mask and its
         // colours, applied to the albedo by the material capture.

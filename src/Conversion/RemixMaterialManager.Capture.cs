@@ -606,6 +606,8 @@ namespace UnityRemix
             }
 
             Games.GameProfiles.OverrideTextureTransform(material, ref matData.mainTexST);
+            if (Games.GameProfiles.ClampsTexture(material))
+                matData.wrapModeU = matData.wrapModeV = 0; // MDL Clamp
 
             // Fallback: no albedo texture but material has a color — create a 1x1 solid-color texture
             // so Remix renders the surface with the correct color instead of the debug checkerboard.

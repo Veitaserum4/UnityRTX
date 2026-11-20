@@ -215,6 +215,13 @@ namespace UnityRemix.Games
             return never;
         }
 
+        public static bool ClampsTexture(Material material)
+        {
+            bool clamp = false;
+            Run(nameof(ClampsTexture), p => clamp |= p.ClampsTexture(material));
+            return clamp;
+        }
+
         public static void OverrideTextureTransform(Material material, ref Vector4 scaleOffset)
         {
             var st = scaleOffset;

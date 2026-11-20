@@ -77,7 +77,7 @@ namespace UnityRemix.Games.Peak
             bool local = (bool)isLocalProperty.GetValue(character);
             bool body = hide != null && local && GhostedWhole(hide, renderer);
             if (VerboseLog.On)
-                Logger.LogInfo($"[PEAK] '{renderer.name}' of '{character.name}': HideTheBody {(hide != null ? "found" : "none")}, local {local}, player body {body}");
+                Logger.LogInfo($"[PEAK] '{renderer.name}' of '{character.name}': HideTheBody {(hide != null ? "found" : "none")}, local {local}, player body {body}{Describe(renderer)}");
             return body;
         }
 
@@ -95,6 +95,31 @@ namespace UnityRemix.Games.Peak
             var hide = character.GetComponentInChildren(hideTheBodyType, true);
             var bodyField = hide != null ? AccessTools.Field(hideTheBodyType, "body") : null;
             return bodyField != null && ReferenceEquals(bodyField.GetValue(hide), renderer) ? 0 : -1;
+        }
+
+        // A character renderer's colour inputs (verbose): its material's toggles and colours and
+        // its mesh's mean vertex colour.
+        private static string Describe(Renderer renderer)
+        {
+            var m = renderer.sharedMaterial;
+            if (m == null)
+                return "";
+            string F(string p) => m.HasProperty(p) ? m.GetFloat(p).ToString("0.##") : "-";
+            string C(string p) => m.HasProperty(p) ? m.GetColor(p).ToString() : "-";
+            string colours = "";
+            var mesh = renderer is SkinnedMeshRenderer s ? s.sharedMesh : renderer.GetComponent<MeshFilter>()?.sharedMesh;
+            if (mesh != null && mesh.isReadable)
+            {
+                var c = mesh.colors32;
+                if (c.Length > 0)
+                {
+                    long r = 0, g = 0, b = 0;
+                    foreach (var v in c) { r += v.r; g += v.g; b += v.b; }
+                    colours = $", mean vertex colour ({r / c.Length},{g / c.Length},{b / c.Length})";
+                }
+            }
+            return $" | material '{m.name}' _UseSkinTone {F("_UseSkinTone")} _UseRawVertexColor {F("_UseRawVertexColor")} _VertexColor {F("_VertexColor")} " +
+                   $"_SkinColor {C("_SkinColor")} _Tint {C("_Tint")} _BaseColor {C("_BaseColor")} keywords [{string.Join(" ", m.shaderKeywords)}]{colours}";
         }
 
         private bool GhostedWhole(Component hide, Renderer renderer)
@@ -138,6 +163,25 @@ namespace UnityRemix.Games.Peak
                 coverageInMaskRed = true
             };
             return true;
+        }
+
+        // Face cards draw their texture scaled within the card about its centre,
+        // (uv - 0.5) / (_Scale x _BaseScale) + 0.5 (the eyes at a third of the card), clamped: as
+        // a texture transform, scale 1 / s and offset 0.5 - 0.5 / s.
+        private static bool IsFaceCard(Material material) => material.shader != null && material.shader.name == "GD/Face Cards";
+
+        public override bool ClampsTexture(Material material) => IsFaceCard(material);
+
+        public override void OverrideTextureTransform(Material material, ref Vector4 scaleOffset)
+        {
+            if (!IsFaceCard(material) || !material.HasProperty("_BaseScale"))
+                return;
+            float baseScale = material.GetFloat("_BaseScale");
+            Vector4 scale = material.HasProperty("_Scale") ? material.GetVector("_Scale") : Vector4.one;
+            float sx = scale.x * baseScale, sy = scale.y * baseScale;
+            if (Mathf.Abs(sx) < 1e-4f || Mathf.Abs(sy) < 1e-4f)
+                return;
+            scaleOffset = new Vector4(1f / sx, 1f / sy, 0.5f - 0.5f / sx, 0.5f - 0.5f / sy);
         }
 
         private static Vector3 Axis(int i) => i == 0 ? Vector3.right : i == 1 ? Vector3.up : Vector3.forward;
