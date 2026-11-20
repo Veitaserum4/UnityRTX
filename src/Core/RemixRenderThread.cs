@@ -1016,6 +1016,8 @@ namespace UnityRemix
                                 continue;
                             
                             meshConverter.UpdateSkinnedMeshHandle(skinned.remixMeshHash, meshHandle, state.frameCount);
+                            if (skinned.cameraOnly)
+                                meshConverter.RegisterCameraOnly(meshHandle, $"skinned 0x{skinned.remixMeshHash:X16}");
                             skinned.skinningData.meshCreated = true;
                         }
                         

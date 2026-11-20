@@ -30,13 +30,33 @@ namespace UnityRemix
             bool lifted = overlaySkinnedIds.Contains(key);
             if (lifted)
                 meshHash = (meshHash ^ 0x4C1F7EDUL) * 1099511628211UL;
-            // Part hidden by a vertex colour (GameProfile.GhostVertexChannel): those triangles out.
+            // Part hidden by a vertex colour (GameProfile.GhostVertexChannel): what the camera sees
+            // is the rest, camera-only; the whole is the reflection-only player body (in mirrors
+            // and shadows whole, as the game's own reflection and shadow casters show it).
             if (ghostSkinnedChannels.TryGetValue(key, out int ghostChannel) && skinData.colors != null)
             {
-                triangles = GhostKept(triangles, skinData.colors, ghostChannel);
-                if (triangles.Length == 0)
-                    return;
-                meshHash = (meshHash ^ (0x6057UL + (ulong)ghostChannel)) * 1099511628211UL;
+                var kept = GhostKept(triangles, skinData.colors, ghostChannel);
+                if (kept.Length > 0)
+                {
+                    int keptKey = (int)((uint)key ^ 0x6057C0DEu);
+                    persistentSkinnedData[keptKey] = new SkinnedMeshData
+                    {
+                        meshId = keptKey,
+                        remixMeshHash = (meshHash ^ (0x6057UL + (ulong)ghostChannel)) * 1099511628211UL,
+                        materialId = materialId,
+                        vertices = skinData.bindVertices,
+                        normals = skinData.bindNormals,
+                        uvs = skinData.uvs,
+                        colors = skinData.colors,
+                        triangles = kept,
+                        localToWorld = localToWorld,
+                        boneTransforms = boneMatrices,
+                        skinningData = skinData,
+                        cameraOnly = true
+                    };
+                    reusableValidSkinnedIds.Add(keptKey);
+                }
+                playerBodySkinnedIds.Add(key);
             }
             persistentSkinnedData[key] = new SkinnedMeshData
             {

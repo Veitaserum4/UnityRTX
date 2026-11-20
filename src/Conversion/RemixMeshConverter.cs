@@ -1679,10 +1679,22 @@ namespace UnityRemix
 
                 // A blended (particle-like) material: the chain's tail.
                 var blendExt = ParticleBlend(IntPtr.Zero);
+                var cameraOnly = new RemixAPI.remixapi_InstanceInfoCameraOnlyEXT
+                {
+                    sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_CAMERA_ONLY_EXT,
+                    pNext = IntPtr.Zero
+                };
                 if (blendedMeshes.ContainsKey(meshHandle))
                 {
                     if (targetInstanceId != 0) identityExt.pNext = (IntPtr)(&blendExt);
                     else objectPickingExt.pNext = (IntPtr)(&blendExt);
+                }
+                else if (cameraOnlyMeshes.ContainsKey(meshHandle))
+                {
+                    // Only camera rays meet it (a first-person body's visible part; its whole is
+                    // the reflection-only player body).
+                    if (targetInstanceId != 0) identityExt.pNext = (IntPtr)(&cameraOnly);
+                    else objectPickingExt.pNext = (IntPtr)(&cameraOnly);
                 }
 
                 var boneExt = new RemixAPI.remixapi_InstanceInfoBoneTransformsEXT
