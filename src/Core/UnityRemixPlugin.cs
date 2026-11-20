@@ -310,6 +310,11 @@ namespace UnityRemix
             configEnableLights = Config.Bind("Lighting", "EnableLights", true,
                 "Convert Unity lights to RTX Remix lights.");
             
+            RemixFrameCapture.ParticleLights = Config.Bind("Lighting", "ParticleLights", true,
+                "With raster particles, give each additive particle system (flames, glows) a point light, so it lights the scene as its glow suggests.");
+            RemixFrameCapture.ParticleLightIntensity = Config.Bind("Lighting", "ParticleLightIntensity", 1f,
+                new ConfigDescription("Multiplier for the particle lights' intensity.", new AcceptableValueRange<float>(0f, 20f)));
+
             configLightIntensityMultiplier = Config.Bind("Lighting", "IntensityMultiplier", 1f,
                 new ConfigDescription("Global multiplier for all light intensities.",
                     new AcceptableValueRange<float>(0.01f, 100f)));
@@ -1153,6 +1158,7 @@ namespace UnityRemix
                 case "CaptureParticles": return configCaptureParticles.Value;
                 case "EnableParticleDistanceCulling": return configEnableParticleDistanceCulling.Value;
                 case "RasterParticles": return configRasterParticles.Value;
+                case "ParticleLights": return RemixFrameCapture.ParticleLights.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
                 case "CaptureTextures": return configCaptureTextures.Value;
                 case "CaptureMaterials": return configCaptureMaterials.Value;
@@ -1178,6 +1184,7 @@ namespace UnityRemix
                 case "ParticleMaxDistance": return configParticleMaxDistance.Value;
                 case "IntensityMultiplier": return configLightIntensityMultiplier.Value;
                 case "DistantIntensityMultiplier": return configDistantLightIntensityMultiplier.Value;
+                case "ParticleLightIntensity": return RemixFrameCapture.ParticleLightIntensity.Value;
                 default: return 0f;
             }
         }
@@ -1234,6 +1241,7 @@ namespace UnityRemix
                 case "CaptureParticles": configCaptureParticles.Value = value; break;
                 case "EnableParticleDistanceCulling": configEnableParticleDistanceCulling.Value = value; break;
                 case "RasterParticles": configRasterParticles.Value = value; break;
+                case "ParticleLights": RemixFrameCapture.ParticleLights.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;
                 case "CaptureTextures": configCaptureTextures.Value = value; break;
                 case "CaptureMaterials": configCaptureMaterials.Value = value; break;
@@ -1262,6 +1270,7 @@ namespace UnityRemix
                 case "ParticleMaxDistance": configParticleMaxDistance.Value = value; break;
                 case "IntensityMultiplier": configLightIntensityMultiplier.Value = value; break;
                 case "DistantIntensityMultiplier": configDistantLightIntensityMultiplier.Value = value; break;
+                case "ParticleLightIntensity": RemixFrameCapture.ParticleLightIntensity.Value = value; break;
             }
         }
 

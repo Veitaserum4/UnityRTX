@@ -20,6 +20,8 @@ namespace UnityRemix
         /// </summary>
         public void CaptureParticleSystems(FrameState state, int frameCount)
         {
+            particleLights.Clear();
+            RemixLightConverter.PublishEffectLights(null);
             if (configCaptureParticles != null && !configCaptureParticles.Value)
             {
                 if (frameCount % 30 == 0 || _latestParticleStats == null || _latestParticleStats.TotalTrackedSystems == 0)
@@ -428,6 +430,11 @@ namespace UnityRemix
                     }
                 }
 
+                // An additive system drawn by the raster pass lights nothing: a light of its own.
+                if (look.IsAdditive && ParticleLights != null && ParticleLights.Value &&
+                    meshConverter.RasterParticles != null && meshConverter.RasterParticles.Value)
+                    AddParticleLight(pr, ps, look, actualAlive, camPos);
+
                 // Capture trails if enabled on this particle system
                 var trails = ps.trails;
                 if (trails.enabled)
@@ -436,6 +443,7 @@ namespace UnityRemix
                 }
             }
 
+            PublishParticleLights();
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleRead, readMs);
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleBuild, RemixProfiler.ElapsedMs(loopStart) - readMs);
             RemixProfiler.AddDetail(RemixProfiler.Detail.ParticleAppend, particleAppendMs);
@@ -1350,6 +1358,99 @@ namespace UnityRemix
         }
 
         private static bool trailWorldBakeMissing;
+
+        // Lighting.ParticleLights / ParticleLightIntensity (UnityRemixPlugin).
+        public static BepInEx.Configuration.ConfigEntry<bool> ParticleLights;
+        public static BepInEx.Configuration.ConfigEntry<float> ParticleLightIntensity;
+
+        private const int MaxParticleLights = 32;
+        private readonly List<UnityLightData> particleLights = new List<UnityLightData>();
+        private readonly List<float> particleLightScores = new List<float>();
+        private static readonly ulong ParticleLightHash = HashUtils.HashStringFNV("UnityRTX.ParticleLight");
+
+        // A point light for an additive particle system: at its particles' centre, weighted by what
+        // each adds (alpha x brightness), in its emission colour, as strong as what it adds and
+        // reaching a few times its spread and particle size. Sampled from up to 64 particles.
+        private void AddParticleLight(ParticleSystemRenderer pr, ParticleSystem ps, ParticleLook look, int alive, Vector3 camPos)
+        {
+            if (alive <= 0 || _particleBuffer.Length < alive)
+                return;
+            var main = ps.main;
+            Matrix4x4 toWorld = Matrix4x4.identity;
+            if (main.simulationSpace == ParticleSystemSimulationSpace.Local)
+                toWorld = ps.transform.localToWorldMatrix;
+            else if (main.simulationSpace == ParticleSystemSimulationSpace.Custom && main.customSimulationSpace != null)
+                toWorld = main.customSimulationSpace.localToWorldMatrix;
+
+            int step = Math.Max(1, alive / 64);
+            Vector3 centre = Vector3.zero;
+            Color colour = Color.clear;
+            float weight = 0f, size = 0f;
+            int samples = 0;
+            for (int i = 0; i < alive; i += step)
+            {
+                Color32 c = _particleBuffer[i].GetCurrentColor(ps);
+                float w = c.a / 255f * Mathf.Max(c.r, Mathf.Max(c.g, c.b)) / 255f;
+                if (w <= 0f)
+                    continue;
+                centre += toWorld.MultiplyPoint3x4(_particleBuffer[i].position) * w;
+                colour += (Color)c * w;
+                weight += w;
+                size += _particleBuffer[i].GetCurrentSize(ps);
+                samples++;
+            }
+            if (weight <= 1e-3f)
+                return;
+            centre /= weight;
+            colour /= weight;
+            size = size / samples * toWorld.lossyScale.x;
+            float spread = 0f;
+            for (int i = 0; i < alive; i += step)
+                spread = Mathf.Max(spread, (toWorld.MultiplyPoint3x4(_particleBuffer[i].position) - centre).magnitude);
+
+            float intensity = Mathf.Min(ParticleLightIntensity.Value * look.alphaScale * weight * step * 0.25f, 8f);
+            if (intensity < 0.01f)
+                return;
+            int id = pr.GetInstanceID();
+            particleLights.Add(new UnityLightData
+            {
+                instanceId = unchecked(id * -31 ^ 0x2C1B3C6D),
+                hash = ParticleLightHash ^ unchecked((ulong)(uint)id * 1099511628211UL),
+                type = LightType.Point,
+                color = look.EmissionColor(colour),
+                intensity = intensity,
+                range = Mathf.Clamp((spread + size) * 3f, 1f, 50f),
+                position = centre,
+                forward = Vector3.forward,
+                spotAngle = 0f,
+                name = pr.name,
+                bakeable = false
+            });
+            particleLightScores.Add(intensity / Mathf.Max(1f, (centre - camPos).sqrMagnitude));
+        }
+
+        // The strongest (by intensity over squared distance) MaxParticleLights, to the light converter.
+        private void PublishParticleLights()
+        {
+            if (particleLights.Count > MaxParticleLights)
+            {
+                var order = new int[particleLights.Count];
+                var keys = new float[particleLights.Count];
+                for (int i = 0; i < order.Length; i++)
+                {
+                    order[i] = i;
+                    keys[i] = -particleLightScores[i];
+                }
+                Array.Sort(keys, order);
+                var kept = new List<UnityLightData>(MaxParticleLights);
+                for (int i = 0; i < MaxParticleLights; i++)
+                    kept.Add(particleLights[order[i]]);
+                particleLights.Clear();
+                particleLights.AddRange(kept);
+            }
+            particleLightScores.Clear();
+            RemixLightConverter.PublishEffectLights(particleLights);
+        }
 
         // Reused by BuildRibbonTriangles.
         private Vector3[] ribbonParticles = new Vector3[0];

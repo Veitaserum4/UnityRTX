@@ -158,6 +158,16 @@ namespace UnityRemix
             }
         }
         
+        // Lights the capture makes for effects that have none of their own (additive particle
+        // systems drawn by the raster pass: RemixFrameCapture.AddParticleLight). Main thread;
+        // drawn with the scene's lights from the next refresh.
+        private static UnityLightData[] effectLights = Array.Empty<UnityLightData>();
+
+        public static void PublishEffectLights(List<UnityLightData> lights)
+        {
+            effectLights = lights != null && lights.Count > 0 ? lights.ToArray() : Array.Empty<UnityLightData>();
+        }
+
         /// <summary>
         /// Refresh cached light list from scene (called on Unity main thread)
         /// </summary>
@@ -205,6 +215,8 @@ namespace UnityRemix
                     bakeable = entry.bakeable
                 });
             }
+
+            reusableLightList.AddRange(effectLights);
 
             lock (lightDataLock)
             {

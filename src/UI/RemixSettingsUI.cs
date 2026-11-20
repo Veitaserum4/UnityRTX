@@ -30,6 +30,8 @@ namespace UnityRemix
         private int _skyboxFiltering;
         private float _lightIntensityMultiplier;
         private float _distantLightIntensityMultiplier;
+        private bool _particleLights;
+        private float _particleLightIntensity;
         private int _targetFPS;
         private bool _enableGameGeometry;
         private bool _enableDistanceCulling;
@@ -278,6 +280,14 @@ namespace UnityRemix
             if (RemixImGui.SliderFloat("Distant light multiplier", ref _distantLightIntensityMultiplier, 0.01f, 100f))
                 _plugin.SetConfig("DistantIntensityMultiplier", _distantLightIntensityMultiplier);
             Tooltip("Scales the game's directional lights (sun, moon) in place of the intensity multiplier.");
+            Toggle("Particle lights", "ParticleLights", ref _particleLights,
+                "With raster particles, gives each additive particle system (flames, glows) a point light so it lights the scene.");
+            if (_particleLights)
+            {
+                if (RemixImGui.SliderFloat("Particle light intensity", ref _particleLightIntensity, 0f, 20f))
+                    _plugin.SetConfig("ParticleLightIntensity", _particleLightIntensity);
+                Tooltip("Scales the particle lights.");
+            }
 
             Section("Sky");
             Toggle("Skybox (scene reload)", "EnableSkybox", ref _enableSkybox,
@@ -769,6 +779,8 @@ namespace UnityRemix
             _enableLights = _plugin.GetConfigBool("EnableLights");
             _lightIntensityMultiplier = _plugin.GetConfigFloat("IntensityMultiplier");
             _distantLightIntensityMultiplier = _plugin.GetConfigFloat("DistantIntensityMultiplier");
+            _particleLights = _plugin.GetConfigBool("ParticleLights");
+            _particleLightIntensity = _plugin.GetConfigFloat("ParticleLightIntensity");
             _targetFPS = _plugin.GetConfigInt("TargetFPS");
             _captureStaticMeshes = _plugin.GetConfigBool("CaptureStaticMeshes");
             _captureSkinnedMeshes = _plugin.GetConfigBool("CaptureSkinnedMeshes");
