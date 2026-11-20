@@ -111,8 +111,8 @@ namespace UnityRemix.Games
         public virtual float RainIntensity() => 0f;
 
         // A skinned renderer whose shader hides part of it by a vertex colour channel (0 r, 1 g,
-        // 2 b, 3 a; PEAK's first-person body, dithered away where red is low): its triangles whose
-        // vertices' channel averages below one half are left out. -1: none. Asked once per
+        // 2 b, 3 a; PEAK's first-person body, dithered away where red is high): its triangles whose
+        // vertices' channel averages above one half are left out. -1: none. Asked once per
         // renderer, again when the renderer cache refreshes.
         public virtual int GhostVertexChannel(SkinnedMeshRenderer renderer) => -1;
 

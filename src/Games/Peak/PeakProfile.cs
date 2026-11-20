@@ -81,9 +81,8 @@ namespace UnityRemix.Games.Peak
             return body;
         }
 
-        // The local character's body (HideTheBody.body), ghosted in part: W/Character keeps a
-        // texel where its vertex red reaches a dither value, so the arms and legs (red) stay
-        // and the torso goes.
+        // The local character's body (HideTheBody.body), ghosted in part: W/Character dithers
+        // away its texels by vertex red, high on the torso, so the arms and legs stay.
         public override int GhostVertexChannel(SkinnedMeshRenderer renderer)
         {
             if (!bodyLookedUp)

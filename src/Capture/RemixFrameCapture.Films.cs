@@ -69,7 +69,7 @@ namespace UnityRemix
             return channel;
         }
 
-        // The triangles whose vertices' channel averages one half or more, cached per triangle array.
+        // The triangles whose vertices' channel averages below one half, cached per triangle array.
         private int[] GhostKept(int[] triangles, Color32[] colors, int channel)
         {
             if (ghostKeptTriangles.TryGetValue(triangles, out var kept))
@@ -87,7 +87,7 @@ namespace UnityRemix
                         sum += channel == 0 ? c.r : channel == 1 ? c.g : channel == 2 ? c.b : c.a;
                     }
                 }
-                if (sum >= 3 * 128)
+                if (sum < 3 * 128)
                 {
                     list.Add(triangles[t]);
                     list.Add(triangles[t + 1]);
