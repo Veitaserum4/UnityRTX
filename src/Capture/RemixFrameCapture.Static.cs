@@ -158,7 +158,8 @@ namespace UnityRemix
                     continue;
                 int matId;
                 var drawColors = colors;
-                if (mat.shader != null && mat.shader.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0)
+                bool particleShader = mat.shader != null && mat.shader.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (particleShader)
                 {
                     // A particle shader on the mesh (a trail): drawn as particle trails are, its
                     // vertex colours blended by the material's look, and its emission (which vertex
@@ -185,7 +186,8 @@ namespace UnityRemix
                         mpbEmissiveIntensity: emissive ? 0.8f : 0f,
                         mpbColor: look.MaterialColor,
                         suppressLightGeneration: true,
-                        renderer: renderer);
+                        renderer: renderer,
+                        particleLike: true);
                     if (colors != null)
                     {
                         drawColors = (Color32[])colors.Clone();
@@ -210,6 +212,8 @@ namespace UnityRemix
                     skinningData = null,
                     uvST = materialManager.GetMainTexST(matId),
                     bakeFrame = frameCount,
+                    // A particle shader's mesh blends as particles do (alpha over), not a surface.
+                    categoryFlags = particleShader ? (uint)RemixAPI.remixapi_InstanceCategoryBit.REMIXAPI_INSTANCE_CATEGORY_BIT_PARTICLE : 0u,
                     glowFade = materialManager.GlowFade(matId, mat)
                 });
             }

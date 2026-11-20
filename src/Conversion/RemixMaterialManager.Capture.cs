@@ -137,7 +137,8 @@ namespace UnityRemix
             shaderName == "Sprites/Default" || shaderName.EndsWith("/Sprites/Default", StringComparison.Ordinal) ||
             shaderName == "UI/Default" || shaderName.StartsWith("Unlit/Transparent", StringComparison.Ordinal);
 
-        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null, Iridescence? film = null)
+        public void CaptureMaterialTextures(Material material, int materialId, Color? mpbEmissiveColor = null, float? mpbEmissiveIntensity = null, Texture2D mpbMainTex = null, Color? mpbColor = null, Renderer renderer = null, bool suppressLightGeneration = false, ColorMask? colorMask = null, Iridescence? film = null,
+                                            bool particleLike = false)
         {
             if (material == null)
                 return;
@@ -155,7 +156,8 @@ namespace UnityRemix
 
             string shaderName = material.shader != null ? material.shader.name : "null";
             // (Sprites too: a renderer's colour, drawn as its vertex colours, tints a shared material.)
-            bool isParticleOrTrailRenderer = renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer ||
+            // (particleLike: a mesh drawn as a particle trail is, its colour its vertex colours.)
+            bool isParticleOrTrailRenderer = particleLike || renderer is ParticleSystemRenderer || renderer is TrailRenderer || renderer is LineRenderer ||
                                              renderer is SpriteRenderer;
             // An additive glow on a mesh (an explosion's sphere, a light shaft): drawn as additive
             // particles are (UploadParticleTexture: its brightness as coverage), emitting.
