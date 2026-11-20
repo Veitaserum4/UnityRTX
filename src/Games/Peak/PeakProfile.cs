@@ -68,10 +68,21 @@ namespace UnityRemix.Games.Peak
             }
             if (hideTheBodyType == null || characterType == null || isLocalProperty == null || hideHeadField == null)
                 return false;
-            var hide = renderer.GetComponentInParent(hideTheBodyType);
-            var character = hide != null ? hide.GetComponentInParent(characterType) : null;
-            if (character == null || !(bool)isLocalProperty.GetValue(character))
+            // HideTheBody sits somewhere in the character's hierarchy, not necessarily above the
+            // renderer.
+            var character = renderer.GetComponentInParent(characterType);
+            if (character == null)
                 return false;
+            var hide = character.GetComponentInChildren(hideTheBodyType, true);
+            bool local = (bool)isLocalProperty.GetValue(character);
+            bool body = hide != null && local && GhostedWhole(hide, renderer);
+            if (VerboseLog.On)
+                Logger.LogInfo($"[PEAK] '{renderer.name}' of '{character.name}': HideTheBody {(hide != null ? "found" : "none")}, local {local}, player body {body}");
+            return body;
+        }
+
+        private bool GhostedWhole(Component hide, Renderer renderer)
+        {
             if (ReferenceEquals(hideHeadField.GetValue(hide), renderer) ||
                 ReferenceEquals(hideSashField?.GetValue(hide), renderer) ||
                 ReferenceEquals(hideMedalField?.GetValue(hide), renderer))
