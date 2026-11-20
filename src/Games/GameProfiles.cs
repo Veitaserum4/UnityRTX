@@ -22,7 +22,7 @@ namespace UnityRemix.Games
             new AtlyssProfile(),
             new DefaultsOnlyProfile("DUSK", "Dusk", "Dusk"),
             new DefaultsOnlyProfile("Getting Over It", "GettingOverIt", "GettingOverIt"),
-            new DefaultsOnlyProfile("PEAK", "Peak", "PEAK"),
+            new Peak.PeakProfile(),
             new DefaultsOnlyProfile("R.E.P.O.", "Repo", "REPO"),
             new DefaultsOnlyProfile("Risk of Rain 2", "RiskOfRain2", "Risk of Rain 2"),
             new DefaultsOnlyProfile("White Knuckle", "WhiteKnuckle", "White Knuckle"),
