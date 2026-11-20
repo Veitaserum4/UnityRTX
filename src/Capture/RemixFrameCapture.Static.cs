@@ -156,7 +156,44 @@ namespace UnityRemix
                 Material mat = (materials != null && s < materials.Length) ? materials[s] : null;
                 if (tris == null || mat == null || SceneMeshScanner.IsMaterialOrShaderInvisible(mat))
                     continue;
-                int matId = CaptureLiveMaterial(mat, renderer, colour, emission);
+                int matId;
+                var drawColors = colors;
+                if (mat.shader != null && mat.shader.name.IndexOf("Particle", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    // A particle shader on the mesh (a trail): drawn as particle trails are, its
+                    // vertex colours blended by the material's look, and its emission (which vertex
+                    // colours do not tint) the colour of its most opaque vertex, in 1/15 steps.
+                    ParticleLook look = GetParticleLook(mat, false);
+                    Color vertexColour = Color.white;
+                    if (colors != null)
+                    {
+                        int best = -1;
+                        for (int v = 0; v < colors.Length; v++)
+                            if (best < 0 || colors[v].a > colors[best].a)
+                                best = v;
+                        if (best >= 0)
+                            vertexColour = colors[best];
+                    }
+                    bool emissive = look.IsAdditive;
+                    Color glow = look.EmissionColor(vertexColour);
+                    int r4 = Mathf.Clamp((int)(glow.r * 15f + 0.5f), 0, 15);
+                    int g4 = Mathf.Clamp((int)(glow.g * 15f + 0.5f), 0, 15);
+                    int b4 = Mathf.Clamp((int)(glow.b * 15f + 0.5f), 0, 15);
+                    matId = unchecked(mat.GetInstanceID() * 397 ^ (emissive ? (1 << 12) | (r4 << 8) | (g4 << 4) | b4 : 0) ^ 0x52570000);
+                    materialManager.CaptureMaterialTextures(mat, matId,
+                        mpbEmissiveColor: emissive ? (Color?)new Color(r4 / 15f, g4 / 15f, b4 / 15f, 1f) : null,
+                        mpbEmissiveIntensity: emissive ? 0.8f : 0f,
+                        mpbColor: look.MaterialColor,
+                        suppressLightGeneration: true,
+                        renderer: renderer);
+                    if (colors != null)
+                    {
+                        drawColors = (Color32[])colors.Clone();
+                        look.ApplyTo(drawColors, drawColors.Length);
+                    }
+                }
+                else
+                    matId = CaptureLiveMaterial(mat, renderer, colour, emission);
                 state.skinned.Add(new SkinnedMeshData
                 {
                     source = DynamicSource.Rewritten,
@@ -166,7 +203,7 @@ namespace UnityRemix
                     vertices = vertices,
                     normals = normals,
                     uvs = uvs,
-                    colors = colors,
+                    colors = drawColors,
                     triangles = tris,
                     localToWorld = localToWorld,
                     boneTransforms = null,
