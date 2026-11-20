@@ -111,6 +111,16 @@ namespace UnityRemix.Games
             return found;
         }
 
+        public static bool GetSkyLights(out Vector3 toSun, out Vector3 toMoon)
+        {
+            bool found = false;
+            Vector3 s = Vector3.zero, m = Vector3.zero;
+            Run(nameof(GetSkyLights), p => { if (!found) found = p.GetSkyLights(out s, out m); });
+            toSun = s;
+            toMoon = m;
+            return found && (s != Vector3.zero || m != Vector3.zero);
+        }
+
         public static bool GetSkyWeather(out string preset, out float precipitation)
         {
             bool found = false;

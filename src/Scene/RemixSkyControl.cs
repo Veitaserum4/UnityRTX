@@ -24,8 +24,21 @@ namespace UnityRemix
             public float dayLengthMinutes;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct SkyLights
+        {
+            public uint structSize;
+            public uint version;
+            public uint flags; // 1 sun, 2 moon
+            public float sunX, sunY, sunZ;
+            public float moonX, moonY, moonZ;
+            public float moonPhase;
+        }
+
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate RemixAPI.remixapi_ErrorCode SetSkyTimeFn(IntPtr time);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate RemixAPI.remixapi_ErrorCode SetSkyLightsFn(IntPtr lights);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate RemixAPI.remixapi_ErrorCode SetSkyWeatherPresetFn([MarshalAs(UnmanagedType.LPStr)] string preset,
                                                                           float transitionSeconds, float precipitation);
@@ -35,13 +48,21 @@ namespace UnityRemix
         private const float WeatherTransitionSeconds = 8f;
         // How far the game's clock may drift from NUMOS's before it is sent again (hours).
         private const float TimeTolerance = 0.05f;
+        // How far the game's sun or moon may turn before it is sent again (cosine): about 0.05
+        // degrees, a tenth of the sun's disc.
+        private const float LightTolerance = 0.9999996f;
 
         private readonly ManualLogSource logger;
         private readonly object apiLock;
         private SetSkyTimeFn setTime;
         private SetSkyWeatherPresetFn setWeather;
         private ClearSkyWeatherFn clearWeather;
+        // Optional: an OpenRemix without it keeps the clock's sun and Earth's Moon.
+        private SetSkyLightsFn setLights;
         private bool resolved, available;
+
+        private bool lightsSent;
+        private Vector3 sentSun, sentMoon;
 
         private bool timeSent;
         private float sentHours, sentDayLength, sentAt;
@@ -72,6 +93,11 @@ namespace UnityRemix
             setTime = Marshal.GetDelegateForFunctionPointer<SetSkyTimeFn>(t);
             setWeather = Marshal.GetDelegateForFunctionPointer<SetSkyWeatherPresetFn>(w);
             clearWeather = Marshal.GetDelegateForFunctionPointer<ClearSkyWeatherFn>(c);
+            IntPtr l = RemixAPI.GetRemixProcAddress("remixapi_SetSkyLightsEXT");
+            if (l != IntPtr.Zero)
+                setLights = Marshal.GetDelegateForFunctionPointer<SetSkyLightsFn>(l);
+            else
+                logger.LogInfo("[Sky] OpenRemix has no remixapi_SetSkyLightsEXT: the sun and moon follow its clock");
             return true;
         }
 
@@ -80,7 +106,8 @@ namespace UnityRemix
         {
             bool hasTime = Games.GameProfiles.GetSkyTime(out float hours, out float dayLength);
             bool hasWeather = Games.GameProfiles.GetSkyWeather(out string preset, out float precipitation);
-            if (!hasTime && !hasWeather && !timeSent && !weatherSent)
+            bool hasLights = Games.GameProfiles.GetSkyLights(out Vector3 toSun, out Vector3 toMoon);
+            if (!hasTime && !hasWeather && !hasLights && !timeSent && !weatherSent && !lightsSent)
                 return;
             if (!Resolve())
                 return;
@@ -98,6 +125,22 @@ namespace UnityRemix
             {
                 lock (apiLock) setTime(IntPtr.Zero);
                 timeSent = false;
+            }
+
+            if (setLights != null)
+            {
+                if (hasLights)
+                {
+                    toSun = toSun.normalized;
+                    toMoon = toMoon.normalized;
+                    if (!lightsSent || Turned(toSun, sentSun) || Turned(toMoon, sentMoon))
+                        SendLights(toSun, toMoon);
+                }
+                else if (lightsSent)
+                {
+                    lock (apiLock) setLights(IntPtr.Zero);
+                    lightsSent = false;
+                }
             }
 
             if (hasWeather)
@@ -120,6 +163,39 @@ namespace UnityRemix
                 weatherSent = false;
                 sentPreset = null;
             }
+        }
+
+        private static bool Turned(Vector3 now, Vector3 sent) =>
+            (now == Vector3.zero) != (sent == Vector3.zero) || Vector3.Dot(now, sent) < LightTolerance;
+
+        private void SendLights(Vector3 toSun, Vector3 toMoon)
+        {
+            // Remix's world is Z up: (x, y, z) -> (x, z, y), as the lights.
+            var lights = new SkyLights
+            {
+                structSize = (uint)Marshal.SizeOf<SkyLights>(),
+                version = 1,
+                flags = (toSun != Vector3.zero ? 1u : 0u) | (toMoon != Vector3.zero ? 2u : 0u),
+                sunX = toSun.x, sunY = toSun.z, sunZ = toSun.y,
+                moonX = toMoon.x, moonY = toMoon.z, moonZ = toMoon.y,
+                moonPhase = -1f
+            };
+            var handle = GCHandle.Alloc(lights, GCHandleType.Pinned);
+            RemixAPI.remixapi_ErrorCode result;
+            try
+            {
+                lock (apiLock) result = setLights(handle.AddrOfPinnedObject());
+            }
+            finally
+            {
+                handle.Free();
+            }
+            if (!lightsSent || (VerboseLog.On && Time.frameCount % 600 == 0))
+                logger.LogInfo($"[Sky] sun elevation {Mathf.Asin(Mathf.Clamp(toSun.y, -1f, 1f)) * Mathf.Rad2Deg:0.0}, " +
+                               $"moon elevation {Mathf.Asin(Mathf.Clamp(toMoon.y, -1f, 1f)) * Mathf.Rad2Deg:0.0}: {result}");
+            lightsSent = true;
+            sentSun = toSun;
+            sentMoon = toMoon;
         }
 
         private void SendTime(float hours, float dayLength, float now)

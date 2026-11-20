@@ -188,6 +188,7 @@ namespace UnityRemix.Games.Peak
         // storm factors (StormVisual: rainstormWindFactor, snowstormWindFactor, 0 to 1).
         private Type dayNightType;
         private FieldInfo dayNightInstance, timeOfDayField, dayLengthField, rainStormField, snowStormField;
+        private FieldInfo sunField, moonField;
         private bool skyLookedUp;
 
         private object DayNight()
@@ -203,6 +204,8 @@ namespace UnityRemix.Games.Peak
                     dayLengthField = AccessTools.Field(dayNightType, "dayLengthInMinutes");
                     rainStormField = AccessTools.Field(dayNightType, "rainstormWindFactor");
                     snowStormField = AccessTools.Field(dayNightType, "snowstormWindFactor");
+                    sunField = AccessTools.Field(dayNightType, "sun");
+                    moonField = AccessTools.Field(dayNightType, "moon");
                 }
                 if (dayNightInstance == null || timeOfDayField == null)
                     Logger.LogInfo("[PEAK] DayNightManager not found: the sky keeps its own time");
@@ -222,6 +225,21 @@ namespace UnityRemix.Games.Peak
             hours = (float)timeOfDayField.GetValue(dayNight);
             dayLengthMinutes = dayLengthField != null ? (float)dayLengthField.GetValue(dayNight) : 0f;
             return true;
+        }
+
+        // The sun and moon are lights on DayNightManager's turning earth, its nights running faster
+        // than its days (dayNightRatio): NUMOS's go where they shine from.
+        public override bool GetSkyLights(out Vector3 toSun, out Vector3 toMoon)
+        {
+            toSun = toMoon = Vector3.zero;
+            var dayNight = DayNight();
+            if (dayNight == null)
+                return false;
+            if (sunField?.GetValue(dayNight) is Light sun && sun != null)
+                toSun = -sun.transform.forward;
+            if (moonField?.GetValue(dayNight) is Light moon && moon != null)
+                toMoon = -moon.transform.forward;
+            return toSun != Vector3.zero || toMoon != Vector3.zero;
         }
 
         // Calm: a fair sky. A storm (rain or snow, the stronger): Storm, its precipitation the

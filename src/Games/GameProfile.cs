@@ -120,6 +120,15 @@ namespace UnityRemix.Games
             return false;
         }
 
+        // Where the game's own sun and moon are (world directions toward them; zero: not set), for
+        // a day that does not follow Earth's: NUMOS's sun and moon go there instead of where its
+        // clock puts them. Main thread, each frame. False: the clock's sun and Earth's Moon.
+        public virtual bool GetSkyLights(out Vector3 toSun, out Vector3 toMoon)
+        {
+            toSun = toMoon = Vector3.zero;
+            return false;
+        }
+
         // The game's weather as a NUMOS preset (Clear, Fair, PartlyCloudy, Cloudy, Overcast, Haze,
         // Fog, Storm, Drizzle, Altostratus) and its precipitation, 0 to 1. Main thread, each
         // frame. False: the profile's own weather.
