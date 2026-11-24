@@ -20,6 +20,7 @@ namespace UnityRemix
         public static ConfigEntry<float> Brightness;
         public static ConfigEntry<float> Softness;
         public static ConfigEntry<bool> Shadows;
+        public static ConfigEntry<bool> ExposureRelative;
 
         // A fitted mesh, in its object space: the near cap's centre, the axis to the far cap's,
         // the half extents across it (u, v) at both caps, the vertex brightness at both.
@@ -44,7 +45,11 @@ namespace UnityRemix
                 "Draw the fake light shafts a game's profile names (additive cones and boxes under windows and lamps) " +
                 "as glowing air: brighter seen through more of them, cut softly by walls. Off: the game's sheets.");
             Brightness = config.Bind("Rendering", "LightShaftBrightness", 2f,
-                "Light shaft volumes' strength, 1 matching the game's sheet seen side-on.");
+                "Light shaft volumes' strength, 1 matching the game's sheet seen side-on. Exposure-relative, more " +
+                "brightens a shaft toward white without passing it: faint shafts by about this much, bright ones less.");
+            ExposureRelative = config.Bind("Rendering", "LightShaftExposureRelative", true,
+                "Light shafts show as brightly whatever the exposure, as the game's sheets do on screen (a dark night " +
+                "scene, exposed brighter, does not blow them out). Off: a fixed radiance, as lit surfaces have.");
             Shadows = config.Bind("Rendering", "LightShaftShadows", true,
                 "What stands in a light shaft casts a shadow down it, from the window or lamp it starts at (a shadow ray per sample).");
             Softness = config.Bind("Rendering", "LightShaftSoftness", 0.5f,
@@ -150,10 +155,21 @@ namespace UnityRemix
             // as the shaft widens, so a crossing glows alike all along), the sides' fade made up for.
             float faces = material.HasProperty("_CullMode") && Mathf.RoundToInt(material.GetFloat("_CullMode")) == 0 ? 2f : 1f;
             float thickness = u.magnitude + v.magnitude;
-            float scale = faces * fit.nearBright / Mathf.Max(thickness, 1e-3f) / (1f - 0.5f * softness) * Brightness.Value;
-            if (RemixMaterialManager.EmissionInLightUnits == null || RemixMaterialManager.EmissionInLightUnits.Value)
-                scale *= RemixMaterialManager.UnlitRadianceScale;
             Color linear = QualitySettings.activeColorSpace == ColorSpace.Linear ? glow : glow.linear;
+            bool relative = ExposureRelative.Value;
+            float strength = Brightness.Value;
+            if (relative && strength > 1f)
+            {
+                // Exposure-relative, the sheet's side-on brightness is what the game added to the
+                // screen: boosted toward white (b' = s b / (1 + (s - 1) b)), never past it. A faint
+                // shaft is brightened by about the strength, a bright one (a lighthouse's beam,
+                // already 0.6 white) hardly at all, instead of turning into a solid slab.
+                float peak = faces * fit.nearBright * Mathf.Max(linear.r, Mathf.Max(linear.g, linear.b));
+                strength /= 1f + (strength - 1f) * Mathf.Max(peak, 0f);
+            }
+            float scale = faces * fit.nearBright / Mathf.Max(thickness, 1e-3f) / (1f - 0.5f * softness) * strength;
+            if (!relative && (RemixMaterialManager.EmissionInLightUnits == null || RemixMaterialManager.EmissionInLightUnits.Value))
+                scale *= RemixMaterialManager.UnlitRadianceScale;
             return new RemixAPI.remixapi_VolumeShaftEXT
             {
                 sType = RemixAPI.REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT,
@@ -167,7 +183,8 @@ namespace UnityRemix
                 farFade = fit.nearBright > 0 ? fit.farBright / fit.nearBright : 1f,
                 softness = softness,
                 shape = RemixAPI.REMIXAPI_VOLUME_SHAFT_BOX_EXT,
-                flags = Shadows.Value ? RemixAPI.REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0u
+                flags = (Shadows.Value ? RemixAPI.REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0u) |
+                        (relative ? RemixAPI.REMIXAPI_VOLUME_SHAFT_EXPOSURE_RELATIVE_EXT : 0u)
             };
         }
 

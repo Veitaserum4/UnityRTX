@@ -698,6 +698,8 @@ namespace UnityRemix
         public const uint REMIXAPI_VOLUME_SHAFT_ELLIPSE_EXT = 1;
         /// <summary>What stands in the shaft shadows it, down its length from its near cap.</summary>
         public const uint REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT = 1;
+        /// <summary>Its radiance is what it shows before tone mapping, whatever the exposure.</summary>
+        public const uint REMIXAPI_VOLUME_SHAFT_EXPOSURE_RELATIVE_EXT = 2;
 
         /// <summary>
         /// A tapered box (or the cone inscribed in it) from a near cap at origin (half extents halfU,
