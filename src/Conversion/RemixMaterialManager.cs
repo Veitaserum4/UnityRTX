@@ -437,6 +437,15 @@ namespace UnityRemix
             return materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.additive;
         }
 
+        // Gives light of its own (an emission with a colour): a glowing trail, a bullet's streak.
+        public bool IsEmissive(int materialId)
+        {
+            if (materialId == 0 || !materialTextureData.TryGetValue(materialId, out var data) || data.emissiveIntensity <= 0f)
+                return false;
+            var c = data.emissiveColor;
+            return Mathf.Max(c.r, Mathf.Max(c.g, c.b)) > 0f;
+        }
+
         public bool NeedsBlendedInstance(int materialId)
         {
             return materialId != 0 && materialTextureData.TryGetValue(materialId, out var data) && data.blendedInstance;

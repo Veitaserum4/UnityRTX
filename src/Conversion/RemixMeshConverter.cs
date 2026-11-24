@@ -506,7 +506,12 @@ namespace UnityRemix
             else blendedMeshes.TryRemove(handle, out _);
             if (materialManager.IsAdditive(materialId)) additiveMeshes[handle] = 0;
             else additiveMeshes.TryRemove(handle, out _);
+            if (materialManager.IsEmissive(materialId)) emissiveMeshes[handle] = 0;
+            else emissiveMeshes.TryRemove(handle, out _);
         }
+
+        // Meshes of emissive materials: their raster particles glow, not lit by the scene.
+        private readonly ConcurrentDictionary<IntPtr, byte> emissiveMeshes = new ConcurrentDictionary<IntPtr, byte>();
 
         // Meshes of additive materials (RemixMaterialManager.IsAdditive): raster particles of
         // theirs add their colour, as Unity's do, rather than blending it over (overlapping
@@ -1412,11 +1417,12 @@ namespace UnityRemix
                 }
             }
 
-            // A blended (not additive) raster particle scatters the light where it is: smoke and
-            // dust are otherwise as bright in a dark room as in the sun.
+            // A blended raster particle scatters the light where it is: smoke and dust are
+            // otherwise as bright in a dark room as in the sun. Not one that gives light (additive,
+            // or an emissive material: a projectile's trail, a bullet's streak).
             bool litSprite = isParticleInstance && hasBlend && !multiplyPaint && RasterParticles != null && RasterParticles.Value &&
                              LitParticles != null && LitParticles.Value && RemixAPI.SpriteLitSupported &&
-                             !additiveMeshes.ContainsKey(meshHandle);
+                             !additiveMeshes.ContainsKey(meshHandle) && !emissiveMeshes.ContainsKey(meshHandle);
             var spriteExt = new RemixAPI.remixapi_InstanceInfoSpriteEXT
             {
                 sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SPRITE_EXT,
@@ -1828,6 +1834,7 @@ namespace UnityRemix
                     destroyMeshFunc(oldest.handle);
                     blendedMeshes.TryRemove(oldest.handle, out _);
                     additiveMeshes.TryRemove(oldest.handle, out _);
+                    emissiveMeshes.TryRemove(oldest.handle, out _);
                 }
                 catch { }
             }
