@@ -309,7 +309,9 @@ namespace UnityRemix
         private static readonly int BlockBaseColorProp = Shader.PropertyToID("_BaseColor");
         private static readonly int BlockEmissionProp = Shader.PropertyToID("_EmissionColor");
 
-        // The colours a renderer's property block sets (0: none).
+        // The colours a renderer's property block sets (0: none). A block of other properties only
+        // (a room's reflection cubemap, given to every renderer of a room as it is entered) is
+        // 0 too: a colour the block does not set reads as zero, the same as no block.
         private static int BlockColourKey(Renderer renderer)
         {
             if (renderer == null || !renderer.HasPropertyBlock())
@@ -322,7 +324,7 @@ namespace UnityRemix
             int key = unchecked((ColourBits(colourBlock.GetColor(BlockColorProp)) * 31 +
                                  ColourBits(colourBlock.GetColor(BlockBaseColorProp))) * 31 +
                                 ColourBits(colourBlock.GetColor(BlockEmissionProp)));
-            return key == 0 ? 1 : key;
+            return key;
         }
 
         private static int ColourBits(Color32 c) => (c.a << 24) | (c.r << 16) | (c.g << 8) | c.b;
