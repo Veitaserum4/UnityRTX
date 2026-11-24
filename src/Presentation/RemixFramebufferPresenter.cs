@@ -84,6 +84,9 @@ namespace UnityRemix
         private static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
+        private static extern IntPtr GetFocus();
+
+        [DllImport("user32.dll")]
         private static extern IntPtr SetFocus(IntPtr hWnd);
 
         [DllImport("user32.dll")]
@@ -256,11 +259,16 @@ namespace UnityRemix
             bool xHeld = (GetAsyncKeyState(VK_X) & 0x8000) != 0;
             bool altXPressed = altHeld && xHeld;
 
+            // With the Remix window focused, OpenRemix sees Alt+X itself and toggles its menu:
+            // toggling it here too closed it and opened it again at once.
+            IntPtr remixWindow = windowManager != null ? windowManager.RemixWindow : IntPtr.Zero;
+            bool remixHasKeys = remixWindow != IntPtr.Zero && (GetFocus() == remixWindow || GetForegroundWindow() == remixWindow);
             if (altXPressed && !wasAltXPressed)
             {
                 wasAltXPressed = true;
-                windowManager?.HandleAltX();
-                logger?.LogInfo($"[RemixFramebufferPresenter] Alt+X triggered (Win32 GetAsyncKeyState), RemixUIOpen: {RemixWindowManager.IsRemixUIOpen}");
+                if (!remixHasKeys)
+                    windowManager?.HandleAltX();
+                logger?.LogInfo($"[RemixFramebufferPresenter] Alt+X {(remixHasKeys ? "in the Remix window (OpenRemix toggles it)" : "toggles the menu")}, RemixUIOpen: {RemixWindowManager.IsRemixUIOpen}");
             }
             else if (!altXPressed)
             {
