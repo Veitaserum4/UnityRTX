@@ -20,7 +20,6 @@ namespace UnityRemix
         public static ConfigEntry<float> Brightness;
         public static ConfigEntry<float> Softness;
         public static ConfigEntry<bool> Shadows;
-        public static ConfigEntry<bool> ExposureRelative;
 
         // A fitted mesh, in its object space: the near cap's centre, the axis to the far cap's,
         // the half extents across it (u, v) at both caps, the vertex brightness at both.
@@ -45,11 +44,8 @@ namespace UnityRemix
                 "Draw the fake light shafts a game's profile names (additive cones and boxes under windows and lamps) " +
                 "as glowing air: brighter seen through more of them, cut softly by walls. Off: the game's sheets.");
             Brightness = config.Bind("Rendering", "LightShaftBrightness", 2f,
-                "Light shaft volumes' strength, 1 matching the game's sheet seen side-on. Exposure-relative, more " +
-                "brightens a shaft toward white without passing it: faint shafts by about this much, bright ones less.");
-            ExposureRelative = config.Bind("Rendering", "LightShaftExposureRelative", true,
-                "Light shafts show as brightly whatever the exposure, as the game's sheets do on screen (a dark night " +
-                "scene, exposed brighter, does not blow them out). Off: a fixed radiance, as lit surfaces have.");
+                "Light shaft volumes' strength, 1 matching the game's sheet seen side-on. Long beams (searchlights, " +
+                "lighthouses) keep the game's strength.");
             Shadows = config.Bind("Rendering", "LightShaftShadows", true,
                 "What stands in a light shaft casts a shadow down it, from the window or lamp it starts at (a shadow ray per sample).");
             Softness = config.Bind("Rendering", "LightShaftSoftness", 0.5f,
@@ -156,24 +152,14 @@ namespace UnityRemix
             // as the shaft widens, so a crossing glows alike all along), the sides' fade made up for.
             float faces = material.HasProperty("_CullMode") && Mathf.RoundToInt(material.GetFloat("_CullMode")) == 0 ? 2f : 1f;
             float thickness = u.magnitude + v.magnitude;
-            Color linear = QualitySettings.activeColorSpace == ColorSpace.Linear ? glow : glow.linear;
-            bool relative = ExposureRelative.Value;
             // A beam (a searchlight's, a lighthouse's: far longer than its source is wide) keeps the
             // game's strength. Boosted like a window's shaft, it reads as a solid slab against the
             // dark it usually crosses; the strength is for room-sized shafts.
             float strength = IsBeam(fit) ? 1f : Brightness.Value;
-            if (relative && strength > 1f)
-            {
-                // Exposure-relative, the sheet's side-on brightness is what the game added to the
-                // screen: boosted toward white (b' = s b / (1 + (s - 1) b)), never past it. A faint
-                // shaft is brightened by about the strength, a bright one (a lighthouse's beam,
-                // already 0.6 white) hardly at all, instead of turning into a solid slab.
-                float peak = faces * fit.nearBright * Mathf.Max(linear.r, Mathf.Max(linear.g, linear.b));
-                strength /= 1f + (strength - 1f) * Mathf.Max(peak, 0f);
-            }
             float scale = faces * fit.nearBright / Mathf.Max(thickness, 1e-3f) / (1f - 0.5f * softness) * strength;
-            if (!relative && (RemixMaterialManager.EmissionInLightUnits == null || RemixMaterialManager.EmissionInLightUnits.Value))
+            if (RemixMaterialManager.EmissionInLightUnits == null || RemixMaterialManager.EmissionInLightUnits.Value)
                 scale *= RemixMaterialManager.UnlitRadianceScale;
+            Color linear = QualitySettings.activeColorSpace == ColorSpace.Linear ? glow : glow.linear;
             return new RemixAPI.remixapi_VolumeShaftEXT
             {
                 sType = RemixAPI.REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT,
@@ -187,8 +173,7 @@ namespace UnityRemix
                 farFade = fit.nearBright > 0 ? fit.farBright / fit.nearBright : 1f,
                 softness = softness,
                 shape = RemixAPI.REMIXAPI_VOLUME_SHAFT_BOX_EXT,
-                flags = (Shadows.Value ? RemixAPI.REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0u) |
-                        (relative ? RemixAPI.REMIXAPI_VOLUME_SHAFT_EXPOSURE_RELATIVE_EXT : 0u)
+                flags = Shadows.Value ? RemixAPI.REMIXAPI_VOLUME_SHAFT_SHADOWED_EXT : 0u
             };
         }
 
@@ -354,6 +339,9 @@ namespace UnityRemix
                          : Mathf.Abs(along.y) <= Mathf.Abs(along.z) ? Vector3.up : Vector3.forward;
             Vector3 u = (seed - Vector3.Dot(seed, along) * along).normalized, v = Vector3.Cross(along, u);
             float nearU = 0, nearV = 0, farU = 0, farV = 0;
+            // How far each end reaches along the axis past its centre: a window's shaft starts on the
+            // window's plane and ends on the floor's, neither square to it.
+            float back = 0, ahead = 0;
             for (int i = 0; i < vertices.Length; i++)
             {
                 bool bright = VertexBrightness(colors[i]) >= threshold;
@@ -363,15 +351,27 @@ namespace UnityRemix
                 {
                     nearU = Mathf.Max(nearU, x);
                     nearV = Mathf.Max(nearV, y);
+                    back = Mathf.Max(back, -Vector3.Dot(d, along));
                 }
                 else
                 {
                     farU = Mathf.Max(farU, x);
                     farV = Mathf.Max(farV, y);
+                    ahead = Mathf.Max(ahead, Vector3.Dot(d, along));
                 }
             }
-            var fit = new Fit { origin = near, axis = axis, u = u, v = v, nearBright = brightSum / brightCount, farBright = darkSum / darkCount };
-            SetCaps(fit, new Vector2(nearU, nearV), new Vector2(farU, farV));
+            // The caps are square to the axis, so they are moved out to the furthest corner of each
+            // end, the taper carried on to them: square at the ends' centres, they cut the shaft short
+            // by a window on one side and above the floor on the other. What they now reach past
+            // the window's wall and into the floor is hidden by them (the glow is seen in front of
+            // the first surface).
+            float length = axis.magnitude;
+            Vector2 Half(Vector2 a, Vector2 b, float t) => Vector2.Max(a + (b - a) * t, 0.01f * Vector2.Max(a, b));
+            Vector2 nearHalf = new Vector2(nearU, nearV), farHalf = new Vector2(farU, farV);
+            Vector2 start = Half(nearHalf, farHalf, -back / length), end = Half(nearHalf, farHalf, 1f + ahead / length);
+            var fit = new Fit { origin = near - along * back, axis = axis + along * (back + ahead), u = u, v = v,
+                                nearBright = brightSum / brightCount, farBright = darkSum / darkCount };
+            SetCaps(fit, start, end);
             return fit;
         }
 

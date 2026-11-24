@@ -374,13 +374,7 @@ namespace UnityRemix
                     if (RemixImGui.SliderFloat("Strength##shafts", ref strength, 0f, 10f))
                         LightShafts.Brightness.Value = strength;
                     Tooltip("How brightly the shafts glow; 1 matches the game's sheet seen side-on. " +
-                            "Following exposure, more brightens faint shafts most and none past white. " +
                             "Long beams (searchlights, lighthouses) keep the game's strength.");
-                    bool relative = LightShafts.ExposureRelative.Value;
-                    if (RemixImGui.Checkbox("Follow exposure##shafts", ref relative))
-                        LightShafts.ExposureRelative.Value = relative;
-                    Tooltip("Shafts show as brightly whatever the exposure, as the game's sheets do on screen: " +
-                            "not blown out in a dark scene exposed brighter. Off: a fixed radiance.");
                     float softness = LightShafts.Softness.Value;
                     if (RemixImGui.SliderFloat("Edge softness##shafts", ref softness, 0f, 1f))
                         LightShafts.Softness.Value = softness;
