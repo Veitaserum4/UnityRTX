@@ -715,7 +715,7 @@ namespace UnityRemix
             int totalIndices = 0;
             foreach (var sIdx in submeshIndices) totalIndices += sIdx.Length;
             int matSig = StaticGeometryDedupe.ComputeMaterialSignature(materials);
-            ulong meshHash = GenerateMeshHash(mesh.name, vertices.Length, totalIndices, matSig);
+            ulong meshHash = GenerateMeshHash(mesh.name, vertices, totalIndices, matSig);
             ulong meshKey = GetMeshKey(mesh.GetInstanceID(), matSig);
 
             var prepared = new PreparedMeshData
@@ -1888,6 +1888,25 @@ namespace UnityRemix
 
             if (hash == 0) hash = 1;
             return hash;
+        }
+
+        /// <summary>
+        /// GenerateMeshHash with the vertex positions mixed in. OpenRemix keys meshes by this hash
+        /// (a second create with it replaces the first), and a name with "(Clone)" removed is not
+        /// unique: ProBuilder copies of a shape each own a different mesh of the same name and
+        /// counts (four arches in ULTRAKILL 0-3 all drew one of them).
+        /// </summary>
+        public static ulong GenerateMeshHash(string meshName, Vector3[] vertices, int indexCount, int materialSignature = 0)
+        {
+            ulong hash = GenerateMeshHash(meshName, vertices.Length, indexCount, materialSignature);
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                var v = vertices[i];
+                hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(v.x)) * 1099511628211UL;
+                hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(v.y)) * 1099511628211UL;
+                hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(v.z)) * 1099511628211UL;
+            }
+            return hash == 0 ? 1 : hash;
         }
 
         public static ulong GenerateMeshHash(Mesh mesh)

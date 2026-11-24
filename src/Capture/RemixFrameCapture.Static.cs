@@ -648,7 +648,7 @@ namespace UnityRemix
 
                     int totalIndices = 0;
                     foreach (var sIdx in submeshIndices) totalIndices += sIdx.Length;
-                    ulong meshHash = RemixMeshConverter.GenerateMeshHash(mesh.name, vertices.Length, totalIndices, matSig);
+                    ulong meshHash = RemixMeshConverter.GenerateMeshHash(mesh.name, vertices, totalIndices, matSig);
 
                     // Capture material textures (pixel data gathered here, Remix API deferred to render thread)
                     List<int> submeshMaterialIds = null;
