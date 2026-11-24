@@ -1902,11 +1902,19 @@ namespace UnityRemix
             for (int i = 0; i < vertices.Length; i++)
             {
                 var v = vertices[i];
-                hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(v.x)) * 1099511628211UL;
-                hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(v.y)) * 1099511628211UL;
-                hash = (hash ^ (uint)BitConverter.SingleToInt32Bits(v.z)) * 1099511628211UL;
+                hash = (hash ^ new FloatBits { value = v.x }.bits) * 1099511628211UL;
+                hash = (hash ^ new FloatBits { value = v.y }.bits) * 1099511628211UL;
+                hash = (hash ^ new FloatBits { value = v.z }.bits) * 1099511628211UL;
             }
             return hash == 0 ? 1 : hash;
+        }
+
+        // A float's bits without allocating (BitConverter.SingleToInt32Bits is not in net472).
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
+        private struct FloatBits
+        {
+            [System.Runtime.InteropServices.FieldOffset(0)] public float value;
+            [System.Runtime.InteropServices.FieldOffset(0)] public uint bits;
         }
 
         public static ulong GenerateMeshHash(Mesh mesh)
