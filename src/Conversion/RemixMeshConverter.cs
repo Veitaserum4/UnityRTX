@@ -403,6 +403,12 @@ namespace UnityRemix
         /// over the path-traced image instead of traced.
         /// </summary>
         public ConfigEntry<bool> RasterParticles { get; set; }
+
+        /// <summary>
+        /// Blended raster particles take the traced scene's light (REMIXAPI_SPRITE_LIT_EXT); additive
+        /// ones are light themselves and stay as drawn.
+        /// </summary>
+        public ConfigEntry<bool> LitParticles { get; set; }
         
         public RemixMeshConverter(
             ManualLogSource logger,
@@ -1406,8 +1412,21 @@ namespace UnityRemix
                 }
             }
 
+            // A blended (not additive) raster particle scatters the light where it is: smoke and
+            // dust are otherwise as bright in a dark room as in the sun.
+            bool litSprite = isParticleInstance && hasBlend && !multiplyPaint && RasterParticles != null && RasterParticles.Value &&
+                             LitParticles != null && LitParticles.Value && RemixAPI.SpriteLitSupported &&
+                             !additiveMeshes.ContainsKey(meshHandle);
+            var spriteExt = new RemixAPI.remixapi_InstanceInfoSpriteEXT
+            {
+                sType = RemixAPI.REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SPRITE_EXT,
+                flags = RemixAPI.REMIXAPI_SPRITE_LIT_EXT
+            };
+
             unsafe
             {
+                if (litSprite)
+                    blendExt.pNext = (IntPtr)(&spriteExt);
                 if (hasIdentity)
                 {
                     objectPickingExt.pNext = (IntPtr)(&identityExt);

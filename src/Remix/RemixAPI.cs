@@ -692,6 +692,26 @@ namespace UnityRemix
             public IntPtr pNext;
         }
 
+        /// <summary>
+        /// pNext on a blended raster-only instance's InstanceInfo: what a host's particle shader does
+        /// beyond texture x vertex colour (remix_native_ext.h remixapi_InstanceInfoSpriteEXT).
+        /// </summary>
+        public const int REMIXAPI_STRUCT_TYPE_INSTANCE_INFO_SPRITE_EXT = 0x7fff1015;
+        /// <summary>The sprite scatters the light where it is (the path tracer's volume cells): as
+        /// dark or bright as the scene around it.</summary>
+        public const uint REMIXAPI_SPRITE_LIT_EXT = 0x200;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct remixapi_InstanceInfoSpriteEXT
+        {
+            public int sType;
+            public IntPtr pNext;
+            public uint flags;
+            public float softDistance;
+            public float softFadeStart;
+            public float softFadeEnd;
+        }
+
         /// <summary>A light shaft drawn as glowing air (remixapi_DrawVolumeShaftsEXT).</summary>
         public const int REMIXAPI_STRUCT_TYPE_VOLUME_SHAFT_EXT = 0x7fff107C;
         public const uint REMIXAPI_VOLUME_SHAFT_BOX_EXT = 0;
@@ -1259,6 +1279,8 @@ namespace UnityRemix
         public static PFN_remixapi_AddSceneInstancesEXT AddSceneInstancesEXTFunc { get; private set; }
         /// <summary>Null on a remix.dll without light shafts.</summary>
         public static PFN_remixapi_DrawVolumeShaftsEXT DrawVolumeShaftsEXTFunc { get; private set; }
+        /// <summary>The runtime knows REMIXAPI_SPRITE_LIT_EXT (remixapi_SpriteLitSupportedEXT exported).</summary>
+        public static bool SpriteLitSupported { get; private set; }
         public static PFN_remixapi_ChangeSceneInstancesEXT ChangeSceneInstancesEXTFunc { get; private set; }
         public static PFN_remixapi_RemoveSceneInstancesEXT RemoveSceneInstancesEXTFunc { get; private set; }
         public static PFN_remixapi_DrawSceneInstancesEXT DrawSceneInstancesEXTFunc { get; private set; }
@@ -1376,6 +1398,9 @@ namespace UnityRemix
             IntPtr addSceneInstPtr = GetProcAddress(hModule, "remixapi_AddSceneInstancesEXT");
             if (addSceneInstPtr != IntPtr.Zero)
                 AddSceneInstancesEXTFunc = Marshal.GetDelegateForFunctionPointer<PFN_remixapi_AddSceneInstancesEXT>(addSceneInstPtr);
+
+            // A runtime without lit sprites refuses the flag (the instance is not drawn): asked first.
+            SpriteLitSupported = GetProcAddress(hModule, "remixapi_SpriteLitSupportedEXT") != IntPtr.Zero;
 
             IntPtr shaftsPtr = GetProcAddress(hModule, "remixapi_DrawVolumeShaftsEXT");
             if (shaftsPtr != IntPtr.Zero)

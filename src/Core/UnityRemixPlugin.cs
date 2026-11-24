@@ -31,6 +31,7 @@ namespace UnityRemix
         private ConfigEntry<float> configParticleMaxDistance;
         private ConfigEntry<bool> configEnableParticleDistanceCulling;
         private ConfigEntry<bool> configRasterParticles;
+        private ConfigEntry<bool> configLitParticles;
         private ConfigEntry<bool> configEnableSkybox;
         private ConfigEntry<SkyboxFiltering> configSkyboxFiltering;
         private ConfigEntry<bool> configUseVisibilityCulling;
@@ -285,6 +286,10 @@ namespace UnityRemix
             configRasterParticles = Config.Bind("Rendering", "RasterParticles", true,
                 "Draw particle systems and trails with OpenRemix's raster backend over the path-traced image instead of path tracing them. " +
                 "Cheaper with many particles; they are not lit, reflected, refracted or shadowed by the path tracer.");
+            configLitParticles = Config.Bind("Rendering", "LitParticles", true,
+                "Raster particles that are blended over the scene (smoke, dust, blood) take the path-traced scene's light where " +
+                "they are: dark in a dark room, bright in the sun. Additive ones (fire, sparks, glows) give light and stay as they are. " +
+                "Needs a remix.dll with lit sprites; OpenRemix keeps their light only while raster fog is off.");
             
             configEnableSkybox = Config.Bind("Rendering", "EnableSkybox", true,
                 "Automatically detect and render skyboxes in RTX Remix as a native Dome Light environment.");
@@ -612,6 +617,7 @@ namespace UnityRemix
                 remixApiLock
             );
             meshConverter.RasterParticles = configRasterParticles;
+            meshConverter.LitParticles = configLitParticles;
             
             frameCapture = new RemixFrameCapture(
                 LogSource,
@@ -1167,6 +1173,7 @@ namespace UnityRemix
                 case "CaptureParticles": return configCaptureParticles.Value;
                 case "EnableParticleDistanceCulling": return configEnableParticleDistanceCulling.Value;
                 case "RasterParticles": return configRasterParticles.Value;
+                case "LitParticles": return configLitParticles.Value;
                 case "ParticleLights": return RemixFrameCapture.ParticleLights.Value;
                 case "ParticleLightPerParticle": return RemixFrameCapture.ParticleLightPerParticle.Value;
                 case "HardwareSkinning": return configHardwareSkinning.Value;
@@ -1252,6 +1259,7 @@ namespace UnityRemix
                 case "CaptureParticles": configCaptureParticles.Value = value; break;
                 case "EnableParticleDistanceCulling": configEnableParticleDistanceCulling.Value = value; break;
                 case "RasterParticles": configRasterParticles.Value = value; break;
+                case "LitParticles": configLitParticles.Value = value; break;
                 case "ParticleLights": RemixFrameCapture.ParticleLights.Value = value; break;
                 case "ParticleLightPerParticle": RemixFrameCapture.ParticleLightPerParticle.Value = value; break;
                 case "HardwareSkinning": configHardwareSkinning.Value = value; break;

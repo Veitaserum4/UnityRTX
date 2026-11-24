@@ -26,6 +26,7 @@ namespace UnityRemix
         private float _particleMaxDistance;
         private bool _enableParticleDistanceCulling;
         private bool _rasterParticles;
+        private bool _litParticles;
         private bool _enableSkybox;
         private int _skyboxFiltering;
         private float _lightIntensityMultiplier;
@@ -204,6 +205,14 @@ namespace UnityRemix
                 RemixImGui.Indent();
                 Toggle("Raster particles", "RasterParticles", ref _rasterParticles,
                     "Draws particles with OpenRemix's raster backend over the path-traced image.\nCheaper with many particles; they are not lit, reflected or shadowed by the path tracer.");
+                if (_rasterParticles && RemixAPI.SpriteLitSupported)
+                {
+                    RemixImGui.Indent();
+                    Toggle("Lit by the scene##particles", "LitParticles", ref _litParticles,
+                        "Smoke, dust and blood take the path-traced light where they are: dark in a dark room, bright in the sun.\n" +
+                        "Additive particles (fire, sparks, glows) give light and stay as they are.\nOpenRemix lights them only while raster fog is off.");
+                    RemixImGui.Unindent();
+                }
                 Toggle("Distance culling##particles", "EnableParticleDistanceCulling", ref _enableParticleDistanceCulling,
                     "Culls particle systems farther away than the max distance.");
                 if (_enableParticleDistanceCulling)
@@ -791,6 +800,7 @@ namespace UnityRemix
             _particleMaxDistance = _plugin.GetConfigFloat("ParticleMaxDistance");
             _enableParticleDistanceCulling = _plugin.GetConfigBool("EnableParticleDistanceCulling");
             _rasterParticles = _plugin.GetConfigBool("RasterParticles");
+            _litParticles = _plugin.GetConfigBool("LitParticles");
             _enableSkybox = _plugin.GetConfigBool("EnableSkybox");
             _skyboxFiltering = _plugin.GetConfigInt("SkyboxFiltering");
             _enableVisibilityCulling = _plugin.GetConfigBool("UseVisibilityCulling");
