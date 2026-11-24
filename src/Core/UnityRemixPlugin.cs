@@ -289,7 +289,7 @@ namespace UnityRemix
             configLitParticles = Config.Bind("Rendering", "LitParticles", true,
                 "Raster particles that are blended over the scene (smoke, dust, blood) take the path-traced scene's light where " +
                 "they are: dark in a dark room, bright in the sun. Additive ones (fire, sparks, glows) give light and stay as they are. " +
-                "Needs a remix.dll with lit sprites; OpenRemix keeps their light only while raster fog is off.");
+                "Needs a remix.dll with lit sprites.");
             
             configEnableSkybox = Config.Bind("Rendering", "EnableSkybox", true,
                 "Automatically detect and render skyboxes in RTX Remix as a native Dome Light environment.");

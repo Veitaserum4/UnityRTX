@@ -210,7 +210,7 @@ namespace UnityRemix
                     RemixImGui.Indent();
                     Toggle("Lit by the scene##particles", "LitParticles", ref _litParticles,
                         "Smoke, dust and blood take the path-traced light where they are: dark in a dark room, bright in the sun.\n" +
-                        "Additive particles (fire, sparks, glows) give light and stay as they are.\nOpenRemix lights them only while raster fog is off.");
+                        "Additive particles (fire, sparks, glows) give light and stay as they are.");
                     RemixImGui.Unindent();
                 }
                 Toggle("Distance culling##particles", "EnableParticleDistanceCulling", ref _enableParticleDistanceCulling,
