@@ -1894,7 +1894,7 @@ namespace UnityRemix
         /// GenerateMeshHash with the vertex positions mixed in. OpenRemix keys meshes by this hash
         /// (a second create with it replaces the first), and a name with "(Clone)" removed is not
         /// unique: ProBuilder copies of a shape each own a different mesh of the same name and
-        /// counts (four arches in ULTRAKILL 0-3 all drew one of them).
+        /// counts (four copies of an arch all drew one of them).
         /// </summary>
         public static ulong GenerateMeshHash(string meshName, Vector3[] vertices, int indexCount, int materialSignature = 0)
         {

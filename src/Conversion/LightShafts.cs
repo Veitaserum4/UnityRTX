@@ -90,7 +90,8 @@ namespace UnityRemix
                     var fit = GetFit(renderer, out bool world);
                     log?.LogInfo($"[LightShafts] '{renderer.name}' ({renderer.sharedMaterial.name}) drawn as a volume: " +
                                  $"{fit.source}{(world ? " (world space)" : "")}, length {fit.axis.magnitude:F2}, near {fit.nearU:F2}x{fit.nearV:F2}, " +
-                                 $"far {fit.farU:F2}x{fit.farV:F2}, brightness {fit.nearBright:F2} to {fit.farBright:F2}");
+                                 $"far {fit.farU:F2}x{fit.farV:F2}, brightness {fit.nearBright:F2} to {fit.farBright:F2}" +
+                                 (IsBeam(fit) ? ", a beam: the game's strength" : ""));
                 }
             }
             return yes;
@@ -157,7 +158,10 @@ namespace UnityRemix
             float thickness = u.magnitude + v.magnitude;
             Color linear = QualitySettings.activeColorSpace == ColorSpace.Linear ? glow : glow.linear;
             bool relative = ExposureRelative.Value;
-            float strength = Brightness.Value;
+            // A beam (a searchlight's, a lighthouse's: far longer than its source is wide) keeps the
+            // game's strength. Boosted like a window's shaft, it reads as a solid slab against the
+            // dark it usually crosses; the strength is for room-sized shafts.
+            float strength = IsBeam(fit) ? 1f : Brightness.Value;
             if (relative && strength > 1f)
             {
                 // Exposure-relative, the sheet's side-on brightness is what the game added to the
@@ -187,6 +191,10 @@ namespace UnityRemix
                         (relative ? RemixAPI.REMIXAPI_VOLUME_SHAFT_EXPOSURE_RELATIVE_EXT : 0u)
             };
         }
+
+        // Longer than 8 times its near cap's width (u + v half extents): a lighthouse's beam is about
+        // 24, the shafts under windows and lamps 1 to 3.
+        private static bool IsBeam(Fit fit) => fit.axis.magnitude > 8f * (fit.nearU + fit.nearV);
 
         // Unity Y-up to Remix Z-up, as lights are.
         private static RemixAPI.remixapi_Float3D ToRemix(Vector3 p) => new RemixAPI.remixapi_Float3D(p.x, p.z, p.y);
