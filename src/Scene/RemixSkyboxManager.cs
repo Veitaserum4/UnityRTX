@@ -258,6 +258,11 @@ namespace UnityRemix
                 curFlags = CameraClearFlags.Skybox;
             }
 
+            // A camera that clears to a colour never draws the skybox material, which a scene
+            // may still have set (Unity's Default-Skybox): its sky is the background colour.
+            if (curFlags == CameraClearFlags.SolidColor)
+                currentSkyMat = null;
+
             Color curBg = skyCam.backgroundColor;
 
             bool matChanged = (currentSkyMat != lastCapturedSkyMat);
