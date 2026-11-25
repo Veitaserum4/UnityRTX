@@ -23,7 +23,7 @@ namespace UnityRemix.Games
             new DefaultsOnlyProfile("DUSK", "Dusk", "Dusk"),
             new DefaultsOnlyProfile("Getting Over It", "GettingOverIt", "GettingOverIt"),
             new Peak.PeakProfile(),
-            new DefaultsOnlyProfile("R.E.P.O.", "Repo", "REPO"),
+            new Repo.RepoProfile(),
             new DefaultsOnlyProfile("Risk of Rain 2", "RiskOfRain2", "Risk of Rain 2"),
             new DefaultsOnlyProfile("White Knuckle", "WhiteKnuckle", "White Knuckle"),
             new DefaultsOnlyProfile("Gloomwood", "Gloomwood", "Gloomwood"),
@@ -345,6 +345,20 @@ namespace UnityRemix.Games
             Vector2Int size = Vector2Int.zero;
             Run(nameof(PassThroughScreenResolution), p => size = p.PassThroughScreenResolution(material));
             return size;
+        }
+
+        public static FilterMode PassThroughScreenFilter(Material material)
+        {
+            FilterMode filter = FilterMode.Bilinear;
+            Run(nameof(PassThroughScreenFilter), p => filter = p.PassThroughScreenFilter(material));
+            return filter;
+        }
+
+        public static bool PassThroughScreenClipSpace(Material material)
+        {
+            bool clipSpace = false;
+            Run(nameof(PassThroughScreenClipSpace), p => clipSpace = p.PassThroughScreenClipSpace(material));
+            return clipSpace;
         }
 
         public static int PassThroughShaderPass(Material material)

@@ -573,8 +573,10 @@ namespace urtx {
     t.height = height;
     t.depth = depth;
     t.vkFormat = vkFormat;
+    // VK_FORMAT_R16G16B16A16_SFLOAT (97): 8 bytes a texel; the 8-bit formats 4.
+    const size_t texel = vkFormat == 97 ? 8 : 4;
     t.pixels.assign(static_cast<const uint8_t *>(pixels),
-                    static_cast<const uint8_t *>(pixels) + size_t(width) * height * depth * 4);
+                    static_cast<const uint8_t *>(pixels) + size_t(width) * height * depth * texel);
     std::lock_guard l(g_settingsLock);
     // Content replaced (a palette's LUT recomputed): sampled as new once uploaded.
     g_uploaded.erase(resource);

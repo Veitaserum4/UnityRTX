@@ -255,7 +255,15 @@ namespace UnityRemix
                 screenCopy.shaderKeywords = screenEffect.shaderKeywords;
                 screenCopy.SetTexture("_MainTex", screenSource);
                 commands.IssuePluginEvent(renderEvent, BeginEvent | ScreenTag);
-                commands.Blit(screenSource, new RenderTargetIdentifier(target), screenCopy);
+                if (Games.GameProfiles.PassThroughScreenClipSpace(screenEffect))
+                {
+                    // Its vertex shader takes clip-space positions (Unity's post-processing
+                    // stack): one triangle over the screen, drawn as the stack draws it.
+                    commands.SetRenderTarget(new RenderTargetIdentifier(target));
+                    commands.DrawMesh(FullscreenTriangle(), Matrix4x4.identity, screenCopy, 0, 0);
+                }
+                else
+                    commands.Blit(screenSource, new RenderTargetIdentifier(target), screenCopy);
             }
             commands.IssuePluginEvent(renderEvent, EndEvent);
             helper.Render();
@@ -455,11 +463,84 @@ namespace UnityRemix
             t is Texture3D volume ? volume.depth :
             t is RenderTexture rt && rt.dimension == TextureDimension.Tex3D ? rt.volumeDepth : 1;
 
+        // Clip-space positions of one triangle covering the screen (the post-processing stack's).
+        private static Mesh fullscreenTriangle;
+        private static Mesh FullscreenTriangle()
+        {
+            if (fullscreenTriangle == null)
+            {
+                fullscreenTriangle = new Mesh { name = "UnityRTX fullscreen triangle", hideFlags = HideFlags.HideAndDontSave };
+                fullscreenTriangle.SetVertices(new List<Vector3> { new Vector3(-1f, -1f, 0f), new Vector3(-1f, 3f, 0f), new Vector3(3f, -1f, 0f) });
+                fullscreenTriangle.SetIndices(new[] { 0, 1, 2 }, MeshTopology.Triangles, 0, false);
+                fullscreenTriangle.UploadMeshData(false);
+            }
+            return fullscreenTriangle;
+        }
+
+        // Half or full floats: values an 8-bit copy would clamp (signed noise, HDR lookups).
+        private static bool IsFloat(Texture texture) =>
+            UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsIEEE754Format(texture.graphicsFormat) ||
+            UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsHalfFormat(texture.graphicsFormat);
+
+        // Read back as RGBA half floats, sent as VK_FORMAT_R16G16B16A16_SFLOAT (97).
+        private static bool SendHalf(IntPtr resource, Texture texture, int depth)
+        {
+            try
+            {
+                var request = depth > 1
+                    ? AsyncGPUReadback.Request(texture, 0, 0, texture.width, 0, texture.height, 0, depth, TextureFormat.RGBAHalf)
+                    : AsyncGPUReadback.Request(texture, 0, TextureFormat.RGBAHalf);
+                request.WaitForCompletion();
+                if (request.hasError)
+                {
+                    logger?.LogWarning($"[ShaderPassThrough] reading '{texture.name}' back as half floats failed");
+                    return false;
+                }
+                int slice = texture.width * texture.height * 8;
+                var pixels = new byte[(long)slice * depth];
+                if (depth > 1 && request.layerCount >= depth)
+                {
+                    for (int z = 0; z < depth; z++)
+                        Unity.Collections.NativeArray<byte>.Copy(request.GetData<byte>(z), 0, pixels, z * slice, slice);
+                }
+                else
+                {
+                    var data = request.GetData<byte>(0);
+                    if (data.Length < pixels.Length)
+                    {
+                        logger?.LogWarning($"[ShaderPassThrough] '{texture.name}' read back {data.Length} of {pixels.Length} bytes");
+                        return false;
+                    }
+                    Unity.Collections.NativeArray<byte>.Copy(data, pixels, pixels.Length);
+                }
+                var handle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+                try
+                {
+                    UnityRTXHostPass_SetTexture(resource, texture.width, texture.height, depth, 97, handle.AddrOfPinnedObject());
+                }
+                finally { handle.Free(); }
+                logger?.LogInfo($"[ShaderPassThrough] sent '{texture.name}' {texture.width}x{texture.height}{(depth > 1 ? "x" + depth : "")} as half floats");
+                return true;
+            }
+            catch (Exception e)
+            {
+                logger?.LogWarning($"[ShaderPassThrough] reading '{texture.name}' back as half floats failed: {e.Message}");
+                return false;
+            }
+        }
+
         private static bool SendTexture(IntPtr resource, Texture texture)
         {
             bool srgb = UnityEngine.Experimental.Rendering.GraphicsFormatUtility.IsSRGBFormat(texture.graphicsFormat);
             uint version = texture.updateCount;
             int depth = Depth(texture);
+            if (IsFloat(texture))
+            {
+                if (!SendHalf(resource, texture, depth))
+                    return false;
+                sentVersions[resource] = (texture, version);
+                return true;
+            }
             if (depth > 1)
             {
                 if (!SendVolume(resource, texture, depth, srgb))
@@ -590,7 +671,11 @@ namespace UnityRemix
                 return;
             if (screenSource != null)
                 screenSource.Release();
-            screenSource = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32) { name = "UnityRTX screen source" };
+            screenSource = new RenderTexture(width, height, 0, RenderTextureFormat.ARGB32)
+            {
+                name = "UnityRTX screen source",
+                filterMode = Games.GameProfiles.PassThroughScreenFilter(screenEffect),
+            };
             screenSource.Create();
             screenSourcePtr = screenSource.GetNativeTexturePtr();
         }

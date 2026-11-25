@@ -332,6 +332,13 @@ namespace UnityRemix.Games
         // the composed frame is scaled to it (nearest) first; zero: the frame's own. Main thread.
         public virtual Vector2Int PassThroughScreenResolution(Material material) => Vector2Int.zero;
 
+        // How such an effect samples that frame (the game's low-resolution view, magnified).
+        public virtual FilterMode PassThroughScreenFilter(Material material) => FilterMode.Bilinear;
+
+        // Whether such a material's vertex shader takes clip-space positions (Unity's
+        // post-processing stack draws one triangle over the screen) rather than Blit's quad.
+        public virtual bool PassThroughScreenClipSpace(Material material) => false;
+
         // The chromatic aberration of what such a material shows (its red right and blue left of
         // green), a fraction of the screen's width; 0 none. Main thread.
         public virtual float ViewChromaticAberration(Material material) => 0f;

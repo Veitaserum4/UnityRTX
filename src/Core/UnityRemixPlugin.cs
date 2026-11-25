@@ -247,6 +247,10 @@ namespace UnityRemix
                 "(dithering, colour compression, custom palette, gamma, downsampling). Off: only while it shows " +
                 "the death sequence or Greed's distortion.");
 
+            Games.Repo.RepoProfile.GamePostProcess = Config.Bind("Repo", "GamePostProcess", true,
+                "R.E.P.O.'s own screen post-process over the path-traced frame (its camcorder look): grain, vignette, " +
+                "lens distortion, chromatic aberration and colour grading, at the game's render size.");
+
             configOpenRemixBounces = Config.Bind("Native", "PathTraceBounces", 2,
                 new ConfigDescription("Number of ray bounces for path tracing.",
                     new AcceptableValueRange<int>(1, 8)));
