@@ -182,12 +182,22 @@ namespace UnityRemix
                     string name = m.shader.GetPropertyName(p);
                     int id = Shader.PropertyToID(name);
                     var type = m.shader.GetPropertyType(p);
+#if NET472
+                    // MaterialPropertyBlock.Has* is Unity 2021.1's.
+                    if (type == UnityEngine.Rendering.ShaderPropertyType.Color)
+                        parts.Add($"{name}={block.GetColor(id)}");
+                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Float || type == UnityEngine.Rendering.ShaderPropertyType.Range)
+                        parts.Add($"{name}={block.GetFloat(id):G4}");
+                    else if (type == UnityEngine.Rendering.ShaderPropertyType.Vector)
+                        parts.Add($"{name}={block.GetVector(id)}");
+#else
                     if (type == UnityEngine.Rendering.ShaderPropertyType.Color && block.HasColor(id))
                         parts.Add($"{name}={block.GetColor(id)}");
                     else if ((type == UnityEngine.Rendering.ShaderPropertyType.Float || type == UnityEngine.Rendering.ShaderPropertyType.Range) && block.HasFloat(id))
                         parts.Add($"{name}={block.GetFloat(id):G4}");
                     else if (type == UnityEngine.Rendering.ShaderPropertyType.Vector && block.HasVector(id))
                         parts.Add($"{name}={block.GetVector(id)}");
+#endif
                 }
                 return $" block {{{string.Join("; ", parts)}}}";
             }

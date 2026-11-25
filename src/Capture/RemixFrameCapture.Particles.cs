@@ -1595,8 +1595,13 @@ namespace UnityRemix
 
         // ParticleSystemBakeMeshOptions is Unity 2022.1's.
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+#if NET472
+        private static void BakeTrailsWorld(ParticleSystemRenderer pr, Mesh mesh, Camera cam) =>
+            throw new MissingMethodException("ParticleSystemBakeMeshOptions is Unity 2022.1's");
+#else
         private static void BakeTrailsWorld(ParticleSystemRenderer pr, Mesh mesh, Camera cam) =>
             pr.BakeTrailsMesh(mesh, cam, ParticleSystemBakeMeshOptions.BakeRotationAndScale | ParticleSystemBakeMeshOptions.BakePosition);
+#endif
 
         private static bool BakeTrailsInWorld(ParticleSystemRenderer pr, Mesh mesh, Camera cam)
         {

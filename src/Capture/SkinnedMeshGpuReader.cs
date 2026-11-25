@@ -46,6 +46,11 @@ namespace UnityRemix
         // decline first.
         public static bool TryRead(Mesh mesh, int bonesPerVertex, out Data data, out string reason)
         {
+#if NET472
+            data = null;
+            reason = "the net472 build has no GPU mesh readback (Unity 2021.2+)";
+            return false;
+#else
             if (!UnityCompat.HasMeshVertexAttributes)
             {
                 data = null;
@@ -53,8 +58,13 @@ namespace UnityRemix
                 return false;
             }
             return TryReadLayout(mesh, bonesPerVertex, out data, out reason);
+#endif
         }
 
+#if NET472
+        public static Color32[] TryReadColors(Mesh mesh) => null;
+        public static float[] TryReadComponent(Mesh mesh, int attribute, int component) => null;
+#else
         public static Color32[] TryReadColors(Mesh mesh) =>
             UnityCompat.HasMeshVertexAttributes ? TryReadColorsLayout(mesh) : null;
 
@@ -424,5 +434,6 @@ namespace UnityRemix
             }
             return true;
         }
+#endif
     }
 }

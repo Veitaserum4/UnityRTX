@@ -274,6 +274,9 @@ namespace UnityRemix
         [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
         private static Color32[] ReadGpuColors(Mesh mesh, int count)
         {
+#if NET472
+            return null; // no GPU vertex buffer queries before Unity 2021.2
+#else
             var color = UnityEngine.Rendering.VertexAttribute.Color;
             if (!mesh.HasVertexAttribute(color))
                 return null;
@@ -296,6 +299,7 @@ namespace UnityRemix
                     return null;
             }
             return colors;
+#endif
         }
 
         private static float VertexBrightness(Color32 c) => Mathf.Max(c.r, Mathf.Max(c.g, c.b)) / 255f;

@@ -114,21 +114,47 @@ namespace UnityRemix
             }
         }
 
+        // One scattered detail instance (Unity 2022.2's DetailInstanceTransform), terrain-local.
+        private struct DetailTransform
+        {
+            public float posX, posY, posZ, scaleXZ, scaleY, rotationY;
+        }
+
+#if NET472
+        // The net472 build is for Unity before 2021.2, which has no ComputeDetailInstanceTransforms.
+        private static DetailTransform[] DetailTransforms(TerrainData tData, int px, int pz, int layer, float density) => null;
+#else
         // Unity 2022.2's: the instances of one prototype in one patch, as Unity scatters them
         // (terrain-local positions). Null where Unity has no such method.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static DetailInstanceTransform[] ComputeDetailTransforms(TerrainData tData, int px, int pz, int layer, float density) =>
-            tData.ComputeDetailInstanceTransforms(px, pz, layer, density, out _);
+        private static DetailTransform[] ComputeDetailTransforms(TerrainData tData, int px, int pz, int layer, float density)
+        {
+            var unity = tData.ComputeDetailInstanceTransforms(px, pz, layer, density, out _);
+            if (unity == null)
+                return Array.Empty<DetailTransform>();
+            var transforms = new DetailTransform[unity.Length];
+            for (int i = 0; i < unity.Length; i++)
+            {
+                var u = unity[i];
+                transforms[i] = new DetailTransform
+                {
+                    posX = u.posX, posY = u.posY, posZ = u.posZ,
+                    scaleXZ = u.scaleXZ, scaleY = u.scaleY, rotationY = u.rotationY,
+                };
+            }
+            return transforms;
+        }
 
-        private static DetailInstanceTransform[] DetailTransforms(TerrainData tData, int px, int pz, int layer, float density)
+        private static DetailTransform[] DetailTransforms(TerrainData tData, int px, int pz, int layer, float density)
         {
             try
             {
-                return ComputeDetailTransforms(tData, px, pz, layer, density) ?? Array.Empty<DetailInstanceTransform>();
+                return ComputeDetailTransforms(tData, px, pz, layer, density);
             }
             catch (MissingMethodException) { return null; }
             catch (TypeLoadException) { return null; }
         }
+#endif
 
         private DetailModel BuildDetailModel(Terrain terrain, int terrainId, DetailPrototype proto, int index, out string what)
         {
@@ -204,7 +230,11 @@ namespace UnityRemix
 
         // DetailPrototype.alignToGround is Unity 2022.2's.
         [MethodImpl(MethodImplOptions.NoInlining)]
+#if NET472
+        private static float ReadAlignToGround(DetailPrototype proto) => 0f;
+#else
         private static float ReadAlignToGround(DetailPrototype proto) => proto.alignToGround;
+#endif
 
         private static float DetailAlignToGround(DetailPrototype proto)
         {
@@ -253,7 +283,7 @@ namespace UnityRemix
             return true;
         }
 
-        private static void AppendDetail(DetailModel model, in DetailInstanceTransform t, TerrainData tData, Vector3 size, Matrix4x4 localToWorld,
+        private static void AppendDetail(DetailModel model, in DetailTransform t, TerrainData tData, Vector3 size, Matrix4x4 localToWorld,
                                          List<RemixAPI.remixapi_HardcodedVertex> verts, List<uint> indices, ref Vector3 min, ref Vector3 max)
         {
             var position = new Vector3(t.posX, t.posY, t.posZ);
