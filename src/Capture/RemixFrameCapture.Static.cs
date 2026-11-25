@@ -265,7 +265,7 @@ namespace UnityRemix
                     fov = mainCam.fieldOfView,
                     aspect = mainCam.aspect,
                     nearPlane = mainCam.nearClipPlane,
-                    farPlane = mainCam.farClipPlane,
+                    farPlane = RemixFogManager.FarPlane(mainCam.farClipPlane),
                     valid = true
                 };
                 var viewModelCam = Games.GameProfiles.FindViewModelCamera(mainCam);

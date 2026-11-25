@@ -44,6 +44,23 @@ namespace UnityRemix
         public float GameFogStart => RenderSettings.fogStartDistance;
         public float GameFogEnd => RenderSettings.fogEndDistance;
 
+        // Linear fog stretched past the game's own (Density below 1): the game's fog end and
+        // ours. Zero when the fog is not stretched.
+        private static float gameLinearEnd, stretchedLinearEnd;
+
+        /// <summary>
+        /// The far plane to path trace with. A game that hides its far plane in its fog (the
+        /// far plane at the fog's end: nothing past it is drawn, the background is the fog's
+        /// colour) would cut geometry off still part-fogged once Density stretches the fog:
+        /// the far plane then reaches the stretched fog's end.
+        /// </summary>
+        public static float FarPlane(float far)
+        {
+            if (stretchedLinearEnd <= 0f || far > gameLinearEnd * 1.1f + 2f)
+                return far;
+            return Mathf.Max(far, stretchedLinearEnd + 1f);
+        }
+
         public bool IsActiveInRemix => lastSentActive;
         public uint CurrentRemixMode => lastSentMode;
         public string StatusText { get; private set; } = "Initializing...";
@@ -131,6 +148,7 @@ namespace UnityRemix
             {
                 if (ConfigFogManualOverride.Value)
                 {
+                    stretchedLinearEnd = 0f;
                     mode = (uint)Mathf.Clamp(ConfigFogManualMode.Value, 0, 3);
                     float mr = Mathf.Clamp01(ConfigFogManualColorR.Value);
                     float mg = Mathf.Clamp01(ConfigFogManualColorG.Value);
@@ -161,6 +179,7 @@ namespace UnityRemix
                     if (float.IsNaN(rawEnd) || float.IsInfinity(rawEnd)) rawEnd = 100f;
                     if (float.IsNaN(rawDens) || float.IsInfinity(rawDens)) rawDens = 0.01f;
 
+                    stretchedLinearEnd = 0f;
                     switch (RenderSettings.fogMode)
                     {
                         case FogMode.Linear:
@@ -174,6 +193,8 @@ namespace UnityRemix
                                             start + 0.1f);
                             scale = 1f / (end - start);
                             active = end > 0.5f;
+                            gameLinearEnd = Mathf.Max(rawEnd * distMult, 0f);
+                            stretchedLinearEnd = active && end > gameLinearEnd + 0.5f ? end : 0f;
                             break;
 
                         case FogMode.Exponential:
@@ -198,6 +219,7 @@ namespace UnityRemix
                 else
                 {
                     // Fog disabled
+                    stretchedLinearEnd = 0f;
                     mode = 0;
                     active = false;
                 }
